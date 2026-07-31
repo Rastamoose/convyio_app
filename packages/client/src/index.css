@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sidebar: #282828;
+  --color-sidebar-dark: #1d2021;
+  --color-userpanel: #32302f;
+  --color-chat: #3c3836;
+  --color-chat-hover: #403d3a;
+  --color-input: #504945;
+  --color-body: #ebdbb2;
+  --color-muted: #a89984;
+  --color-faint: #928374;
+  --color-blurple: #d79921;
+  --color-online: #b8bb26;
+  --color-offline: #928374;
+  --color-divider: #504945;
+  --color-mention-accent: #d79921;
+  --color-mention-bg: #504945;
+  --color-mention-bg-hover: #665c54;
+  --color-mention-pill: #d79921;
+  --color-mention-text: #282828;
+  --color-popup: #32302f;
+  --color-dead: #fb4934;
+  --color-working: #fabd2f;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-chat text-body font-sans antialiased;
+}
+
+/* Gruvbox thin scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #665c54 transparent;
+}
