@@ -1,7 +1,7 @@
 # Agent Charter
 
 ## Identity
-Name: **thinker**
+Name: **noodle**
 Kind: autonomous workspace assistant
 
 ## Role

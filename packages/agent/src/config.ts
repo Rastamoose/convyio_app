@@ -7,7 +7,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const AGENT_NAME = process.env.AGENT_NAME ?? "thinker";
+export const AGENT_NAME = process.env.AGENT_NAME ?? "noodle";
 export const WS_URL = process.env.WS_URL ?? "ws://localhost:3001";
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 export const CHARTER_PATH = process.env.CHARTER_PATH ?? path.resolve(__dirname, "../charter.md");
