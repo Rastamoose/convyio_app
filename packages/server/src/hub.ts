@@ -47,6 +47,20 @@ export class Hub {
   ) {
     this.wss = new WebSocketServer({ server });
     this.wss.on("connection", (socket) => this.onConnection(socket));
+
+    // Agents are permanent members of the server, not ephemeral connections:
+    // every agent actor is in the roster from boot, grey until its process
+    // connects. Humans stay presence-only by design.
+    for (const actor of this.db.listActors("agent")) {
+      this.known.set(`agent:${actor.displayName.toLowerCase()}`, {
+        id: actor.id,
+        name: actor.displayName,
+        kind: "agent",
+        status: "",
+        runState: "idle",
+        online: false,
+      });
+    }
   }
 
   /** Fan a board event out to every connected client (§4). */

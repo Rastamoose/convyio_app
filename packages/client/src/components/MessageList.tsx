@@ -199,12 +199,17 @@ export function MessageList({
   return (
     <div className="flex-1 overflow-y-auto pb-4">
       {messages.length === 0 && activeRuns.length === 0 && (
-        <div className="px-4 pt-8">
-          <div className="mb-2 flex h-16 w-16 items-center justify-center rounded-full bg-input text-4xl text-blurple">
-            #
-          </div>
-          <h2 className="text-3xl font-bold text-body">Welcome to #{channel}!</h2>
-          <p className="text-muted">This is the start of the #{channel} channel.</p>
+        <div className="px-4 pt-10">
+          <h2 className="text-xl font-semibold text-body">{channel}</h2>
+          <p className="mt-1 max-w-md text-sm text-muted">
+            Nothing here yet.
+            {(() => {
+              const agent = participants.find((p) => p.kind === "agent");
+              return agent
+                ? ` Say something, or mention @${agent.name} to put it to work.`
+                : " Say something to get things moving.";
+            })()}
+          </p>
         </div>
       )}
       {timeline.map((entry) => {

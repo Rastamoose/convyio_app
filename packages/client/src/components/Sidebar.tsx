@@ -136,18 +136,12 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-60 flex-col bg-sidebar">
-      {/* Server header */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-sidebar-dark px-4">
+      {/* Workspace header */}
+      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4">
         <span className="truncate font-semibold text-body">{SERVER_NAME}</span>
-        <svg className="h-4 w-4 text-body" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M7 10l5 5 5-5"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <span className="truncate text-[11px] leading-tight text-faint">
+          humans &amp; agents, one room
+        </span>
       </header>
 
       {/* Status area — top third, becomes the status strip */}
@@ -173,22 +167,26 @@ export function Sidebar({
         ))}
       </section>
 
-      {/* Channels */}
+      {/* Rooms */}
       <section className="min-h-0 flex-1 overflow-y-auto border-t border-divider px-2 pt-3">
         <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase">
-          Text channels
+          Rooms
         </h2>
         {channels.map((c) => (
           <button
             key={c}
             onClick={() => onSelectChannel(c)}
-            className={`mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium ${
+            className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left font-medium ${
               c === channel
                 ? "bg-input text-body"
                 : "text-muted hover:bg-input/50 hover:text-body"
             }`}
           >
-            <span className="text-xl leading-none text-muted">#</span>
+            <span
+              className={`h-4 w-0.5 shrink-0 rounded-full ${
+                c === channel ? "bg-blurple" : "bg-divider"
+              }`}
+            />
             <span className="text-[15px]">{c}</span>
           </button>
         ))}

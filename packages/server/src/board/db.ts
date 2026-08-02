@@ -136,6 +136,15 @@ export class BoardDb {
     return row ? toActor(row) : null;
   }
 
+  listActors(kind?: ActorKind): Actor[] {
+    const rows = (
+      kind
+        ? this.db.prepare(`SELECT * FROM actors WHERE server_id = ? AND kind = ?`).all(this.serverId, kind)
+        : this.db.prepare(`SELECT * FROM actors WHERE server_id = ?`).all(this.serverId)
+    ) as unknown as ActorRow[];
+    return rows.map(toActor);
+  }
+
   private ensureServer(): string {
     const row = this.db
       .prepare(`SELECT value FROM meta WHERE key = 'server_id'`)

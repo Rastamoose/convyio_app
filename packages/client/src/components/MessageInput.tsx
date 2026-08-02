@@ -251,7 +251,7 @@ export function MessageInput({
             ref={displayRef}
             className="pointer-events-none min-w-0 overflow-hidden whitespace-pre py-2.5 text-body"
           >
-            {!draft && <span className="text-faint">{`Message #${channel}`}</span>}
+            {!draft && <span className="text-faint">{`Write in ${channel}…`}</span>}
             {draft && renderContent(draft, mentionRegex, false)}
           </div>
           <input

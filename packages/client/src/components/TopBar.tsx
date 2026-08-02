@@ -10,9 +10,11 @@ export function TopBar({
   onToggleBoard: () => void;
 }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-dark bg-sidebar-dark px-4">
-      <span className="text-2xl leading-none text-muted">#</span>
+    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-sidebar-dark bg-sidebar-dark px-4">
       <span className="font-semibold text-body">{channel}</span>
+      <span className="rounded bg-sidebar px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase">
+        room
+      </span>
       <div className="ml-auto flex items-center gap-4">
         {onRunDemo && (
           <button
