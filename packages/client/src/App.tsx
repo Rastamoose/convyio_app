@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { BoardItem } from "@workspace/shared";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { UsernameModal } from "./components/UsernameModal";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
+import { BoardPanel } from "./components/BoardPanel";
 
 const CHANNELS = ["general", "demo"];
 
@@ -15,6 +17,26 @@ export default function App() {
   const [channel, setChannel] = useState("general");
   const workspace = useWorkspace(name);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [highlightRef, setHighlightRef] = useState<string | null>(null);
+  const highlightTimer = useRef<number | null>(null);
+
+  const prefillText = (text: string) => setPrefill({ text, nonce: Date.now() });
+
+  const handleRefClick = (ref: string) => {
+    setBoardOpen(true);
+    setHighlightRef(ref);
+    if (highlightTimer.current != null) {
+      window.clearTimeout(highlightTimer.current);
+    }
+    highlightTimer.current = window.setTimeout(
+      () => setHighlightRef(null),
+      2000,
+    );
+  };
+
+  const discussItem = (item: BoardItem) =>
+    workspace.sendMessage(`discuss ${item.ref} — "${item.title}"`, channel);
 
   const handleSend = (content: string) => {
     if (content.startsWith("/")) {
@@ -60,9 +82,13 @@ export default function App() {
         channel={channel}
         onSelectChannel={setChannel}
         onSetStatus={workspace.setStatus}
-        onDirect={(agentName) =>
-          setPrefill({ text: `@${agentName} `, nonce: Date.now() })
-        }
+        board={workspace.board}
+        activeRuns={workspace.activeRuns}
+        messages={workspace.messages}
+        onApprove={workspace.approveItem}
+        onDeny={workspace.denyItem}
+        onDiscuss={discussItem}
+        onPrefill={prefillText}
       />
       <main className="flex min-w-0 flex-1 flex-col bg-chat">
         <TopBar
@@ -70,14 +96,18 @@ export default function App() {
           onRunDemo={
             channel === "demo" ? () => workspace.startDemo(channel) : undefined
           }
+          boardOpen={boardOpen}
+          onToggleBoard={() => setBoardOpen((o) => !o)}
         />
         <MessageList
           channel={channel}
           messages={channelMessages}
+          boardLines={workspace.boardLines}
           activeRuns={workspace.activeRuns}
           runDurations={workspace.runDurations}
           participants={workspace.participants}
           selfName={workspace.self?.name ?? null}
+          onRefClick={handleRefClick}
         />
         <MessageInput
           channel={channel}
@@ -86,6 +116,17 @@ export default function App() {
           prefill={prefill}
         />
       </main>
+      {boardOpen && (
+        <BoardPanel
+          board={workspace.board}
+          activeRuns={workspace.activeRuns}
+          highlightRef={highlightRef}
+          onCreate={workspace.createBoardItem}
+          onApprove={workspace.approveItem}
+          onDeny={workspace.denyItem}
+          onDiscuss={discussItem}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   clientEventSchema,
+  type BoardEventEnvelope,
   type ChatMessage,
   type ClientEvent,
   type Participant,
@@ -9,6 +11,9 @@ import {
   type TraceChunk,
 } from "@workspace/shared";
 import type { Storage } from "./storage/Storage";
+import type { BoardDb } from "./board/db";
+import type { Sessions } from "./board/api";
+import type { Toolman } from "./board/Toolman";
 
 interface Connection {
   socket: WebSocket;
@@ -33,14 +38,20 @@ export class Hub {
   onDemoStart: ((channel: string) => void) | null = null;
 
   constructor(
-    port: number,
+    server: HttpServer,
     private storage: Storage,
+    private db: BoardDb,
+    private sessions: Sessions,
+    private toolman: Toolman,
+    private apiUrl: string,
   ) {
-    this.wss = new WebSocketServer({ port });
+    this.wss = new WebSocketServer({ server });
     this.wss.on("connection", (socket) => this.onConnection(socket));
-    this.wss.on("listening", () => {
-      console.log(`[hub] listening on ws://localhost:${port}`);
-    });
+  }
+
+  /** Fan a board event out to every connected client (§4). */
+  broadcastBoardEvent(envelope: BoardEventEnvelope): void {
+    this.broadcast(envelope);
   }
 
   private onConnection(socket: WebSocket): void {
@@ -109,6 +120,9 @@ export class Hub {
       case "run_end":
         this.handleAgentEvent(conn, event);
         break;
+      case "action_request":
+        await this.handleActionRequest(conn, event);
+        break;
     }
   }
 
@@ -120,8 +134,11 @@ export class Hub {
     const key = `${kind}:${name.toLowerCase()}`;
     let participant = this.known.get(key);
     if (!participant) {
+      // Participant identity is the persistent actor identity, so board
+      // attribution and presence agree on ids.
+      const actor = this.db.upsertActor(kind, name);
       participant = {
-        id: randomUUID(),
+        id: actor.id,
         name,
         kind,
         status: "",
@@ -151,6 +168,8 @@ export class Hub {
       self: participant,
       history: await this.storage.loadMessages(),
       participants: this.participantList(),
+      token: this.sessions.issue(participant.id),
+      apiUrl: this.apiUrl,
     });
     this.broadcastPresence();
   }
@@ -295,6 +314,30 @@ export class Hub {
     this.broadcastPresence();
   }
 
+  /**
+   * Toolman gateway. This is the only write path agents have to the world;
+   * authorization against the board happens inside the toolman (§5).
+   */
+  private async handleActionRequest(
+    conn: Connection,
+    event: Extract<ClientEvent, { type: "action_request" }>,
+  ): Promise<void> {
+    const p = conn.participant;
+    if (!p) return this.send(conn, { type: "error", error: "join first" });
+    if (p.kind !== "agent") {
+      return this.send(conn, { type: "error", error: "agent-only event" });
+    }
+    const actor = this.db.getActor(p.id);
+    if (!actor) return this.send(conn, { type: "error", error: "unknown actor" });
+    const result = await this.toolman.execute(actor, event.action, event.boardItemRef ?? null);
+    console.log(
+      `[toolman] ${p.name} ${event.action.kind}${"path" in event.action ? ` ${event.action.path ?? ""}` : ""} → ${
+        result.ok ? "ok" : result.code ? `DENY ${result.code}` : `error: ${result.error}`
+      }`,
+    );
+    this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
+  }
+
   private handleAgentEvent(
     conn: Connection,
     event:
@@ -302,6 +345,7 @@ export class Hub {
           type: "status_update";
           status: string;
           runState: Participant["runState"];
+          taskId?: string | null;
         }
       | { type: "trace_start"; runId: string }
       | { type: "trace_chunk"; runId: string; chunk: TraceChunk }
@@ -321,6 +365,13 @@ export class Hub {
       case "status_update": {
         conn.participant.status = event.status;
         conn.participant.runState = event.runState;
+        if (event.taskId !== undefined) {
+          const next = event.taskId ?? undefined;
+          if (next !== conn.participant.currentTaskId) {
+            conn.participant.currentTaskId = next;
+            conn.participant.taskStartedAt = next ? Date.now() : undefined;
+          }
+        }
         this.broadcastPresence();
         break;
       }

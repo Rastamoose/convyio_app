@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type { ChatMessage, Participant } from "@workspace/shared";
 import { Avatar } from "./Avatar";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
-import type { ActiveRun } from "../hooks/useWorkspace";
+import type { ActiveRun, BoardLine } from "../hooks/useWorkspace";
 
 export function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -14,32 +14,75 @@ export function buildMentionRegex(names: string[]): RegExp | null {
   return new RegExp(`@(${sorted.map(escapeRegex).join("|")})(?![\\w-])`, "g");
 }
 
+const TASK_REF_REGEX = /\btask-\d+\b/g;
+
 export function renderContent(
   content: string,
   mentionRegex: RegExp | null,
   pill = true,
+  onRefClick?: (ref: string) => void,
 ): React.ReactNode {
-  if (!mentionRegex || !content.includes("@")) return content;
+  interface Token {
+    start: number;
+    end: number;
+    node: React.ReactNode;
+  }
+  const tokens: Token[] = [];
+  if (mentionRegex && content.includes("@")) {
+    for (const match of content.matchAll(mentionRegex)) {
+      const index = match.index ?? 0;
+      tokens.push({
+        start: index,
+        end: index + match[0].length,
+        node: (
+          <span
+            key={`m${index}`}
+            className={
+              pill
+                ? "rounded bg-mention-pill px-0.5 font-medium text-mention-text"
+                : "rounded bg-mention-pill font-medium text-mention-text"
+            }
+          >
+            {match[0]}
+          </span>
+        ),
+      });
+    }
+  }
+  for (const match of content.matchAll(TASK_REF_REGEX)) {
+    const index = match.index ?? 0;
+    const ref = match[0];
+    tokens.push({
+      start: index,
+      end: index + ref.length,
+      node: onRefClick ? (
+        <span
+          key={`t${index}`}
+          onClick={() => onRefClick(ref)}
+          className="cursor-pointer rounded bg-input px-1 font-semibold text-blurple"
+        >
+          {ref}
+        </span>
+      ) : (
+        <span
+          key={`t${index}`}
+          className="rounded bg-input px-1 font-semibold text-blurple"
+        >
+          {ref}
+        </span>
+      ),
+    });
+  }
+  if (tokens.length === 0) return content;
+  tokens.sort((a, b) => a.start - b.start);
   const parts: React.ReactNode[] = [];
   let last = 0;
-  for (const match of content.matchAll(mentionRegex)) {
-    const index = match.index ?? 0;
-    if (index > last) parts.push(content.slice(last, index));
-    parts.push(
-      <span
-        key={index}
-        className={
-          pill
-            ? "rounded bg-mention-pill px-0.5 font-medium text-mention-text"
-            : "rounded bg-mention-pill font-medium text-mention-text"
-        }
-      >
-        {match[0]}
-      </span>,
-    );
-    last = index + match[0].length;
+  for (const token of tokens) {
+    if (token.start < last) continue; // skip overlapping tokens
+    if (token.start > last) parts.push(content.slice(last, token.start));
+    parts.push(token.node);
+    last = token.end;
   }
-  if (parts.length === 0) return content;
   if (last < content.length) parts.push(content.slice(last));
   return parts;
 }
@@ -103,15 +146,22 @@ function layout(messages: ChatMessage[]): Rendered[] {
   return out;
 }
 
+type TimelineEntry =
+  | ({ kind: "message" } & Rendered)
+  | { kind: "board"; line: BoardLine };
+
 export function MessageList({
   messages,
+  boardLines,
   activeRuns,
   runDurations,
   participants,
   selfName,
   channel,
+  onRefClick,
 }: {
   messages: ChatMessage[];
+  boardLines: BoardLine[];
   activeRuns: ActiveRun[];
   runDurations: Map<string, number>;
   participants: Participant[];
@@ -120,6 +170,7 @@ export function MessageList({
   // per-message string field, client-side filtering). Needs a proper channel
   // model: server-owned channel list, scoped history/traces, per-channel reads.
   channel: string;
+  onRefClick: (ref: string) => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -128,9 +179,22 @@ export function MessageList({
     [participants],
   );
 
+  const timeline = useMemo<TimelineEntry[]>(() => {
+    const entries: TimelineEntry[] = [
+      ...layout(messages).map((r) => ({ kind: "message" as const, ...r })),
+      ...boardLines.map((line) => ({ kind: "board" as const, line })),
+    ];
+    // Stable sort: board lines interleave with messages by timestamp.
+    return entries.sort(
+      (a, b) =>
+        (a.kind === "message" ? a.message.timestamp : a.line.ts) -
+        (b.kind === "message" ? b.message.timestamp : b.line.ts),
+    );
+  }, [messages, boardLines]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, activeRuns.length]);
+  }, [messages.length, boardLines.length, activeRuns.length]);
 
   return (
     <div className="flex-1 overflow-y-auto pb-4">
@@ -143,8 +207,22 @@ export function MessageList({
           <p className="text-muted">This is the start of the #{channel} channel.</p>
         </div>
       )}
-      {layout(messages).map(({ message: m, grouped, newDay }) => (
-        <div key={m.id}>
+      {timeline.map((entry) => {
+        if (entry.kind === "board") {
+          return (
+            <div
+              key={entry.line.id}
+              className="flex justify-center px-4 py-0.5 text-xs italic text-faint"
+            >
+              <span>
+                · {renderContent(entry.line.text, null, true, onRefClick)}
+              </span>
+            </div>
+          );
+        }
+        const { message: m, grouped, newDay } = entry;
+        return (
+        <div key={m.id} id={`msg-${m.id}`}>
           {newDay && (
             <div className="mx-4 mt-4 mb-1 flex items-center gap-2">
               <div className="h-px flex-1 bg-divider" />
@@ -166,7 +244,7 @@ export function MessageList({
                 {formatShortTime(m.timestamp)}
               </div>
               <p className="min-w-0 leading-[1.375rem] break-words whitespace-pre-wrap">
-                {renderContent(m.content, mentionRegex)}
+                {renderContent(m.content, mentionRegex, true, onRefClick)}
               </p>
             </div>
           ) : (
@@ -201,17 +279,19 @@ export function MessageList({
                   />
                 ) : (
                   <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
-                    {renderContent(m.content, mentionRegex)}
+                    {renderContent(m.content, mentionRegex, true, onRefClick)}
                   </p>
                 )}
               </div>
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
       {activeRuns.map((run) => (
         <TraceMessageLive
           key={run.runId}
+          runId={run.runId}
           agentName={run.agentName}
           chunks={run.chunks}
         />

@@ -39,14 +39,16 @@ function TraceBody({ chunks }: { chunks: TraceChunk[] }) {
 }
 
 export function TraceMessageLive({
+  runId,
   agentName,
   chunks,
 }: {
+  runId: string;
   agentName: string;
   chunks: TraceChunk[];
 }) {
   return (
-    <div className="mt-4 flex gap-4 py-0.5 pr-4 pl-4">
+    <div id={`trace-${runId}`} className="mt-4 flex gap-4 py-0.5 pr-4 pl-4">
       <div className="pt-0.5">
         <Avatar name={agentName} size={40} />
       </div>

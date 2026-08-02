@@ -1,7 +1,15 @@
-import { GoogleGenAI } from "@google/genai";
-import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions } from "./Brain";
+import {
+  GoogleGenAI,
+  Type,
+  type Content,
+  type FunctionDeclaration,
+  type Part,
+  type Schema,
+} from "@google/genai";
+import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions, ToolDeclaration } from "./Brain";
 
 const MODEL = process.env.AGENT_MODEL ?? "gemini-2.5-flash";
+const MAX_TOOL_ROUNDS = 12;
 
 export class GeminiBrain implements Brain {
   private ai: GoogleGenAI;
@@ -11,40 +19,96 @@ export class GeminiBrain implements Brain {
   }
 
   async run(input: BrainInput, callbacks: BrainCallbacks, options?: BrainRunOptions): Promise<string> {
-    const response = await this.ai.models.generateContentStream({
-      model: MODEL,
-      contents: buildContents(input),
-      config: {
-        systemInstruction: input.system,
-        thinkingConfig: { includeThoughts: true },
-        abortSignal: options?.signal,
-      },
-    });
+    const contents: Content[] = [
+      { role: "user", parts: [{ text: buildContents(input) }] },
+    ];
+    const tools = input.tools?.length
+      ? [{ functionDeclarations: input.tools.map(toFunctionDeclaration) }]
+      : undefined;
 
     let finalText = "";
-    for await (const chunk of response) {
-      // Newer SDK builds may return text via the convenience .text() accessor;
-      // parts carry thought annotations when includeThoughts is enabled.
-      const text = chunk.text;
-      if (text) {
-        callbacks.onText(text);
-        finalText += text;
-      }
 
-      const parts = chunk.candidates?.[0]?.content?.parts ?? [];
-      for (const part of parts) {
-        if (!part.text) continue;
-        if (part.thought) {
-          callbacks.onThought(part.text);
-        } else if (!text) {
-          // Only double-emit if .text() was not available on this chunk.
-          callbacks.onText(part.text);
-          finalText += part.text;
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const response = await this.ai.models.generateContentStream({
+        model: MODEL,
+        contents,
+        config: {
+          systemInstruction: input.system,
+          thinkingConfig: { includeThoughts: true },
+          abortSignal: options?.signal,
+          tools,
+        },
+      });
+
+      const modelParts: Part[] = [];
+      const functionCalls: { name: string; args: Record<string, unknown> }[] = [];
+
+      for await (const chunk of response) {
+        const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+        for (const part of parts) {
+          modelParts.push(part);
+          if (part.functionCall?.name) {
+            functionCalls.push({
+              name: part.functionCall.name,
+              args: (part.functionCall.args ?? {}) as Record<string, unknown>,
+            });
+          } else if (part.text) {
+            if (part.thought) {
+              callbacks.onThought(part.text);
+            } else {
+              callbacks.onText(part.text);
+              finalText += part.text;
+            }
+          }
         }
       }
+
+      if (functionCalls.length === 0 || !options?.onToolCall) break;
+
+      contents.push({ role: "model", parts: modelParts });
+      const responses: Part[] = [];
+      for (const call of functionCalls) {
+        const result = await options.onToolCall(call.name, call.args);
+        responses.push({
+          functionResponse: { name: call.name, response: result },
+        });
+      }
+      contents.push({ role: "user", parts: responses });
     }
 
     return finalText.trim() || "(no response)";
+  }
+}
+
+function toFunctionDeclaration(tool: ToolDeclaration): FunctionDeclaration {
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: toSchema(tool.parameters),
+  };
+}
+
+function toSchema(param: ToolDeclaration["parameters"]): Schema {
+  const properties: Record<string, Schema> = {};
+  for (const [key, value] of Object.entries(param.properties)) {
+    properties[key] = {
+      type: typeFor(value.type),
+      ...(value.description ? { description: value.description } : {}),
+    };
+  }
+  return { type: Type.OBJECT, properties, required: param.required };
+}
+
+function typeFor(t: string): Type {
+  switch (t) {
+    case "number":
+      return Type.NUMBER;
+    case "integer":
+      return Type.INTEGER;
+    case "boolean":
+      return Type.BOOLEAN;
+    default:
+      return Type.STRING;
   }
 }
 

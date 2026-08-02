@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ChatMessage, Participant, TraceChunk } from "./participant";
+import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -31,7 +32,9 @@ export const statusSetEventSchema = z.object({
 export const statusUpdateEventSchema = z.object({
   type: z.literal("status_update"),
   status: z.string().max(128),
-  runState: z.enum(["idle", "working", "done", "dead"]),
+  runState: z.enum(["idle", "working", "blocked", "done", "dead"]),
+  /** Board item id the agent is working off; null clears it. */
+  taskId: z.string().nullable().optional(),
 });
 
 export const traceStartEventSchema = z.object({
@@ -76,6 +79,22 @@ export const runEndEventSchema = z.object({
   reason: z.enum(["completed", "aborted"]).default("completed"),
 });
 
+// --- Toolman events ----------------------------------------------------------
+
+/** Agent asks the toolman to perform an action on its behalf. */
+export const actionRequestEventSchema = z.object({
+  type: z.literal("action_request"),
+  requestId: z.string(),
+  /** Board item ref backing this action; required for mutating actions. */
+  boardItemRef: z.string().nullable().optional(),
+  action: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("read_file"), path: z.string() }),
+    z.object({ kind: z.literal("list_files"), path: z.string().optional() }),
+    z.object({ kind: z.literal("write_file"), path: z.string(), content: z.string() }),
+    z.object({ kind: z.literal("append_file"), path: z.string(), content: z.string() }),
+  ]),
+});
+
 export const clientEventSchema = z.discriminatedUnion("type", [
   joinEventSchema,
   messageEventSchema,
@@ -88,6 +107,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   interruptEventSchema,
   demoStartEventSchema,
   runEndEventSchema,
+  actionRequestEventSchema,
 ]);
 
 export type JoinEvent = z.infer<typeof joinEventSchema>;
@@ -101,6 +121,7 @@ export type ClearEvent = z.infer<typeof clearEventSchema>;
 export type InterruptEvent = z.infer<typeof interruptEventSchema>;
 export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
+export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 
 // ---------------------------------------------------------------------------
@@ -112,6 +133,21 @@ export interface WelcomeEvent {
   self: Participant;
   history: ChatMessage[];
   participants: Participant[];
+  /** Bearer token for the HTTP API, bound to this actor identity. */
+  token: string;
+  /** Base URL of the HTTP API (same host/port as the websocket). */
+  apiUrl: string;
+}
+
+/** Toolman verdict, sent only to the requesting agent. */
+export interface ActionResultEvent {
+  type: "action_result";
+  requestId: string;
+  ok: boolean;
+  /** Set when the toolman denied authorization for the action. */
+  code?: AuthzDenyCode;
+  error?: string;
+  output?: string;
 }
 
 export interface MessageBroadcast {
@@ -170,4 +206,6 @@ export type ServerEvent =
   | TraceChunkBroadcast
   | ClearBroadcast
   | InterruptBroadcast
-  | RunEndBroadcast;
+  | RunEndBroadcast
+  | ActionResultEvent
+  | BoardEventEnvelope;

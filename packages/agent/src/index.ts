@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { ChatMessage } from "@workspace/shared";
+import {
+  isBoardEnvelope,
+  type BoardEventEnvelope,
+  type BoardItem,
+  type ChatMessage,
+} from "@workspace/shared";
 import { AGENT_NAME, CHARTER_PATH, DATA_DIR, GEMINI_API_KEY, WS_URL } from "./config";
 import { AgentSocket } from "./socket";
 import { GeminiBrain } from "./brain/GeminiBrain";
 import { Memory } from "./memory";
+import { BoardClient } from "./boardClient";
+import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
 
 if (!GEMINI_API_KEY) {
   console.error("[agent] Missing GEMINI_API_KEY. Set it in the environment and restart.");
@@ -12,14 +19,27 @@ if (!GEMINI_API_KEY) {
 }
 
 const socket = new AgentSocket(WS_URL);
+const boardClient = new BoardClient(socket);
 const brain = new GeminiBrain(GEMINI_API_KEY);
 const memory = new Memory(DATA_DIR);
+
+interface WorkItem {
+  authorName: string;
+  content: string;
+  channel: string;
+  /** Set when this work resumes an approved board item. */
+  taskId?: string;
+}
 
 let systemPrompt: string;
 let participantId: string | null = null;
 let runInFlight = false;
 let runAbortController: AbortController | null = null;
-const mentionQueue: { authorName: string; content: string; channel: string }[] = [];
+/** The board item the agent is actively executing against, if any. */
+let activeTask: BoardItem | null = null;
+const workQueue: WorkItem[] = [];
+/** Work stashed while its proposal awaits a human decision, keyed by item id. */
+const pendingWork = new Map<string, { origin: string; channel: string }>();
 
 async function loadCharter(): Promise<string> {
   try {
@@ -36,7 +56,7 @@ function isMention(message: ChatMessage): boolean {
   return message.authorKind === "human" && mentionRegex.test(message.content);
 }
 
-function buildPrompt(items: { authorName: string; content: string }[]): string {
+function buildPrompt(items: WorkItem[]): string {
   const formatted = items
     .map((m) => `- ${m.authorName}: ${m.content}`)
     .join("\n");
@@ -44,6 +64,14 @@ function buildPrompt(items: { authorName: string; content: string }[]): string {
     `Messages addressed to you:\n${formatted}\n\n` +
     `Reply in the workspace chat. Address each sender by name (e.g. "harris: …" ` +
     `or a natural greeting using their name) so it is clear who you are answering.`
+  );
+}
+
+function buildContext(): string {
+  return (
+    `Current board (the only source of authority for mutating work):\n` +
+    `${boardClient.summary()}\n\n` +
+    `Recent chat transcript:\n${memory.context()}`
   );
 }
 
@@ -64,65 +92,109 @@ function friendlyErrorMessage(detail: string): string {
   return "Sorry, something went wrong while I was thinking. Please try again.";
 }
 
+/**
+ * Broadcast the agent's between-runs availability: red/blocked while any of
+ * its proposals await a human decision, orange/idle otherwise.
+ */
+function updateAvailability(): void {
+  if (runInFlight) return;
+  const proposed = participantId ? boardClient.myProposedItems(participantId) : [];
+  if (proposed.length > 0) {
+    const refs = proposed.map((i) => i.ref).join(", ");
+    socket.send({
+      type: "status_update",
+      status: `Blocked — awaiting approval (${refs})`,
+      runState: "blocked",
+      taskId: proposed[0].id,
+    });
+  } else {
+    socket.send({ type: "status_update", status: "", runState: "idle", taskId: null });
+  }
+}
+
 async function runWorkCycle(): Promise<void> {
   if (runInFlight) return;
   runInFlight = true;
 
   try {
-    while (mentionQueue.length > 0) {
+    while (workQueue.length > 0) {
       // Wait briefly before the agent appears as "working" or starts streaming.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Batch only mentions from the same channel so the reply lands where
-      // it was asked; remaining channels are handled on the next loop pass.
-      const channel = mentionQueue[0].channel;
-      const batch: typeof mentionQueue = [];
-      for (let i = mentionQueue.length - 1; i >= 0; i--) {
-        if (mentionQueue[i].channel === channel) {
-          batch.unshift(...mentionQueue.splice(i, 1));
+      // Batch only work from the same channel so the reply lands where it was
+      // asked; remaining channels are handled on the next loop pass.
+      const channel = workQueue[0].channel;
+      const batch: WorkItem[] = [];
+      for (let i = workQueue.length - 1; i >= 0; i--) {
+        if (workQueue[i].channel === channel) {
+          batch.unshift(...workQueue.splice(i, 1));
         }
       }
       const authorNames = Array.from(new Set(batch.map((m) => m.authorName)));
+      const resumedTask = batch.find((m) => m.taskId)?.taskId;
+      const resumedItem = resumedTask ? boardClient.resolve(resumedTask) : undefined;
       const runId = randomUUID();
       console.log(`[agent] starting run ${runId.slice(0, 8)} for ${authorNames.join(", ")}`);
 
+      activeTask = resumedItem ?? null;
+      const humanAuthors = authorNames.filter((n) => n !== "system");
       socket.send({
         type: "status_update",
-        status: `Replying to ${authorNames.join(", ")}…`,
+        status: resumedItem
+          ? `Working on ${resumedItem.ref}…`
+          : humanAuthors.length > 0
+            ? `Replying to ${humanAuthors.join(", ")}…`
+            : "Catching up on the board…",
         runState: "working",
+        taskId: resumedItem?.id ?? null,
       });
       socket.send({ type: "trace_start", runId });
 
       runAbortController = new AbortController();
       const signal = runAbortController.signal;
 
-      const traceChunks: { kind: "thought" | "text"; content: string }[] = [];
       let finalText = "";
       let producedOutput = false;
       let aborted = false;
+
+      const emitChunk = (kind: "thought" | "text", content: string) => {
+        producedOutput = true;
+        socket.send({ type: "trace_chunk", runId, chunk: { kind, content } });
+      };
+
+      const executeTool = createToolExecutor(boardClient, {
+        onProposed: (item) => {
+          pendingWork.set(item.id, {
+            origin: batch.map((m) => `${m.authorName}: ${m.content}`).join("\n"),
+            channel,
+          });
+        },
+        onTaskActive: (item) => {
+          if (activeTask?.id === item.id) return;
+          activeTask = item;
+          socket.send({
+            type: "status_update",
+            status: `Working on ${item.ref}…`,
+            runState: "working",
+            taskId: item.id,
+          });
+        },
+        onActivity: (line) => emitChunk("thought", `[toolman] ${line}`),
+      });
 
       try {
         finalText = await brain.run(
           {
             system: systemPrompt,
-            context: memory.context(),
+            context: buildContext(),
             prompt: buildPrompt(batch),
+            tools: TOOL_DECLARATIONS,
           },
           {
-            onThought: (thought) => {
-              producedOutput = true;
-              const chunk = { kind: "thought" as const, content: thought };
-              traceChunks.push(chunk);
-              socket.send({ type: "trace_chunk", runId, chunk });
-            },
-            onText: (text) => {
-              producedOutput = true;
-              const chunk = { kind: "text" as const, content: text };
-              traceChunks.push(chunk);
-              socket.send({ type: "trace_chunk", runId, chunk });
-            },
+            onThought: (thought) => emitChunk("thought", thought),
+            onText: (text) => emitChunk("text", text),
           },
-          { signal },
+          { signal, onToolCall: executeTool },
         );
       } catch (err) {
         if (signal.aborted) {
@@ -146,23 +218,101 @@ async function runWorkCycle(): Promise<void> {
         socket.send({ type: "run_end", runId, reason: "aborted" });
         console.log(`[agent] run ${runId.slice(0, 8)} aborted`);
       }
-      socket.send({ type: "status_update", status: "", runState: "idle" });
+      activeTask = null;
+      runInFlight = false;
+      updateAvailability();
+      runInFlight = true;
     }
   } finally {
+    activeTask = null;
     runInFlight = false;
+    updateAvailability();
   }
+}
+
+/**
+ * React to board events: resume approved proposals, drop denied ones, and
+ * halt work whose backing item was deleted (I4).
+ */
+function onBoardEvent(envelope: BoardEventEnvelope): void {
+  const { item } = envelope;
+
+  if (envelope.type === "item.deleted") {
+    if (activeTask && activeTask.id === item.id) {
+      console.log(`[agent] ${item.ref} deleted mid-run — halting`);
+      runAbortController?.abort();
+      workQueue.push({
+        authorName: "system",
+        content:
+          `Board item ${item.ref} ("${item.title}") was DELETED by ${envelope.actor.display_name}. ` +
+          `The work it authorized is halted; the toolman will refuse further actions on it. ` +
+          `Briefly acknowledge this in chat.`,
+        channel: "general",
+      });
+      void runWorkCycle();
+    }
+    pendingWork.delete(item.id);
+    updateAvailability();
+    return;
+  }
+
+  const work = pendingWork.get(item.id);
+  if (!work) {
+    updateAvailability();
+    return;
+  }
+
+  if (envelope.type === "item.approved") {
+    pendingWork.delete(item.id);
+    console.log(`[agent] ${item.ref} approved — resuming`);
+    workQueue.push({
+      authorName: "system",
+      content:
+        `Your proposal ${item.ref} ("${item.title}") was APPROVED by ${envelope.actor.display_name}. ` +
+        `Call board_start("${item.ref}"), do the work it authorizes using ${item.ref} as the ` +
+        `board_item_ref for mutating actions, and call board_complete("${item.ref}") when finished. ` +
+        `Original request:\n${work.origin}`,
+      channel: work.channel,
+      taskId: item.id,
+    });
+    void runWorkCycle();
+  } else if (envelope.type === "item.denied") {
+    pendingWork.delete(item.id);
+    console.log(`[agent] ${item.ref} denied — dropping`);
+    const reason = typeof envelope.payload.reason === "string" ? envelope.payload.reason : null;
+    workQueue.push({
+      authorName: "system",
+      content:
+        `Your proposal ${item.ref} ("${item.title}") was DENIED by ${envelope.actor.display_name}` +
+        `${reason ? ` with reason: ${reason}` : ""}. ` +
+        `Drop that line of work. Briefly acknowledge this in chat; do not re-propose it.`,
+      channel: work.channel,
+    });
+    void runWorkCycle();
+  }
+  updateAvailability();
 }
 
 async function main() {
   systemPrompt = await loadCharter();
   await memory.init();
 
+  // Re-derive blocked/idle once the board cache lands after (re)join, so a
+  // restarted agent with outstanding proposals shows blocked immediately.
+  boardClient.onRefreshed = () => updateAvailability();
+
   socket.onEvent((event) => {
+    if (isBoardEnvelope(event)) {
+      // Give the BoardClient's own listener a tick to update its cache first.
+      setImmediate(() => onBoardEvent(event));
+      return;
+    }
     switch (event.type) {
       case "welcome":
         participantId = event.self.id;
         memory.seed(event.history);
         console.log(`[agent] joined as ${event.self.name} (${event.self.id})`);
+        updateAvailability();
         break;
       case "message":
         memory.append(event.message);
@@ -173,7 +323,7 @@ async function main() {
         if (event.message.content.trimStart().toLowerCase().startsWith("/interrupt")) return;
         if (isMention(event.message)) {
           console.log("[agent] mention detected, queueing");
-          mentionQueue.push({
+          workQueue.push({
             authorName: event.message.authorName,
             content: event.message.content,
             channel: event.message.channel ?? "general",
@@ -184,8 +334,8 @@ async function main() {
       case "interrupt": {
         console.log(`[agent] interrupted by ${event.authorName}: ${event.content.slice(0, 80)}`);
         runAbortController?.abort();
-        mentionQueue.length = 0;
-        mentionQueue.push({
+        workQueue.length = 0;
+        workQueue.push({
           authorName: event.authorName,
           content: `@${AGENT_NAME} ${event.content}`,
           channel: "general",

@@ -1,6 +1,9 @@
 import { useState } from "react";
-import type { Participant } from "@workspace/shared";
+import type { BoardItem, ChatMessage, Participant } from "@workspace/shared";
+import type { ActiveRun } from "../hooks/useWorkspace";
 import { Avatar } from "./Avatar";
+import { ApprovalQueue } from "./ApprovalQueue";
+import { MemberCard } from "./MemberCard";
 
 const SERVER_NAME = "Workspace";
 
@@ -16,31 +19,41 @@ function StatusDot({ online }: { online: boolean }) {
 
 function StatusRow({
   participant,
-  onDirect,
+  onSelect,
 }: {
   participant: Participant;
-  onDirect?: (name: string) => void;
+  onSelect: (participant: Participant) => void;
 }) {
-  const working = participant.runState === "working";
-  const dead = participant.runState === "dead";
-  const directable = participant.kind === "agent" && !!onDirect;
+  const isAgent = participant.kind === "agent";
+  const working = isAgent && participant.runState === "working";
+  const blocked = isAgent && participant.runState === "blocked";
+  const dead = isAgent && participant.runState === "dead";
   return (
     <div
-      className={`flex items-center gap-2.5 rounded px-2 py-1.5 hover:bg-white/5 ${
-        directable ? "cursor-pointer" : ""
-      }`}
-      onClick={directable ? () => onDirect(participant.name) : undefined}
-      title={directable ? `Direct @${participant.name}` : undefined}
+      className="flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 hover:bg-white/5"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={() => onSelect(participant)}
     >
       <div className="relative">
         <Avatar name={participant.name} size={32} />
         {working ? (
           <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-working opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-working" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-online opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-online" />
+          </span>
+        ) : blocked ? (
+          <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-dead" />
           </span>
         ) : dead ? (
           <span className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar bg-dead" />
+        ) : isAgent ? (
+          <span
+            className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar ${
+              participant.online ? "bg-away" : "bg-offline"
+            }`}
+          />
         ) : (
           <StatusDot online={participant.online} />
         )}
@@ -48,7 +61,7 @@ function StatusRow({
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-body">
           {participant.name}
-          {participant.kind === "agent" && (
+          {isAgent && (
             <span className="ml-1.5 rounded bg-blurple px-1 py-px align-middle text-[10px] font-bold text-mention-text">
               AGENT
             </span>
@@ -58,14 +71,17 @@ function StatusRow({
           className={`truncate text-xs ${
             working
               ? "font-medium text-working"
-              : dead
+              : blocked || dead
                 ? "font-medium text-dead"
                 : "text-muted"
           }`}
         >
           {dead
             ? `Dead${participant.status ? ` — ${participant.status}` : ""}`
-            : participant.status || (participant.online ? "Online" : "Offline")}
+            : blocked
+              ? participant.status || "Blocked — waiting on a human"
+              : participant.status ||
+                (participant.online ? "Online" : "Offline")}
         </div>
       </div>
     </div>
@@ -79,7 +95,13 @@ export function Sidebar({
   channel,
   onSelectChannel,
   onSetStatus,
-  onDirect,
+  board,
+  activeRuns,
+  messages,
+  onApprove,
+  onDeny,
+  onDiscuss,
+  onPrefill,
 }: {
   participants: Participant[];
   self: Participant | null;
@@ -87,14 +109,30 @@ export function Sidebar({
   channel: string;
   onSelectChannel: (channel: string) => void;
   onSetStatus: (status: string) => void;
-  onDirect?: (name: string) => void;
+  board: BoardItem[];
+  activeRuns: ActiveRun[];
+  messages: ChatMessage[];
+  onApprove: (itemId: string) => void;
+  onDeny: (itemId: string) => void;
+  onDiscuss: (item: BoardItem) => void;
+  onPrefill: (text: string) => void;
 }) {
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const sorted = [...participants].sort(
     (a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name),
   );
+  const pendingItems = board.filter((i) => i.status === "proposed");
+  const selected = participants.find((p) => p.id === selectedId) ?? null;
+
+  const discuss = (item: BoardItem) => {
+    setQueueOpen(false);
+    setSelectedId(null);
+    onDiscuss(item);
+  };
 
   return (
     <aside className="flex h-full w-60 flex-col bg-sidebar">
@@ -117,8 +155,21 @@ export function Sidebar({
         <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase">
           Status — {sorted.filter((p) => p.online).length} online
         </h2>
+        {pendingItems.length > 0 && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => setQueueOpen((o) => !o)}
+            className="mb-1.5 flex w-full items-center gap-2 rounded-lg bg-dead/20 px-2 py-1.5 text-left text-sm font-semibold text-dead hover:bg-dead/30"
+          >
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-dead" />
+            </span>
+            Awaiting approval ({pendingItems.length})
+          </button>
+        )}
         {sorted.map((p) => (
-          <StatusRow key={p.id} participant={p} onDirect={onDirect} />
+          <StatusRow key={p.id} participant={p} onSelect={(m) => setSelectedId(m.id)} />
         ))}
       </section>
 
@@ -197,6 +248,29 @@ export function Sidebar({
           </>
         )}
       </footer>
+
+      {queueOpen && pendingItems.length > 0 && (
+        <ApprovalQueue
+          items={pendingItems}
+          onApprove={onApprove}
+          onDeny={onDeny}
+          onDiscuss={discuss}
+          onClose={() => setQueueOpen(false)}
+        />
+      )}
+      {selected && (
+        <MemberCard
+          participant={selected}
+          board={board}
+          activeRuns={activeRuns}
+          messages={messages}
+          onApprove={onApprove}
+          onDeny={onDeny}
+          onDiscuss={discuss}
+          onPrefill={onPrefill}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </aside>
   );
 }

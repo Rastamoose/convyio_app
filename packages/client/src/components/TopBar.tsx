@@ -1,9 +1,13 @@
 export function TopBar({
   channel,
   onRunDemo,
+  boardOpen,
+  onToggleBoard,
 }: {
   channel: string;
   onRunDemo?: () => void;
+  boardOpen: boolean;
+  onToggleBoard: () => void;
 }) {
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-dark bg-sidebar-dark px-4">
@@ -22,6 +26,17 @@ export function TopBar({
             Run demo
           </button>
         )}
+        <button
+          onClick={onToggleBoard}
+          className={`rounded-lg px-3 py-1 text-sm font-semibold transition ${
+            boardOpen
+              ? "bg-blurple text-mention-text"
+              : "bg-input text-body hover:bg-mention-bg-hover"
+          }`}
+          title="Toggle the canonical board"
+        >
+          Board
+        </button>
         <div className="flex h-6 w-40 items-center rounded-lg bg-sidebar px-2">
           <input
             className="w-full bg-transparent text-sm text-body outline-none placeholder:text-faint"

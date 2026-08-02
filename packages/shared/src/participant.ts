@@ -1,6 +1,6 @@
 export type ParticipantKind = "human" | "agent";
 
-export type RunState = "idle" | "working" | "done" | "dead";
+export type RunState = "idle" | "working" | "blocked" | "done" | "dead";
 
 export interface Participant {
   id: string;
@@ -9,6 +9,10 @@ export interface Participant {
   status: string;
   runState: RunState;
   online: boolean;
+  /** Board item id the agent is currently working off (agents only). */
+  currentTaskId?: string;
+  /** When the agent picked up the current task (server-stamped). */
+  taskStartedAt?: number;
 }
 
 export interface TraceChunk {
