@@ -3,10 +3,10 @@ import type { BoardItem } from "@workspace/shared";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { UsernameModal } from "./components/UsernameModal";
 import { Sidebar } from "./components/Sidebar";
-import { TopBar } from "./components/TopBar";
+import { TopBar, type WorkspaceView } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
-import { BoardPanel } from "./components/BoardPanel";
+import { BoardView } from "./components/BoardView";
 
 const CHANNELS = ["general", "demo"];
 
@@ -17,14 +17,17 @@ export default function App() {
   const [channel, setChannel] = useState("general");
   const workspace = useWorkspace(name);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
-  const [boardOpen, setBoardOpen] = useState(false);
+  const [view, setView] = useState<WorkspaceView>("chat");
+  const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [highlightRef, setHighlightRef] = useState<string | null>(null);
   const highlightTimer = useRef<number | null>(null);
 
   const prefillText = (text: string) => setPrefill({ text, nonce: Date.now() });
 
   const handleRefClick = (ref: string) => {
-    setBoardOpen(true);
+    setView("board");
+    const item = workspace.board.find((i) => i.ref === ref);
+    setOpenItemId(item?.id ?? null);
     setHighlightRef(ref);
     if (highlightTimer.current != null) {
       window.clearTimeout(highlightTimer.current);
@@ -35,8 +38,19 @@ export default function App() {
     );
   };
 
-  const discussItem = (item: BoardItem) =>
+  const discussItem = (item: BoardItem) => {
     workspace.sendMessage(`discuss ${item.ref} — "${item.title}"`, channel);
+    setView("chat");
+  };
+
+  const jumpToTrace = (runId: string) => {
+    setView("chat");
+    window.setTimeout(() => {
+      document
+        .getElementById(`trace-${runId}`)
+        ?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+  };
 
   const handleSend = (content: string) => {
     if (content.startsWith("/")) {
@@ -93,40 +107,53 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col bg-chat">
         <TopBar
           channel={channel}
+          view={view}
+          onSetView={setView}
           onRunDemo={
             channel === "demo" ? () => workspace.startDemo(channel) : undefined
           }
-          boardOpen={boardOpen}
-          onToggleBoard={() => setBoardOpen((o) => !o)}
         />
-        <MessageList
-          channel={channel}
-          messages={channelMessages}
-          boardLines={workspace.boardLines}
-          activeRuns={workspace.activeRuns}
-          runDurations={workspace.runDurations}
-          participants={workspace.participants}
-          selfName={workspace.self?.name ?? null}
-          onRefClick={handleRefClick}
-        />
-        <MessageInput
-          channel={channel}
-          participants={workspace.participants}
-          onSend={handleSend}
-          prefill={prefill}
-        />
+        {view === "chat" ? (
+          <>
+            <MessageList
+              channel={channel}
+              messages={channelMessages}
+              boardLines={workspace.boardLines}
+              activeRuns={workspace.activeRuns}
+              runDurations={workspace.runDurations}
+              participants={workspace.participants}
+              selfName={workspace.self?.name ?? null}
+              onRefClick={handleRefClick}
+            />
+            <MessageInput
+              channel={channel}
+              participants={workspace.participants}
+              onSend={handleSend}
+              prefill={prefill}
+            />
+          </>
+        ) : (
+          <BoardView
+            board={workspace.board}
+            activeRuns={workspace.activeRuns}
+            highlightRef={highlightRef}
+            openItemId={openItemId}
+            onOpenItem={setOpenItemId}
+            onCreate={workspace.createBoardItem}
+            onApprove={workspace.approveItem}
+            onDeny={workspace.denyItem}
+            onDiscuss={discussItem}
+            onStart={workspace.startItem}
+            onComplete={workspace.completeItem}
+            onReopen={workspace.reopenItem}
+            onDelete={workspace.deleteItem}
+            onEdit={workspace.editItem}
+            onJumpToTrace={jumpToTrace}
+            fetchActors={workspace.fetchActors}
+            fetchItemEvents={workspace.fetchItemEvents}
+          />
+        )}
       </main>
-      {boardOpen && (
-        <BoardPanel
-          board={workspace.board}
-          activeRuns={workspace.activeRuns}
-          highlightRef={highlightRef}
-          onCreate={workspace.createBoardItem}
-          onApprove={workspace.approveItem}
-          onDeny={workspace.denyItem}
-          onDiscuss={discussItem}
-        />
-      )}
     </div>
   );
 }

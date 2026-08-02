@@ -23,8 +23,9 @@ Set `GEMINI_API_KEY` in `.env` for the agent. Port overrides: `PORT` (server),
 npm test -w @workspace/server
 ```
 
-Covers the spec's invariant tests T1–T12, including the full-stack approval
-fan-out check.
+Covers the spec's invariant tests T1–T12 (including the full-stack approval
+fan-out check) plus a pressure suite: HTTP edge cases, approve/deny races,
+sandbox traversal, and lifecycle abuse.
 
 ## Hardening TODO — read this first
 

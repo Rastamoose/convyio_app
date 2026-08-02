@@ -84,6 +84,17 @@ export interface BoardEventEnvelope {
   ts: string;
 }
 
+/** One row of an item's audit trail, as served by the activity endpoint. */
+export interface BoardItemEvent {
+  id: number;
+  type: BoardEventType;
+  actorId: string;
+  actorName: string;
+  actorKind: ActorKind;
+  payload: Record<string, unknown>;
+  createdAt: number;
+}
+
 export function isBoardEnvelope(event: unknown): event is BoardEventEnvelope {
   return (
     typeof event === "object" &&

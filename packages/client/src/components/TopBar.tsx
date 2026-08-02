@@ -1,20 +1,41 @@
+export type WorkspaceView = "chat" | "board";
+
 export function TopBar({
   channel,
+  view,
+  onSetView,
   onRunDemo,
-  boardOpen,
-  onToggleBoard,
 }: {
   channel: string;
+  view: WorkspaceView;
+  onSetView: (view: WorkspaceView) => void;
   onRunDemo?: () => void;
-  boardOpen: boolean;
-  onToggleBoard: () => void;
 }) {
+  const tab = (target: WorkspaceView, label: string) => (
+    <button
+      onClick={() => onSetView(target)}
+      className={`rounded-lg px-3 py-1 text-sm font-semibold transition ${
+        view === target
+          ? "bg-input text-body"
+          : "text-muted hover:bg-input/50 hover:text-body"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-sidebar-dark bg-sidebar-dark px-4">
-      <span className="font-semibold text-body">{channel}</span>
-      <span className="rounded bg-sidebar px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase">
-        room
-      </span>
+      {tab("chat", "Chat")}
+      {tab("board", "Board")}
+      {view === "chat" && (
+        <>
+          <span className="ml-1.5 font-semibold text-body">{channel}</span>
+          <span className="rounded bg-sidebar px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase">
+            room
+          </span>
+        </>
+      )}
       <div className="ml-auto flex items-center gap-4">
         {onRunDemo && (
           <button
@@ -28,17 +49,6 @@ export function TopBar({
             Run demo
           </button>
         )}
-        <button
-          onClick={onToggleBoard}
-          className={`rounded-lg px-3 py-1 text-sm font-semibold transition ${
-            boardOpen
-              ? "bg-blurple text-mention-text"
-              : "bg-input text-body hover:bg-mention-bg-hover"
-          }`}
-          title="Toggle the canonical board"
-        >
-          Board
-        </button>
         <div className="flex h-6 w-40 items-center rounded-lg bg-sidebar px-2">
           <input
             className="w-full bg-transparent text-sm text-body outline-none placeholder:text-faint"

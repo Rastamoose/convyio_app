@@ -37,8 +37,8 @@ const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
 const patchBodySchema = z.object({
   title: z.string().min(1).max(200).optional(),
-  description: z.string().max(2000).optional(),
-  owner: z.string().optional(),
+  description: z.string().max(2000).nullable().optional(),
+  owner: z.string().nullable().optional(),
 });
 
 const statusValues: ItemStatus[] = ["proposed", "denied", "approved", "in_progress", "blocked", "done"];
@@ -62,7 +62,7 @@ export function createApiHandler(
 
     try {
       const actor = authenticate(req, db, sessions);
-      await route(req, res, url, actor, service);
+      await route(req, res, url, actor, service, db);
     } catch (err) {
       if (err instanceof ApiError) {
         json(res, err.status, { error: err.code, message: err.message });
@@ -83,9 +83,15 @@ async function route(
   url: URL,
   actor: Actor,
   service: BoardService,
+  db: BoardDb,
 ): Promise<void> {
   const method = req.method ?? "GET";
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "board", "items", ...]
+
+  // GET /api/actors — the member roster, for owner assignment and display.
+  if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
+    return json(res, 200, { actors: db.listActors() });
+  }
 
   if (parts[1] !== "board" || parts[2] !== "items") {
     throw new ApiError(404, "NOT_FOUND", "no such route");
@@ -124,6 +130,11 @@ async function route(
       return json(res, 200, { item: service.softDelete(actor, id) });
     }
     throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
+  }
+
+  // GET /api/board/items/:id/events — the item's audit trail.
+  if (parts.length === 5 && parts[4] === "events" && method === "GET") {
+    return json(res, 200, { events: service.events(actor.serverId, id) });
   }
 
   // POST /api/board/items/:id/<action>

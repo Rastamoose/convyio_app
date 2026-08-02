@@ -11,6 +11,7 @@ import { AgentSocket } from "./socket";
 import { GeminiBrain } from "./brain/GeminiBrain";
 import { Memory } from "./memory";
 import { BoardClient } from "./boardClient";
+import { PendingWork, type StashedWork } from "./pendingWork";
 import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
 
 if (!GEMINI_API_KEY) {
@@ -38,8 +39,7 @@ let runAbortController: AbortController | null = null;
 /** The board item the agent is actively executing against, if any. */
 let activeTask: BoardItem | null = null;
 const workQueue: WorkItem[] = [];
-/** Work stashed while its proposal awaits a human decision, keyed by item id. */
-const pendingWork = new Map<string, { origin: string; channel: string }>();
+const pendingWork = new PendingWork(DATA_DIR);
 
 async function loadCharter(): Promise<string> {
   try {
@@ -230,6 +230,36 @@ async function runWorkCycle(): Promise<void> {
   }
 }
 
+function resumeApproved(item: BoardItem, work: StashedWork, decidedBy: string): void {
+  pendingWork.delete(item.id);
+  console.log(`[agent] ${item.ref} approved — resuming`);
+  workQueue.push({
+    authorName: "system",
+    content:
+      `Your proposal ${item.ref} ("${item.title}") was APPROVED by ${decidedBy}. ` +
+      `Call board_start("${item.ref}"), do the work it authorizes using ${item.ref} as the ` +
+      `board_item_ref for mutating actions, and call board_complete("${item.ref}") when finished. ` +
+      `Original request:\n${work.origin}`,
+    channel: work.channel,
+    taskId: item.id,
+  });
+  void runWorkCycle();
+}
+
+function dropDenied(item: BoardItem, work: StashedWork, decidedBy: string, reason: string | null): void {
+  pendingWork.delete(item.id);
+  console.log(`[agent] ${item.ref} denied — dropping`);
+  workQueue.push({
+    authorName: "system",
+    content:
+      `Your proposal ${item.ref} ("${item.title}") was DENIED by ${decidedBy}` +
+      `${reason ? ` with reason: ${reason}` : ""}. ` +
+      `Drop that line of work. Briefly acknowledge this in chat; do not re-propose it.`,
+    channel: work.channel,
+  });
+  void runWorkCycle();
+}
+
 /**
  * React to board events: resume approved proposals, drop denied ones, and
  * halt work whose backing item was deleted (I4).
@@ -263,43 +293,43 @@ function onBoardEvent(envelope: BoardEventEnvelope): void {
   }
 
   if (envelope.type === "item.approved") {
-    pendingWork.delete(item.id);
-    console.log(`[agent] ${item.ref} approved — resuming`);
-    workQueue.push({
-      authorName: "system",
-      content:
-        `Your proposal ${item.ref} ("${item.title}") was APPROVED by ${envelope.actor.display_name}. ` +
-        `Call board_start("${item.ref}"), do the work it authorizes using ${item.ref} as the ` +
-        `board_item_ref for mutating actions, and call board_complete("${item.ref}") when finished. ` +
-        `Original request:\n${work.origin}`,
-      channel: work.channel,
-      taskId: item.id,
-    });
-    void runWorkCycle();
+    resumeApproved(item, work, envelope.actor.display_name);
   } else if (envelope.type === "item.denied") {
-    pendingWork.delete(item.id);
-    console.log(`[agent] ${item.ref} denied — dropping`);
     const reason = typeof envelope.payload.reason === "string" ? envelope.payload.reason : null;
-    workQueue.push({
-      authorName: "system",
-      content:
-        `Your proposal ${item.ref} ("${item.title}") was DENIED by ${envelope.actor.display_name}` +
-        `${reason ? ` with reason: ${reason}` : ""}. ` +
-        `Drop that line of work. Briefly acknowledge this in chat; do not re-propose it.`,
-      channel: work.channel,
-    });
-    void runWorkCycle();
+    dropDenied(item, work, envelope.actor.display_name, reason);
   }
   updateAvailability();
+}
+
+/**
+ * Restart recovery: decisions made while the agent was down arrive via the
+ * board snapshot rather than live events. Sweep the persisted stash against
+ * it so approved work still resumes and denied work is still dropped.
+ */
+function sweepPendingWork(): void {
+  for (const [itemId, work] of pendingWork.entries()) {
+    const item = boardClient.resolve(itemId);
+    if (!item) {
+      pendingWork.delete(itemId);
+    } else if (item.status === "approved" || item.status === "in_progress") {
+      resumeApproved(item, work, item.approvedByName ?? "a human");
+    } else if (item.status === "denied") {
+      dropDenied(item, work, "a human", null);
+    }
+  }
 }
 
 async function main() {
   systemPrompt = await loadCharter();
   await memory.init();
+  await pendingWork.init();
 
-  // Re-derive blocked/idle once the board cache lands after (re)join, so a
-  // restarted agent with outstanding proposals shows blocked immediately.
-  boardClient.onRefreshed = () => updateAvailability();
+  // Once the board cache lands after (re)join: recover decisions made while
+  // the agent was down, then re-derive the blocked/idle presence state.
+  boardClient.onRefreshed = () => {
+    sweepPendingWork();
+    updateAvailability();
+  };
 
   socket.onEvent((event) => {
     if (isBoardEnvelope(event)) {

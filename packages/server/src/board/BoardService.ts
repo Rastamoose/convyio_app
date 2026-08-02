@@ -4,6 +4,7 @@ import type {
   BoardEventEnvelope,
   BoardEventType,
   BoardItem,
+  BoardItemEvent,
   ItemStatus,
 } from "@workspace/shared";
 import type { BoardDb } from "./db";
@@ -67,6 +68,37 @@ export class BoardService {
       .prepare(`${SELECT_ITEM} WHERE i.id = ? OR i.ref = ?`)
       .get(idOrRef, idOrRef) as ItemRow | undefined;
     return row ? toItem(row) : null;
+  }
+
+  /** An item's audit trail, oldest first (the events table is append-only). */
+  events(serverId: string, idOrRef: string): BoardItemEvent[] {
+    const item = this.find(serverId, idOrRef);
+    if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", `no board item ${idOrRef}`);
+    const rows = this.store.db
+      .prepare(
+        `SELECT e.id, e.type, e.actor_id, e.payload, e.created_at,
+                a.display_name AS actor_name, a.kind AS actor_kind
+         FROM board_events e JOIN actors a ON a.id = e.actor_id
+         WHERE e.item_id = ? ORDER BY e.id ASC`,
+      )
+      .all(item.id) as unknown as {
+      id: number;
+      type: BoardItemEvent["type"];
+      actor_id: string;
+      payload: string;
+      created_at: number;
+      actor_name: string;
+      actor_kind: BoardItemEvent["actorKind"];
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      actorId: r.actor_id,
+      actorName: r.actor_name,
+      actorKind: r.actor_kind,
+      payload: JSON.parse(r.payload) as Record<string, unknown>,
+      createdAt: r.created_at,
+    }));
   }
 
   // -------------------------------------------------------------------------
@@ -187,24 +219,36 @@ export class BoardService {
   edit(
     actor: Actor,
     idOrRef: string,
-    fields: { title?: string; description?: string; owner?: string },
+    fields: { title?: string; description?: string | null; owner?: string | null },
   ): BoardItem {
     this.assertHuman(actor, "HUMAN_ONLY");
     const item = this.mustFind(actor.serverId, idOrRef);
+    if (fields.owner != null) {
+      const owner = this.store.getActor(fields.owner);
+      if (!owner || owner.serverId !== actor.serverId) {
+        throw new ApiError(400, "OWNER_NOT_FOUND", "owner must be an actor on this server");
+      }
+    }
     const changed: Record<string, unknown> = {};
     for (const key of ["title", "description", "owner"] as const) {
       if (fields[key] !== undefined && fields[key] !== item[key]) {
         changed[key] = { from: item[key], to: fields[key] };
       }
     }
+    if (Object.keys(changed).length === 0) return item;
     return this.mutate(actor, "item.edited", () => {
       this.store.db
         .prepare(
-          `UPDATE board_items SET title = COALESCE(?, title),
-             description = COALESCE(?, description), owner = COALESCE(?, owner)
+          `UPDATE board_items SET
+             title = ?, description = ?, owner = ?
            WHERE id = ?`,
         )
-        .run(fields.title ?? null, fields.description ?? null, fields.owner ?? null, item.id);
+        .run(
+          fields.title !== undefined ? fields.title : item.title,
+          fields.description !== undefined ? fields.description : item.description,
+          fields.owner !== undefined ? fields.owner : item.owner,
+          item.id,
+        );
       return item.id;
     }, { changed });
   }

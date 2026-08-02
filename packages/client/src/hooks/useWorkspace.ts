@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  Actor,
   BoardEventEnvelope,
   BoardItem,
+  BoardItemEvent,
   ChatMessage,
+  ItemStatus,
   Participant,
   ParticipantKind,
   RunState,
@@ -32,6 +35,12 @@ export interface BoardLine {
   text: string;
 }
 
+export interface BoardItemEdit {
+  title?: string;
+  description?: string;
+  owner?: string | null;
+}
+
 export interface WorkspaceState {
   self: Participant | null;
   messages: ChatMessage[];
@@ -45,6 +54,13 @@ export interface WorkspaceState {
   createBoardItem: (title: string, description?: string) => void;
   approveItem: (itemId: string) => void;
   denyItem: (itemId: string) => void;
+  startItem: (itemId: string) => void;
+  completeItem: (itemId: string) => void;
+  reopenItem: (itemId: string) => void;
+  deleteItem: (itemId: string) => void;
+  editItem: (itemId: string, fields: BoardItemEdit) => void;
+  fetchActors: () => Promise<Actor[]>;
+  fetchItemEvents: (itemId: string) => Promise<BoardItemEvent[]>;
   setStatus: (status: string) => void;
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
@@ -406,16 +422,22 @@ export function useWorkspace(name: string | null): WorkspaceState {
   }, [name]);
 
   return useMemo(() => {
-    /** Optimistically set a status, POST, and roll back on failure. */
-    const resolveItem = (itemId: string, path: string, body?: unknown) => {
+    /** Optimistically set a status, POST a transition, and roll back on failure. */
+    const transitionItem = (
+      itemId: string,
+      action: string,
+      status: ItemStatus,
+      body?: unknown,
+    ) => {
       if (standaloneRef.current) return;
       const previous = board.find((i) => i.id === itemId);
       if (!previous) return;
-      const status = path.endsWith("/approve") ? "approved" : "denied";
       setBoard((prev) =>
         prev.map((i) => (i.id === itemId ? { ...i, status } : i)),
       );
-      const request = apiFetch(path, {
+      const rollback = () =>
+        setBoard((prev) => prev.map((i) => (i.id === itemId ? previous : i)));
+      const request = apiFetch(`/api/board/items/${itemId}/${action}`, {
         method: "POST",
         body: body ? JSON.stringify(body) : undefined,
       });
@@ -427,15 +449,11 @@ export function useWorkspace(name: string | null): WorkspaceState {
             message?: string;
           } | null;
           console.warn("[board]", err?.message ?? `request failed: ${res.status}`);
-          setBoard((prev) =>
-            prev.map((i) => (i.id === itemId ? previous : i)),
-          );
+          rollback();
         })
         .catch((err) => {
           console.warn("[board]", err);
-          setBoard((prev) =>
-            prev.map((i) => (i.id === itemId ? previous : i)),
-          );
+          rollback();
         });
     };
 
@@ -488,10 +506,126 @@ export function useWorkspace(name: string | null): WorkspaceState {
           .catch((err) => console.warn("[board]", err));
       },
       approveItem: (itemId: string) => {
-        resolveItem(itemId, `/api/board/items/${itemId}/approve`);
+        transitionItem(itemId, "approve", "approved");
       },
       denyItem: (itemId: string) => {
-        resolveItem(itemId, `/api/board/items/${itemId}/deny`, {});
+        transitionItem(itemId, "deny", "denied", {});
+      },
+      startItem: (itemId: string) => {
+        transitionItem(itemId, "start", "in_progress");
+      },
+      completeItem: (itemId: string) => {
+        transitionItem(itemId, "complete", "done");
+      },
+      reopenItem: (itemId: string) => {
+        transitionItem(itemId, "reopen", "approved");
+      },
+      deleteItem: (itemId: string) => {
+        if (standaloneRef.current) return;
+        const previous = board.find((i) => i.id === itemId);
+        if (!previous) return;
+        setBoard((prev) => prev.filter((i) => i.id !== itemId));
+        const restore = () =>
+          setBoard((prev) =>
+            prev.some((i) => i.id === itemId) ? prev : [previous, ...prev],
+          );
+        const request = apiFetch(`/api/board/items/${itemId}`, {
+          method: "DELETE",
+        });
+        if (!request) return;
+        void request
+          .then(async (res) => {
+            if (res.ok) return;
+            const err = (await res.json().catch(() => null)) as {
+              message?: string;
+            } | null;
+            console.warn(
+              "[board]",
+              err?.message ?? `request failed: ${res.status}`,
+            );
+            restore();
+          })
+          .catch((err) => {
+            console.warn("[board]", err);
+            restore();
+          });
+      },
+      editItem: (itemId: string, fields: BoardItemEdit) => {
+        if (standaloneRef.current) return;
+        const previous = board.find((i) => i.id === itemId);
+        if (!previous) return;
+        setBoard((prev) =>
+          prev.map((i) =>
+            i.id === itemId
+              ? {
+                  ...i,
+                  ...(fields.title !== undefined ? { title: fields.title } : {}),
+                  ...(fields.description !== undefined
+                    ? { description: fields.description }
+                    : {}),
+                  ...(fields.owner !== undefined
+                    ? {
+                        owner: fields.owner,
+                        ownerName: fields.owner == null ? undefined : i.ownerName,
+                      }
+                    : {}),
+                }
+              : i,
+          ),
+        );
+        const rollback = () =>
+          setBoard((prev) => prev.map((i) => (i.id === itemId ? previous : i)));
+        const request = apiFetch(`/api/board/items/${itemId}`, {
+          method: "PATCH",
+          body: JSON.stringify(fields),
+        });
+        if (!request) return;
+        void request
+          .then(async (res) => {
+            const data = (await res.json().catch(() => null)) as {
+              item?: BoardItem;
+              message?: string;
+            } | null;
+            if (!res.ok) {
+              console.warn(
+                "[board]",
+                data?.message ?? `request failed: ${res.status}`,
+              );
+              rollback();
+              return;
+            }
+            if (data?.item) upsertBoardItem(data.item);
+          })
+          .catch((err) => {
+            console.warn("[board]", err);
+            rollback();
+          });
+      },
+      fetchActors: async (): Promise<Actor[]> => {
+        const request = apiFetch("/api/actors");
+        if (!request) return [];
+        try {
+          const res = await request;
+          if (!res.ok) return [];
+          const data = (await res.json()) as { actors?: Actor[] };
+          return data.actors ?? [];
+        } catch (err) {
+          console.warn("[board]", err);
+          return [];
+        }
+      },
+      fetchItemEvents: async (itemId: string): Promise<BoardItemEvent[]> => {
+        const request = apiFetch(`/api/board/items/${itemId}/events`);
+        if (!request) return [];
+        try {
+          const res = await request;
+          if (!res.ok) return [];
+          const data = (await res.json()) as { events?: BoardItemEvent[] };
+          return data.events ?? [];
+        } catch (err) {
+          console.warn("[board]", err);
+          return [];
+        }
       },
       setStatus: (status: string) => {
         if (standaloneRef.current) {
