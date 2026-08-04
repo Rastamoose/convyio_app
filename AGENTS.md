@@ -17,3 +17,4 @@ Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/
 - Auth: ws `join` upserts a persistent actor and the `welcome` frame carries a bearer token + apiUrl for the HTTP API.
 - Toolman file actions are sandboxed to `data/workspace/`.
 - Agent presence semantics: green=working, orange=idle, red=blocked on a human, grey=offline.
+- Scripted demos: `packages/server/src/demo/DemoRunner.ts` holds one script per demo channel (`demo` = marketing copy, `demo-bug` = ICP rounding-bug flow: agent investigates seeded `data/workspace/billing/`, proposes, gets gated, a teammate's constraint lands pre-approval, then real gated file work runs). The client's `demo.ts` mirrors both scripts with canned replies + fake board items for the standalone (no-server) fallback; keep the two in sync when editing scripts.

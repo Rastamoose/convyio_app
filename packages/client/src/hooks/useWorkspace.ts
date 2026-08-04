@@ -12,12 +12,7 @@ import type {
   TraceChunk,
 } from "@workspace/shared";
 import { WorkspaceSocket } from "../ws";
-import {
-  AGENT_NAME,
-  PERSONA_A,
-  PERSONA_B,
-  runLocalDemo,
-} from "../demo";
+import { AGENT_NAME, getLocalScript, runLocalDemo } from "../demo";
 
 const runStartTimes = new Map<string, number>();
 
@@ -251,14 +246,18 @@ export function useWorkspace(name: string | null): WorkspaceState {
 
   const startLocalDemo = (channel: string) => {
     demoCancelRef.current?.();
+    const script = getLocalScript(channel);
+    if (!script) return;
 
     // Clear the demo channel before replaying.
     setMessages((prev) =>
       prev.filter((m) => (m.channel ?? "general") !== channel),
     );
 
-    const alexId = ensureParticipant(PERSONA_A, "human");
-    const blairId = ensureParticipant(PERSONA_B, "human");
+    const personaIds = new Map<string, string>();
+    for (const persona of script.personas) {
+      personaIds.set(persona.toLowerCase(), ensureParticipant(persona, "human"));
+    }
     const agentId = ensureParticipant(AGENT_NAME, "agent");
 
     const cancel = runLocalDemo(channel, {
@@ -266,28 +265,29 @@ export function useWorkspace(name: string | null): WorkspaceState {
         const id =
           kind === "agent"
             ? agentId
-            : authorName.toLowerCase() === PERSONA_A.toLowerCase()
-              ? alexId
-              : blairId;
+            : (personaIds.get(authorName.toLowerCase()) ??
+              ensureParticipant(authorName, "human"));
         postLocalMessage(id, authorName, kind, content, channel);
       },
-      onAgentStart: () => {
-        setParticipantState(AGENT_NAME, "agent", "working", "drafting…");
+      onAgentStart: (status) => {
+        setParticipantState(AGENT_NAME, "agent", "working", status);
       },
       onAgentDone: () => {
         setParticipantState(AGENT_NAME, "agent", "idle", "");
       },
-      onFinished: () => {
+      onBoardLine: (text) => {
+        setBoardLines((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), ts: Date.now(), text },
+        ]);
+      },
+      onBoardItem: upsertBoardItem,
+      onFinished: (personas) => {
         // Remove the synthetic human personas; leave the agent around.
+        const lower = personas.map((p) => p.toLowerCase());
         setParticipants((prev) =>
           prev.filter(
-            (p) =>
-              !(
-                p.kind === "human" &&
-                [PERSONA_A.toLowerCase(), PERSONA_B.toLowerCase()].includes(
-                  p.name.toLowerCase(),
-                )
-              ),
+            (p) => !(p.kind === "human" && lower.includes(p.name.toLowerCase())),
           ),
         );
       },

@@ -31,7 +31,7 @@ async function main() {
   const apiUrl = `http://localhost:${config.port}`;
   const hub = new Hub(server, storage, db, sessions, toolman, apiUrl);
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
-  new DemoRunner(hub);
+  new DemoRunner(hub, db, service, path.join(config.dataDir, "workspace"));
 
   server.listen(config.port, () => {
     console.log(`[hub] listening on ws://localhost:${config.port} (http api on ${apiUrl})`);

@@ -36,6 +36,8 @@ export class Hub {
   onMessagePosted: ((message: ChatMessage) => void) | null = null;
   /** Optional hook fired when a client requests the scripted demo. */
   onDemoStart: ((channel: string) => void) | null = null;
+  /** Optional hook fired for every board event fanned out to clients. */
+  onBoardEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
 
   constructor(
     server: HttpServer,
@@ -66,6 +68,7 @@ export class Hub {
   /** Fan a board event out to every connected client (§4). */
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
     this.broadcast(envelope);
+    this.onBoardEvent?.(envelope);
   }
 
   private onConnection(socket: WebSocket): void {

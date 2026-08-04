@@ -9,6 +9,7 @@ export interface MemoryMessage {
   authorKind: "human" | "agent";
   content: string;
   timestamp: number;
+  channel?: string;
 }
 
 export class Memory {
@@ -37,6 +38,7 @@ export class Memory {
       authorKind: m.authorKind,
       content: m.content,
       timestamp: m.timestamp,
+      channel: m.channel ?? "general",
     }));
   }
 
@@ -46,6 +48,7 @@ export class Memory {
       authorKind: message.authorKind,
       content: message.content,
       timestamp: message.timestamp,
+      channel: message.channel ?? "general",
     };
     this.window.push(item);
     if (this.window.length > WINDOW_SIZE) {
@@ -56,7 +59,10 @@ export class Memory {
 
   context(): string {
     return this.window
-      .map((m) => `${m.authorName} (${m.authorKind}): ${m.content}`)
+      .map(
+        (m) =>
+          `[#${m.channel ?? "general"}] ${m.authorName} (${m.authorKind}): ${m.content}`,
+      )
       .join("\n");
   }
 

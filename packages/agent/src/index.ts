@@ -56,14 +56,16 @@ function isMention(message: ChatMessage): boolean {
   return message.authorKind === "human" && mentionRegex.test(message.content);
 }
 
-function buildPrompt(items: WorkItem[]): string {
+function buildPrompt(items: WorkItem[], channel: string): string {
   const formatted = items
     .map((m) => `- ${m.authorName}: ${m.content}`)
     .join("\n");
   return (
-    `Messages addressed to you:\n${formatted}\n\n` +
-    `Reply in the workspace chat. Address each sender by name (e.g. "harris: …" ` +
-    `or a natural greeting using their name) so it is clear who you are answering.`
+    `Messages addressed to you (all in #${channel}):\n${formatted}\n\n` +
+    `Reply in #${channel}. Transcript lines from other channels are background ` +
+    `context only — never answer or continue them here. Address each sender by ` +
+    `name (e.g. "harris: …" or a natural greeting using their name) so it is ` +
+    `clear who you are answering.`
   );
 }
 
@@ -187,7 +189,7 @@ async function runWorkCycle(): Promise<void> {
           {
             system: systemPrompt,
             context: buildContext(),
-            prompt: buildPrompt(batch),
+            prompt: buildPrompt(batch, channel),
             tools: TOOL_DECLARATIONS,
           },
           {

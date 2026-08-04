@@ -7,8 +7,9 @@ import { TopBar, type WorkspaceView } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
+import { DEMO_CHANNELS } from "./demo";
 
-const CHANNELS = ["general", "demo"];
+const CHANNELS = ["general", ...DEMO_CHANNELS];
 
 export default function App() {
   const [name, setName] = useState<string | null>(
@@ -110,7 +111,9 @@ export default function App() {
           view={view}
           onSetView={setView}
           onRunDemo={
-            channel === "demo" ? () => workspace.startDemo(channel) : undefined
+            DEMO_CHANNELS.includes(channel)
+              ? () => workspace.startDemo(channel)
+              : undefined
           }
         />
         {view === "chat" ? (
