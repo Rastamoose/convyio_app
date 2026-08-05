@@ -8,6 +8,7 @@ import {
   type BoardEventEnvelope,
   type ChatMessage,
   type ClientEvent,
+  type JoinEvent,
   type Participant,
   type PinEvent,
   type RunEndEvent,
@@ -29,10 +30,20 @@ interface Connection {
   participant: Participant | null;
 }
 
+/** Verdict from the join gate: whether a join stands, and as what name. */
+export type JoinDecision = { ok: true; name: string } | { ok: false };
+
 export interface HubOptions {
   apiUrl: string;
   serverId: string;
   demoChannels: string[];
+  /**
+   * The join gate, set only when auth is enabled. It exists so the Hub never
+   * knows how identities are proven (Google session vs shared agent secret) —
+   * it only learns whether a join stands and as what name. Absent = guest
+   * mode: joins are trusted to self-declare a name (dev/tests/demo).
+   */
+  authorizeJoin?: (join: JoinEvent) => JoinDecision;
 }
 
 /**
@@ -155,7 +166,7 @@ export class Hub {
 
   private async dispatch(conn: Connection, event: ClientEvent): Promise<void> {
     if (event.type === "join") {
-      this.handleJoin(conn, event.name, event.kind);
+      this.handleJoin(conn, event);
       return;
     }
     const participant = conn.participant;
@@ -223,8 +234,21 @@ export class Hub {
     }
   }
 
-  private handleJoin(conn: Connection, name: string, kind: Participant["kind"]): void {
-    const participant = this.roster.join(kind, name);
+  private handleJoin(conn: Connection, join: JoinEvent): void {
+    // In guest mode the schema guarantees a name (joins carry name or
+    // authToken; a token-only join can stand only where a gate resolves it).
+    const decision: JoinDecision = this.options.authorizeJoin
+      ? this.options.authorizeJoin(join)
+      : join.name !== undefined
+        ? { ok: true, name: join.name }
+        : { ok: false };
+    if (!decision.ok) {
+      this.send(conn, { type: "error", error: "unauthenticated" });
+      conn.socket.close();
+      return;
+    }
+    const { kind } = join;
+    const participant = this.roster.join(kind, decision.name);
 
     // Agents are singletons: a new connection for the same agent identity
     // displaces any previous one so duplicates can never double-reply.

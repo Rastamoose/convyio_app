@@ -1,8 +1,13 @@
 import type { ClientEvent, ServerEvent } from "@workspace/shared";
-
-const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
+import { wsUrl } from "./lib/serverUrl";
 
 type Listener = (event: ServerEvent) => void;
+
+/** How to join: a session token (auth mode) or a self-declared guest name. */
+export interface JoinCredentials {
+  name?: string;
+  authToken?: string;
+}
 
 /**
  * WorkspaceSocket exists so UI code never handles raw WebSocket frames or
@@ -14,22 +19,26 @@ export class WorkspaceSocket {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
   private disconnectListeners = new Set<() => void>();
-  private joinName: string | null = null;
+  private credentials: JoinCredentials | null = null;
   private retryMs = 500;
   private closed = false;
 
-  connect(name: string): void {
-    this.joinName = name;
+  connect(credentials: JoinCredentials): void {
+    this.credentials = credentials;
     this.open();
   }
 
   private open(): void {
-    this.socket = new WebSocket(WS_URL);
+    this.socket = new WebSocket(wsUrl());
 
     this.socket.onopen = () => {
       this.retryMs = 500;
-      if (this.joinName) {
-        this.sendRaw({ type: "join", name: this.joinName, kind: "human" });
+      const { name, authToken } = this.credentials ?? {};
+      // With a token the server decides who we are; a name would be ignored.
+      if (authToken) {
+        this.sendRaw({ type: "join", kind: "human", authToken });
+      } else if (name) {
+        this.sendRaw({ type: "join", name, kind: "human" });
       }
     };
 
@@ -38,6 +47,11 @@ export class WorkspaceSocket {
       // keep the connection alive rather than tearing down the session.
       try {
         const event = JSON.parse(e.data) as ServerEvent;
+        // A rejected credential is fatal: reconnecting with the same dead
+        // token could only loop, so stop retrying and let the app re-login.
+        if (event.type === "error" && event.error === "unauthenticated") {
+          this.closed = true;
+        }
         for (const l of this.listeners) l(event);
       } catch (err) {
         console.warn("[ws] ignoring malformed frame", err, e.data);

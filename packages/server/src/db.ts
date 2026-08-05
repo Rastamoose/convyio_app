@@ -22,7 +22,16 @@ CREATE TABLE IF NOT EXISTS actors (
   id            TEXT PRIMARY KEY,
   kind          TEXT NOT NULL CHECK (kind IN ('human', 'agent')),
   display_name  TEXT NOT NULL,
-  server_id     TEXT NOT NULL
+  server_id     TEXT NOT NULL,
+  google_sub    TEXT, -- Google account id for signed-in humans; NULL otherwise
+  email         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token       TEXT PRIMARY KEY,
+  actor_id    TEXT NOT NULL REFERENCES actors(id),
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS board_items (
@@ -109,6 +118,13 @@ const MIGRATIONS = [
   `ALTER TABLE messages ADD COLUMN attachments TEXT`,
   `ALTER TABLE messages ADD COLUMN pinned_at INTEGER`,
   `ALTER TABLE messages ADD COLUMN pinned_by TEXT`,
+  `ALTER TABLE actors ADD COLUMN google_sub TEXT`,
+  `ALTER TABLE actors ADD COLUMN email TEXT`,
+  // SQLite cannot ALTER-add a UNIQUE column, so uniqueness of google_sub is a
+  // partial index; it must run after the ALTERs above so pre-auth databases
+  // have the column first.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_google_sub
+     ON actors (google_sub) WHERE google_sub IS NOT NULL`,
 ];
 
 export class WorkspaceDb {
@@ -156,12 +172,8 @@ export class WorkspaceDb {
 
   /** Find or create a persistent actor identity for a joining participant. */
   upsertActor(kind: ParticipantKind, displayName: string): Actor {
-    const existing = this.db
-      .prepare(
-        `SELECT * FROM actors WHERE server_id = ? AND kind = ? AND lower(display_name) = lower(?)`,
-      )
-      .get(this.serverId, kind, displayName) as ActorRow | undefined;
-    if (existing) return toActor(existing);
+    const existing = this.findActorByName(kind, displayName);
+    if (existing) return existing;
     const actor: Actor = {
       id: randomUUID(),
       kind,
@@ -173,6 +185,44 @@ export class WorkspaceDb {
         `INSERT INTO actors (id, kind, display_name, server_id) VALUES (?, ?, ?, ?)`,
       )
       .run(actor.id, actor.kind, actor.displayName, actor.serverId);
+    return actor;
+  }
+
+  /** Case-insensitive display-name lookup, matching upsertActor's dedupe rule. */
+  findActorByName(kind: ParticipantKind, displayName: string): Actor | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM actors WHERE server_id = ? AND kind = ? AND lower(display_name) = lower(?)`,
+      )
+      .get(this.serverId, kind, displayName) as ActorRow | undefined;
+    return row ? toActor(row) : null;
+  }
+
+  findActorByGoogleSub(googleSub: string): Actor | null {
+    const row = this.db
+      .prepare(`SELECT * FROM actors WHERE server_id = ? AND google_sub = ?`)
+      .get(this.serverId, googleSub) as ActorRow | undefined;
+    return row ? toActor(row) : null;
+  }
+
+  /**
+   * Create the persistent human for a completed Google signup. Caller must
+   * have checked name availability; the google_sub unique index is the last
+   * line of defense against two actors for one Google account.
+   */
+  createGoogleHuman(displayName: string, googleSub: string, email: string | null): Actor {
+    const actor: Actor = {
+      id: randomUUID(),
+      kind: "human",
+      displayName,
+      serverId: this.serverId,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO actors (id, kind, display_name, server_id, google_sub, email)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(actor.id, actor.kind, actor.displayName, actor.serverId, googleSub, email);
     return actor;
   }
 

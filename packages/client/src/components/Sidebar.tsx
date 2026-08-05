@@ -86,7 +86,7 @@ export function Sidebar({
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
 }) {
-  const { participants, self, channels, board, setStatus, createChannel } =
+  const { participants, self, channels, board, setStatus, signOut, createChannel } =
     useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -256,6 +256,14 @@ export function Sidebar({
                 </button>
               )}
             </div>
+            {signOut && (
+              <button
+                onClick={signOut}
+                className="shrink-0 rounded px-1.5 py-1 text-[11px] text-muted hover:bg-white/5 hover:text-body"
+              >
+                Sign out
+              </button>
+            )}
           </>
         )}
       </footer>

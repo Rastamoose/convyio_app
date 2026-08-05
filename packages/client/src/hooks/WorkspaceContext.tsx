@@ -8,6 +8,7 @@ import type {
   Participant,
 } from "@workspace/shared";
 import { isBoardEnvelope } from "@workspace/shared";
+import type { JoinCredentials } from "../ws";
 import { useConnection } from "./useConnection";
 import { useChatMessages } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
@@ -46,6 +47,8 @@ export interface WorkspaceState {
   /** Displayable absolute URL for an attachment's server-relative url. */
   attachmentUrl: (attachment: Attachment) => string;
   setStatus: (status: string) => void;
+  /** Ends the Google session; null in guest mode (nothing to sign out of). */
+  signOut: (() => void) | null;
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
   startDemo: (channel: string) => void;
@@ -80,10 +83,16 @@ export function useWorkspace(): WorkspaceState {
  * HTTP API and App does not have to drill workspace props into every view.
  */
 export function WorkspaceProvider({
-  name,
+  credentials,
+  onAuthRejected,
+  onSignOut,
   children,
 }: {
-  name: string;
+  credentials: JoinCredentials;
+  /** The server refused our session token; App owns what happens next. */
+  onAuthRejected?: () => void;
+  /** Present only when signed in via Google; guest mode has no sign-out. */
+  onSignOut?: () => void;
   children: ReactNode;
 }) {
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -93,7 +102,7 @@ export function WorkspaceProvider({
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
 
-  const connection = useConnection(name, (event) => {
+  const connection = useConnection(credentials, (event) => {
     if (isBoardEnvelope(event)) {
       board.applyEnvelope(event);
       return;
@@ -126,6 +135,10 @@ export function WorkspaceProvider({
         chat.clearChannel(event.channel);
         break;
       case "error":
+        if (event.error === "unauthenticated") {
+          onAuthRejected?.();
+          break;
+        }
         console.warn("[server]", event.error);
         pushToast(event.error);
         break;
@@ -183,6 +196,7 @@ export function WorkspaceProvider({
     takeReadyAttachmentIds: attachments.takeReadyIds,
     attachmentUrl: (attachment) => api.url(attachment.url),
     setStatus: (status) => connection.send({ type: "status_set", status }),
+    signOut: onSignOut ?? null,
     clearMessages: () => connection.send({ type: "clear" }),
     interrupt: (target, content) =>
       connection.send({ type: "interrupt", target, content }),

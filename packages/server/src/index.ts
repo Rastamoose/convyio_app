@@ -8,10 +8,13 @@ import { WorkspaceDb } from "./db";
 import { Attachments } from "./chat/Attachments";
 import { Channels } from "./chat/Channels";
 import { MessageStore } from "./chat/MessageStore";
+import { Auth } from "./auth/Auth";
+import { createGoogleIdTokenVerifier } from "./auth/googleIdToken";
+import { createJoinGate } from "./auth/joinPolicy";
 import { BoardService } from "./board/BoardService";
 import { Toolman } from "./board/Toolman";
 import { Sessions } from "./board/sessions";
-import { createApiHandler } from "./board/api";
+import { createApiHandler, type GoogleSignIn } from "./board/api";
 import { loadDemoScripts } from "./demo/script";
 import { DemoOrchestrator } from "./demo/DemoOrchestrator";
 
@@ -35,8 +38,28 @@ async function main() {
     ...demoChannels.map((name) => ({ name, isDemo: true })),
   ]);
 
+  let googleSignIn: GoogleSignIn | null = null;
+  if (config.googleClientId) {
+    googleSignIn = {
+      clientId: config.googleClientId,
+      auth: new Auth(db, createGoogleIdTokenVerifier(config.googleClientId)),
+    };
+    console.log("[auth] Google sign-in enabled");
+    if (!config.agentToken) {
+      console.warn("[auth] AGENT_TOKEN is not set: no agent can join this server");
+    }
+  }
+
   const attachments = new Attachments(db, path.join(config.dataDir, "uploads"));
-  const handleApi = createApiHandler(db, service, sessions, channels, attachments, config.corsOrigin);
+  const handleApi = createApiHandler(
+    db,
+    service,
+    sessions,
+    channels,
+    attachments,
+    config.corsOrigin,
+    googleSignIn,
+  );
   const server = http.createServer(async (req, res) => {
     const handled = await handleApi(req, res);
     if (!handled) {
@@ -51,6 +74,9 @@ async function main() {
     apiUrl,
     serverId: db.serverId,
     demoChannels,
+    authorizeJoin: googleSignIn
+      ? createJoinGate(googleSignIn.auth, config.agentToken)
+      : undefined,
   });
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);

@@ -3,6 +3,7 @@ import { isBoardEnvelope, type ChatMessage } from "@workspace/shared";
 import {
   AGENT_MODEL,
   AGENT_NAME,
+  AGENT_TOKEN,
   CHARTER_PATH,
   DATA_DIR,
   GEMINI_API_KEY,
@@ -103,7 +104,7 @@ async function main() {
     }
   });
 
-  socket.connect(AGENT_NAME);
+  socket.connect(AGENT_NAME, AGENT_TOKEN);
 
   process.on("SIGINT", () => {
     socket.close();

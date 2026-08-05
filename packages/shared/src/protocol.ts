@@ -12,10 +12,24 @@ import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
 // Inbound: client -> server (validated with zod at the boundary)
 // ---------------------------------------------------------------------------
 
-export const joinEventSchema = z.object({
+const joinEventShape = z.object({
   type: z.literal("join"),
-  name: z.string().min(1).max(32),
+  name: z.string().min(1).max(32).optional(),
   kind: z.enum(["human", "agent"]).default("human"),
+  /**
+   * Credential for auth-enabled servers: a human's persistent session token
+   * or the agent's shared secret. The server derives human identity from it
+   * and ignores any client-supplied name (I1). Guest/dev mode omits it.
+   */
+  authToken: z.string().optional(),
+});
+
+/** Without an authToken the join must self-declare a name (guest/dev mode). */
+const joinHasIdentity = (event: { name?: string; authToken?: string }) =>
+  event.name !== undefined || event.authToken !== undefined;
+
+export const joinEventSchema = joinEventShape.refine(joinHasIdentity, {
+  message: "join needs a name or an authToken",
 });
 
 const messageEventShape = z.object({
@@ -113,9 +127,9 @@ export const actionRequestEventSchema = z.object({
 
 export const clientEventSchema = z
   .discriminatedUnion("type", [
-    joinEventSchema,
-    // zod v3 discriminated unions only accept plain objects, so the shape goes
-    // in and messageEventSchema's emptiness refine is re-applied just below.
+    // zod v3 discriminated unions only accept plain objects, so the join and
+    // message shapes go in and their refinements are re-applied just below.
+    joinEventShape,
     messageEventShape,
     clearEventSchema,
     statusSetEventSchema,
@@ -131,6 +145,9 @@ export const clientEventSchema = z
   ])
   .refine((event) => event.type !== "message" || messageHasSubstance(event), {
     message: "message needs content or attachments",
+  })
+  .refine((event) => event.type !== "join" || joinHasIdentity(event), {
+    message: "join needs a name or an authToken",
   });
 
 export type JoinEvent = z.infer<typeof joinEventSchema>;

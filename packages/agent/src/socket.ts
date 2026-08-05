@@ -7,6 +7,7 @@ export class AgentSocket {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
   private joinName: string | null = null;
+  private authToken: string | undefined;
   private url: string;
   private retryMs = 500;
   private closed = false;
@@ -15,8 +16,10 @@ export class AgentSocket {
     this.url = url;
   }
 
-  connect(name: string): void {
+  /** authToken is required by auth-enabled servers, ignored by guest mode. */
+  connect(name: string, authToken?: string): void {
     this.joinName = name;
+    this.authToken = authToken;
     this.open();
   }
 
@@ -26,7 +29,12 @@ export class AgentSocket {
     this.socket.on("open", () => {
       this.retryMs = 500;
       if (this.joinName) {
-        this.sendRaw({ type: "join", name: this.joinName, kind: "agent" });
+        this.sendRaw({
+          type: "join",
+          name: this.joinName,
+          kind: "agent",
+          authToken: this.authToken,
+        });
       }
     });
 

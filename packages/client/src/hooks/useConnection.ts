@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClientEvent, Participant, ServerEvent } from "@workspace/shared";
-import { WorkspaceSocket } from "../ws";
+import { WorkspaceSocket, type JoinCredentials } from "../ws";
 
 /**
  * The websocket session: owns the WorkspaceSocket lifecycle and everything
@@ -8,11 +8,12 @@ import { WorkspaceSocket } from "../ws";
  * channels exist. Events it does not own are forwarded to `onEvent`.
  */
 export function useConnection(
-  name: string,
+  credentials: JoinCredentials,
   onEvent: (event: ServerEvent) => void,
 ) {
   const socketRef = useRef<WorkspaceSocket | null>(null);
-  // Latest-callback ref so the connect effect only re-runs on name changes.
+  // Latest-callback ref so the connect effect only re-runs when the join
+  // credentials change.
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
@@ -50,7 +51,7 @@ export function useConnection(
       setConnected(false),
     );
 
-    socket.connect(name);
+    socket.connect(credentials);
 
     return () => {
       unsubscribeEvents();
@@ -58,7 +59,7 @@ export function useConnection(
       socket.close();
       socketRef.current = null;
     };
-  }, [name]);
+  }, [credentials.name, credentials.authToken]);
 
   return {
     self,

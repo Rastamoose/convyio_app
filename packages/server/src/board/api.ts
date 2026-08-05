@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Actor, ItemStatus } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { Sessions } from "./sessions";
+import type { Auth } from "../auth/Auth";
 import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
 import type { WorkspaceDb } from "../db";
@@ -22,6 +23,13 @@ const createBodySchema = z.object({
 
 const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
 
+const googleLoginBodySchema = z.object({ credential: z.string().min(1) });
+// Bounds only; the real username rules (and their error codes) live in Auth.
+const usernameBodySchema = z.object({
+  signupToken: z.string().min(1),
+  username: z.string().max(200),
+});
+
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
 const patchBodySchema = z.object({
@@ -33,6 +41,12 @@ const patchBodySchema = z.object({
 
 const statusValues: ItemStatus[] = ["proposed", "denied", "approved", "in_progress", "blocked", "done"];
 
+/** Present iff Google sign-in is configured; the two halves never part ways. */
+export interface GoogleSignIn {
+  clientId: string;
+  auth: Auth;
+}
+
 export function createApiHandler(
   db: WorkspaceDb,
   service: BoardService,
@@ -40,6 +54,7 @@ export function createApiHandler(
   channels: Channels,
   attachments: Attachments,
   corsOrigin: string,
+  googleSignIn: GoogleSignIn | null = null,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -63,7 +78,10 @@ export function createApiHandler(
       // Fetching an upload is deliberately unauthenticated: the unguessable
       // UUID in the path is the capability (the Discord-CDN model), and <img>
       // tags cannot send Authorization headers. Everything else stays gated.
-      if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
+      if (parts[1] === "auth") {
+        // Login endpoints are how a token is obtained, so they cannot demand one.
+        await routeAuth(req, res, parts, googleSignIn);
+      } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
         serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
         const actor = authenticate(req, db, sessions);
@@ -185,13 +203,56 @@ async function route(
   throw new ApiError(404, "NOT_FOUND", "no such route");
 }
 
+/**
+ * /api/auth/*: the pre-token surface. `config` tells clients which mode the
+ * server runs in; the POST routes only exist once Google sign-in is
+ * configured, and answer 409 AUTH_DISABLED in guest mode.
+ */
+async function routeAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[], // ["api", "auth", ...]
+  googleSignIn: GoogleSignIn | null,
+): Promise<void> {
+  const method = req.method ?? "GET";
+  if (parts.length !== 3) throw new ApiError(404, "NOT_FOUND", "no such route");
+
+  if (parts[2] === "config" && method === "GET") {
+    return json(res, 200, { googleClientId: googleSignIn?.clientId ?? null });
+  }
+  if (method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
+  if (!googleSignIn) {
+    throw new ApiError(409, "AUTH_DISABLED", "this server runs in guest mode");
+  }
+
+  switch (parts[2]) {
+    case "google": {
+      const body = googleLoginBodySchema.parse(await readBody(req));
+      return json(res, 200, await googleSignIn.auth.loginWithGoogle(body.credential));
+    }
+    case "username": {
+      const body = usernameBodySchema.parse(await readBody(req));
+      return json(res, 200, googleSignIn.auth.completeSignup(body.signupToken, body.username));
+    }
+    case "logout": {
+      googleSignIn.auth.revoke(bearerToken(req) ?? "");
+      return void res.writeHead(204).end();
+    }
+  }
+  throw new ApiError(404, "NOT_FOUND", "no such route");
+}
+
 function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions): Actor {
-  const header = req.headers.authorization ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const token = bearerToken(req);
   const actorId = token ? sessions.resolve(token) : null;
   const actor = actorId ? db.getActor(actorId) : null;
   if (!actor) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
   return actor;
+}
+
+function bearerToken(req: IncomingMessage): string | null {
+  const header = req.headers.authorization ?? "";
+  return header.startsWith("Bearer ") ? header.slice(7) : null;
 }
 
 /** GET/HEAD /api/uploads/:id/:name — the :name segment is URL aesthetics only. */

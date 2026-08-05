@@ -9,6 +9,9 @@ import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { Roster } from "../src/roster";
+import { Auth } from "../src/auth/Auth";
+import type { GoogleIdentity } from "../src/auth/googleIdToken";
+import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
 import { Toolman } from "../src/board/Toolman";
@@ -99,23 +102,41 @@ export interface WsClient {
   next(pred: (event: any) => boolean, ms?: number): Promise<any>;
 }
 
+/** A join attempt's outcome: exactly one of welcome/refusal, never both. */
+export interface JoinOutcome {
+  welcome: any | null;
+  error: string | null;
+  closed: boolean;
+}
+
 export interface WsEnv {
   db: WorkspaceDb;
   messages: MessageStore;
   channels: Channels;
   attachments: Attachments;
   hub: Hub;
+  /** Set when the env was created with auth enabled. */
+  auth: Auth | null;
   uploadsDir: string;
   baseUrl: string;
   connect(name: string, kind: "human" | "agent"): Promise<WsClient>;
+  /** Send an arbitrary join frame; resolves on welcome or on socket close. */
+  join(frame: Record<string, unknown>): Promise<JoinOutcome>;
   close(): void;
 }
 
+export interface WsAuthOptions {
+  /** Stub for the Google verifier seam; tests never hit the network. */
+  verifier: (credential: string) => Promise<GoogleIdentity>;
+  agentToken?: string;
+}
+
 /** The full hub + HTTP stack on an ephemeral port, for websocket suites. */
-export async function createWsEnv(): Promise<WsEnv> {
+export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
   const db = new WorkspaceDb(":memory:");
   const service = new BoardService(db);
   const sessions = new Sessions();
+  const auth = options.auth ? new Auth(db, options.auth.verifier) : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
   const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
@@ -130,6 +151,7 @@ export async function createWsEnv(): Promise<WsEnv> {
     apiUrl: "",
     serverId: db.serverId,
     demoChannels: [],
+    authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null) : undefined,
   });
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
   await new Promise<void>((r) => server.listen(0, r));
@@ -142,8 +164,32 @@ export async function createWsEnv(): Promise<WsEnv> {
     channels,
     attachments,
     hub,
+    auth,
     uploadsDir,
     baseUrl: `http://localhost:${port}`,
+    join(frame) {
+      return new Promise<JoinOutcome>((resolve) => {
+        const ws = new WebSocket(`ws://localhost:${port}`);
+        clients.push(ws);
+        let error: string | null = null;
+        let settled = false;
+        ws.on("message", (raw) => {
+          const ev = JSON.parse(raw.toString());
+          if (ev.type === "error") error = ev.error;
+          if (ev.type === "welcome" && !settled) {
+            settled = true;
+            resolve({ welcome: ev, error, closed: false });
+          }
+        });
+        ws.on("close", () => {
+          if (!settled) {
+            settled = true;
+            resolve({ welcome: null, error, closed: true });
+          }
+        });
+        ws.on("open", () => ws.send(JSON.stringify(frame)));
+      });
+    },
     connect(name, kind) {
       return new Promise<WsClient>((resolve) => {
         const ws = new WebSocket(`ws://localhost:${port}`);

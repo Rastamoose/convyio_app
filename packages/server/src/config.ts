@@ -8,4 +8,8 @@ export const config = {
   dataDir: process.env.DATA_DIR ?? path.resolve(__dirname, "../../../data"),
   /** Single allowed browser origin for the HTTP API (the Vite dev client). */
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  /** Google OAuth client id. Set = Google sign-in required; null = guest mode. */
+  googleClientId: process.env.GOOGLE_CLIENT_ID ?? null,
+  /** Shared secret the agent joins with when auth is enabled. */
+  agentToken: process.env.AGENT_TOKEN ?? null,
 };

@@ -31,15 +31,31 @@ the wire protocol (websocket) and the HTTP board API.
   mechanics. `authorizeMutation` is the pure policy decision.  → BoardService
 - `scope.ts` — scope-path semantics: normalize, match, validate.
 - `Sessions` — bearer tokens with TTL and revocation.
-- `api.ts` — HTTP routes for board items, actors, channel creation, and
-  file uploads.  → BoardService, Sessions, WorkspaceDb, Channels, Attachments
+- `Auth` (`auth/`) — owns login identity: exchanges verified Google
+  credentials for workspace actors and persistent 30-day sessions
+  (auth_sessions), so the hub and the API never know Google exists.
+  → WorkspaceDb
+- `googleIdToken.ts` (`auth/`) — verifies a Google ID token and nothing
+  else; the JWKS fetcher is injectable so tests never touch the network.
+- `joinPolicy.ts` (`auth/`) — the auth-mode join gate: resolves a join frame
+  to an allowed participant name (human session token or agent shared
+  secret), so the Hub never knows how identities are proven.  → Auth
+- `api.ts` — HTTP routes for board items, actors, channel creation, file
+  uploads, and login (`/api/auth/*`).  → BoardService, Sessions, Auth,
+  WorkspaceDb, Channels, Attachments
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
   pipeline.  → Hub, Roster, BoardService
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
 
 ### packages/client
 - `ws.ts` `WorkspaceSocket` — exists so UI code never handles raw WebSocket
-  frames or reconnection.
+  frames or reconnection. Joins with a guest name or an authToken; treats
+  the server's `unauthenticated` verdict as fatal (no reconnect loop).
+- `lib/serverUrl.ts` — the single place server base URLs (ws + http) are
+  derived from VITE_WS_URL.
+- `components/LoginScreen` — the auth-mode front door: Google Sign-In button
+  (GIS script), credential exchange, first-time username pick. App only
+  receives the finished authToken.
 - `hooks/useConnection` — socket lifecycle + everything the welcome frame
   carries (self, participants, channels, connected).
 - `hooks/useApiSession` — the bearer-token fetch path, bound from the welcome
@@ -75,6 +91,11 @@ the wire protocol (websocket) and the HTTP board API.
   (fail closed).
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
+- Auth mode is a config switch, not a flag: GOOGLE_CLIENT_ID set = Google
+  sign-in required (the Hub only admits joins its `authorizeJoin` gate
+  resolves — humans by session token, agents by AGENT_TOKEN — and ignores
+  client-supplied human names); unset = the guest flow, byte-for-byte the
+  old behavior.
 - Every board mutation writes exactly one `board_events` row in the same
   transaction (I5) and fans out exactly one `{channel:"board"}` envelope.
 - Agent-origin board items always carry `scope_paths` (enforced at creation);
@@ -103,6 +124,14 @@ the wire protocol (websocket) and the HTTP board API.
 - 2026-08-05 — Sessions are in-memory with a 12h TTL, revoked when a human's
   last connection closes. A server restart logs everyone out; accepted for a
   single-node deployment.
+- 2026-08-05 — Google ID-token verification is hand-rolled on node:crypto
+  (JWKS fetch, RS256 verify, iss/aud/exp checks) instead of pulling
+  google-auth-library. Consequence: we own the edge cases (kid rotation,
+  clock skew, alg confusion), tested in auth.test.
+- 2026-08-05 — Google login sessions are DB rows (`auth_sessions`, 30-day
+  TTL, lazy sweep) unlike the in-memory ws-API `Sessions`: a restart must
+  not log every Google user out. The short-lived ws-API token stays
+  in-memory and is still minted fresh per welcome.
 - 2026-08-05 — `GET /api/uploads/:id/:name` is deliberately unauthenticated:
   the unguessable UUID id is the capability, the same model as Discord CDN
   links, because `<img>` tags cannot send Authorization headers. Consequence:
