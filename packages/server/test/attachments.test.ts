@@ -1,23 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
-import { WebSocket } from "ws";
 import { clientEventSchema } from "@workspace/shared";
-import { WorkspaceDb } from "../src/db";
-import { Attachments } from "../src/chat/Attachments";
-import { Channels } from "../src/chat/Channels";
-import { MessageStore } from "../src/chat/MessageStore";
-import { Roster } from "../src/roster";
-import { BoardService } from "../src/board/BoardService";
-import { Sessions } from "../src/board/sessions";
-import { createApiHandler } from "../src/board/api";
-import { Toolman } from "../src/board/Toolman";
-import { Hub } from "../src/hub";
-import { createEnv } from "./helpers";
+import { createEnv, createWsEnv } from "./helpers";
 
 // 1x1 red pixel, a real PNG so mime and bytes are honest.
 const PNG_BYTES = Buffer.from(
@@ -179,58 +166,11 @@ describe("message schema with attachments", () => {
 
 describe("attachments on the websocket", async () => {
   test("message with attachmentIds broadcasts and persists them; bad ids drop the message", async () => {
-    const db = new WorkspaceDb(":memory:");
-    const service = new BoardService(db);
-    const sessions = new Sessions();
-    const toolman = new Toolman(service, `/tmp/attachments-test-${randomUUID()}`);
-    await toolman.init();
-    const channels = new Channels(db);
-    channels.seed([{ name: "general", isDemo: false }]);
-    const messages = new MessageStore(db);
-    const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-"));
-    const attachments = new Attachments(db, uploadsDir);
-    const handler = createApiHandler(db, service, sessions, channels, attachments, "*");
-    const server = http.createServer((req, res) => void handler(req, res));
-    new Hub(server, new Roster(db), messages, channels, attachments, sessions, toolman, {
-      apiUrl: "",
-      serverId: db.serverId,
-      demoChannels: [],
-    });
-    await new Promise<void>((r) => server.listen(0, r));
-    const port = (server.address() as { port: number }).port;
-    const baseUrl = `http://localhost:${port}`;
+    const env = await createWsEnv();
+    const { messages, baseUrl } = env;
 
-    const connect = (name: string, kind: string) =>
-      new Promise<{ ws: WebSocket; token: string; welcome: any; next: (pred: (e: any) => boolean, ms?: number) => Promise<any> }>((resolve) => {
-        const ws = new WebSocket(`ws://localhost:${port}`);
-        const seen: any[] = [];
-        const waiters: { pred: (e: any) => boolean; resolve: (e: any) => void }[] = [];
-        ws.on("message", (raw) => {
-          const ev = JSON.parse(raw.toString());
-          seen.push(ev);
-          for (let i = waiters.length - 1; i >= 0; i--) {
-            if (waiters[i].pred(ev)) waiters.splice(i, 1)[0].resolve(ev);
-          }
-          if (ev.type === "welcome") {
-            resolve({
-              ws,
-              token: ev.token,
-              welcome: ev,
-              next: (pred, ms = 1000) =>
-                new Promise((res, rej) => {
-                  const already = seen.find(pred);
-                  if (already) return res(already);
-                  const t = setTimeout(() => rej(new Error("timeout")), ms);
-                  waiters.push({ pred, resolve: (e) => { clearTimeout(t); res(e); } });
-                }),
-            });
-          }
-        });
-        ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, kind })));
-      });
-
-    const dana = await connect("dana", "human");
-    const erik = await connect("erik", "human");
+    const dana = await env.connect("dana", "human");
+    const erik = await env.connect("erik", "human");
 
     const uploaded = await upload(baseUrl, dana.token, PNG_BYTES, {
       "X-Image-Width": "1",
@@ -275,10 +215,6 @@ describe("attachments on the websocket", async () => {
     await erik.next((e) => e.type === "error" && e.error.includes(ghostId));
     assert.equal(messages.list().length, countBefore);
 
-    dana.ws.close();
-    erik.ws.close();
-    server.close();
-    db.close();
-    fs.rmSync(uploadsDir, { recursive: true, force: true });
+    env.close();
   });
 });
