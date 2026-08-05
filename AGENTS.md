@@ -7,7 +7,8 @@ Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/
 - Typecheck: `npm run typecheck` (all packages) or `npx tsc --noEmit -p packages/<name>`
 - Tests: `npm test` (all packages) — server suite holds invariants T1-T12 + pressure + hardening; client uses vitest, the rest node:test
 - Client build: `npm run build -w @workspace/client`
-- Env overrides: `PORT`, `CORS_ORIGIN`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `AGENT_TOKEN` (server), `WS_URL`, `AGENT_TOKEN` (agent), `VITE_WS_URL` (client). Useful when something else holds 3001.
+- Env overrides: `PORT`, `CORS_ORIGIN`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `AGENT_TOKEN`, `CLIENT_DIST` (server), `WS_URL`, `AGENT_TOKEN` (agent), `VITE_WS_URL` (client). Useful when something else holds 3001.
+- Deploy: `DEPLOY.md` — one origin in production (server serves the built client), Dockerfile/compose at root.
 
 ## Architecture invariants
 - One SQLite file (`data/board.db`: actors, messages, board_items, append-only board_events) is the workspace store. The board is a permission boundary: `authorizeMutation` in `packages/server/src/board/Toolman.ts` refuses any mutating agent action without a workable (approved/in_progress) board item whose `scope_paths` cover the target path. Tools not known read-only are treated as mutating (fail closed). Do not add agent write paths that bypass it.

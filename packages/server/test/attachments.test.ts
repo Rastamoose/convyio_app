@@ -172,6 +172,10 @@ describe("attachments on the websocket", async () => {
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
+    // welcome.apiUrl is derived from the upgrade request's Host header, so it
+    // matches the origin the client actually connected through.
+    assert.equal(dana.welcome.apiUrl, baseUrl);
+
     const uploaded = await upload(baseUrl, dana.token, PNG_BYTES, {
       "X-Image-Width": "1",
       "X-Image-Height": "1",
@@ -193,6 +197,11 @@ describe("attachments on the websocket", async () => {
       height: 1,
       url: `/api/uploads/${attachment.id}/pixel.png`,
     });
+
+    // Prefixing the server-relative url with welcome.apiUrl reaches the bytes.
+    const fetched = await fetch(`${erik.welcome.apiUrl}${frame.message.attachments[0].url}`);
+    assert.equal(fetched.status, 200);
+    assert.ok(Buffer.from(await fetched.arrayBuffer()).equals(PNG_BYTES));
 
     // The persisted message round-trips the attachments.
     const stored = messages.list().find((m) => m.content === "look");

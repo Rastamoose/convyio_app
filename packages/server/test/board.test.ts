@@ -17,7 +17,7 @@ import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
 import { Hub } from "../src/hub";
-import { createEnv, PROPOSAL } from "./helpers";
+import { createEnv, createWsEnv, PROPOSAL } from "./helpers";
 
 describe("board invariants", async () => {
   const env = await createEnv();
@@ -211,6 +211,12 @@ describe("board invariants", async () => {
     const res = await fetch(`${env.baseUrl}/api/board/items`);
     assert.equal(res.status, 401);
   });
+
+  test("GET /api/health → 200 {ok:true} without auth", async () => {
+    const res = await fetch(`${env.baseUrl}/api/health`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+  });
 });
 
 describe("T10: full-stack approval fan-out", async () => {
@@ -226,7 +232,6 @@ describe("T10: full-stack approval fan-out", async () => {
     const handler = createApiHandler(db, service, sessions, channels, attachments, "*");
     const server = http.createServer((req, res) => void handler(req, res));
     const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, attachments, sessions, toolman, {
-      apiUrl: "",
       serverId: db.serverId,
       demoChannels: [],
     });
@@ -319,5 +324,26 @@ describe("T10: full-stack approval fan-out", async () => {
     humanB.ws.close();
     server.close();
     db.close();
+  });
+});
+
+describe("welcome.apiUrl derivation", async () => {
+  test("behind a TLS proxy the forwarded proto and Host name the public origin", async () => {
+    const env = await createWsEnv();
+    const welcome = await new Promise<any>((resolve) => {
+      const ws = new WebSocket(env.baseUrl.replace(/^http/, "ws"), {
+        headers: { host: "chat.example.com", "x-forwarded-proto": "https, http" },
+      });
+      ws.on("message", (raw) => {
+        const ev = JSON.parse(raw.toString());
+        if (ev.type === "welcome") {
+          ws.terminate();
+          resolve(ev);
+        }
+      });
+      ws.on("open", () => ws.send(JSON.stringify({ type: "join", name: "dana", kind: "human" })));
+    });
+    assert.equal(welcome.apiUrl, "https://chat.example.com");
+    env.close();
   });
 });

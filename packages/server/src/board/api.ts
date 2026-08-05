@@ -78,7 +78,10 @@ export function createApiHandler(
       // Fetching an upload is deliberately unauthenticated: the unguessable
       // UUID in the path is the capability (the Discord-CDN model), and <img>
       // tags cannot send Authorization headers. Everything else stays gated.
-      if (parts[1] === "auth") {
+      if (parts[1] === "health" && parts.length === 2 && method === "GET") {
+        // Liveness for deploy platforms and container healthchecks; no auth.
+        json(res, 200, { ok: true });
+      } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
         await routeAuth(req, res, parts, googleSignIn);
       } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {

@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config";
+import { createStaticSite } from "./staticSite";
 import { Hub } from "./hub";
 import { Roster } from "./roster";
 import { WorkspaceDb } from "./db";
@@ -60,18 +62,23 @@ async function main() {
     config.corsOrigin,
     googleSignIn,
   );
+  const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
+    ? createStaticSite(config.clientDist)
+    : null;
+  console.log(
+    staticSite
+      ? `[static] serving client from ${config.clientDist}`
+      : `[static] no client build at ${config.clientDist}; API only`,
+  );
   const server = http.createServer(async (req, res) => {
-    const handled = await handleApi(req, res);
-    if (!handled) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "NOT_FOUND" }));
-    }
+    if (await handleApi(req, res)) return;
+    if (staticSite && (await staticSite(req, res))) return;
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "NOT_FOUND" }));
   });
 
   const roster = new Roster(db);
-  const apiUrl = `http://localhost:${config.port}`;
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
-    apiUrl,
     serverId: db.serverId,
     demoChannels,
     authorizeJoin: googleSignIn
@@ -91,7 +98,9 @@ async function main() {
   );
 
   server.listen(config.port, () => {
-    console.log(`[hub] listening on ws://localhost:${config.port} (http api on ${apiUrl})`);
+    console.log(
+      `[hub] listening on ws://localhost:${config.port} (http api on http://localhost:${config.port})`,
+    );
   });
 }
 

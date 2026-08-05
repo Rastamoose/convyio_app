@@ -41,8 +41,12 @@ the wire protocol (websocket) and the HTTP board API.
   to an allowed participant name (human session token or agent shared
   secret), so the Hub never knows how identities are proven.  → Auth
 - `api.ts` — HTTP routes for board items, actors, channel creation, file
-  uploads, and login (`/api/auth/*`).  → BoardService, Sessions, Auth,
-  WorkspaceDb, Channels, Attachments
+  uploads, login (`/api/auth/*`), and the unauthenticated `/api/health`
+  liveness probe.  → BoardService, Sessions, Auth, WorkspaceDb, Channels,
+  Attachments
+- `staticSite.ts` — serves the built client so production needs one origin
+  and no second server; unknown paths fall back to index.html (SPA routing).
+  Wired only when the dist directory exists (dev stays API-only).
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
   pipeline.  → Hub, Roster, BoardService
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
@@ -52,7 +56,8 @@ the wire protocol (websocket) and the HTTP board API.
   frames or reconnection. Joins with a guest name or an authToken; treats
   the server's `unauthenticated` verdict as fatal (no reconnect loop).
 - `lib/serverUrl.ts` — the single place server base URLs (ws + http) are
-  derived from VITE_WS_URL.
+  derived: VITE_WS_URL override, then dev localhost, then the page's own
+  origin (production is single-origin).
 - `components/LoginScreen` — the auth-mode front door: Google Sign-In button
   (GIS script), credential exchange, first-time username pick. App only
   receives the finished authToken.
@@ -140,3 +145,8 @@ the wire protocol (websocket) and the HTTP board API.
   next upload).
 - One hardcoded server: `server_id` is plumbed through the data model but
   there is no multi-tenancy in the transport.
+- 2026-08-05 — `welcome.apiUrl` is derived per connection from the upgrade
+  request's Host and X-Forwarded-Proto headers, not configured at boot: a
+  boot-time URL breaks behind any real domain or reverse proxy. Consequence:
+  the server trusts those headers to name its public origin, so a proxy in
+  front must set them (see DEPLOY.md).

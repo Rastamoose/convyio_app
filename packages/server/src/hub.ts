@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Server as HttpServer } from "node:http";
+import type { IncomingMessage, Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   clientEventSchema,
@@ -28,13 +28,14 @@ import type { Toolman } from "./board/Toolman";
 interface Connection {
   socket: WebSocket;
   participant: Participant | null;
+  /** Where this client can reach the HTTP API — the origin it connected to. */
+  apiUrl: string;
 }
 
 /** Verdict from the join gate: whether a join stands, and as what name. */
 export type JoinDecision = { ok: true; name: string } | { ok: false };
 
 export interface HubOptions {
-  apiUrl: string;
   serverId: string;
   demoChannels: string[];
   /**
@@ -75,7 +76,7 @@ export class Hub {
     private options: HubOptions,
   ) {
     this.wss = new WebSocketServer({ server });
-    this.wss.on("connection", (socket) => this.onConnection(socket));
+    this.wss.on("connection", (socket, request) => this.onConnection(socket, request));
   }
 
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
@@ -124,8 +125,8 @@ export class Hub {
     this.broadcast({ type: "presence_sync", participants: this.roster.list() });
   }
 
-  private onConnection(socket: WebSocket): void {
-    const conn: Connection = { socket, participant: null };
+  private onConnection(socket: WebSocket, request: IncomingMessage): void {
+    const conn: Connection = { socket, participant: null, apiUrl: apiUrlFor(request) };
     this.connections.add(conn);
 
     socket.on("message", async (raw) => {
@@ -270,7 +271,7 @@ export class Hub {
       channels: this.channels.list(),
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
-      apiUrl: this.options.apiUrl,
+      apiUrl: conn.apiUrl,
     });
     this.broadcastPresence();
   }
@@ -401,4 +402,21 @@ export class Hub {
       conn.socket.send(JSON.stringify(event));
     }
   }
+}
+
+/**
+ * The HTTP API lives at whatever origin the client reached us through, so
+ * derive it from the upgrade request rather than baking a URL in at boot —
+ * a boot-time value breaks behind any real domain or reverse proxy. A TLS
+ * proxy announces itself via X-Forwarded-Proto (first value wins: proxies
+ * append); anything else is plain http.
+ */
+function apiUrlFor(request: IncomingMessage): string {
+  const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "")
+    .split(",")[0]
+    .trim();
+  const scheme = forwardedProto === "https" ? "https" : "http";
+  // Host is mandatory since HTTP/1.1; the fallback covers ancient clients.
+  const host = request.headers.host ?? `localhost:${request.socket.localPort}`;
+  return `${scheme}://${host}`;
 }

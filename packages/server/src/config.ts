@@ -12,4 +12,6 @@ export const config = {
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? null,
   /** Shared secret the agent joins with when auth is enabled. */
   agentToken: process.env.AGENT_TOKEN ?? null,
+  /** Built client to serve as the single origin; absent = API only (dev). */
+  clientDist: process.env.CLIENT_DIST ?? path.resolve(__dirname, "../../client/dist"),
 };

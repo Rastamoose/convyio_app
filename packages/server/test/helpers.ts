@@ -148,7 +148,6 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const handler = createApiHandler(db, service, sessions, channels, attachments, "*");
   const server = http.createServer((req, res) => void handler(req, res));
   const hub = new Hub(server, new Roster(db), messages, channels, attachments, sessions, toolman, {
-    apiUrl: "",
     serverId: db.serverId,
     demoChannels: [],
     authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null) : undefined,
