@@ -80,6 +80,7 @@ async function main() {
             authorName: event.message.authorName,
             content: event.message.content,
             channel: event.message.channel ?? "general",
+            attachments: event.message.attachments,
           });
         }
         break;

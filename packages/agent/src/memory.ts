@@ -27,7 +27,7 @@ export class Memory {
   }
 
   seed(history: ChatMessage[]): void {
-    this.window = [...history];
+    this.window = history.slice(-WINDOW_SIZE);
   }
 
   append(message: ChatMessage): void {
@@ -40,19 +40,28 @@ export class Memory {
 
   context(): string {
     return this.window
-      .map(
-        (m) =>
-          `[#${m.channel ?? "general"}] ${m.authorName} (${m.authorKind}): ${m.content}`,
-      )
+      .map((m) => {
+        const attachments = m.attachments?.length
+          ? ` [attachments: ${m.attachments.map((a) => `${a.name} (${a.mime})`).join(", ")}]`
+          : "";
+        return `[#${m.channel ?? "general"}] ${m.authorName} (${m.authorKind}): ${m.content}${attachments}`;
+      })
       .join("\n");
   }
 
   private persist(item: ChatMessage): void {
-    this.writeQueue = this.writeQueue.then(async () => {
-      const current = await readTranscript(this.transcriptFile);
-      current.push(item);
-      await fs.writeFile(this.transcriptFile, JSON.stringify(current, null, 2));
-    });
+    // Swallow failures per write: a rejected link would poison the chain and
+    // silently stop every later persist. The in-memory window stays correct;
+    // only the restart transcript misses this message.
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        const current = await readTranscript(this.transcriptFile);
+        current.push(item);
+        await fs.writeFile(this.transcriptFile, JSON.stringify(current, null, 2));
+      })
+      .catch((err) => {
+        console.warn("[agent] transcript write failed — message won't survive a restart:", err);
+      });
   }
 }
 

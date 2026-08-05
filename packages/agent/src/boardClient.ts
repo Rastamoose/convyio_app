@@ -112,6 +112,21 @@ export class BoardClient {
     return item;
   }
 
+  /**
+   * Fetch an uploaded attachment's bytes, base64-encoded for the model. The
+   * url is server-relative (e.g. "/api/uploads/<id>/<name>"); no bearer
+   * header on purpose — the unguessable id in the url is the capability.
+   */
+  async fetchAttachment(url: string): Promise<{ mime: string; data: string }> {
+    if (!this.apiUrl) throw new Error("not joined yet");
+    const res = await fetch(`${this.apiUrl}${url}`);
+    if (!res.ok) throw new Error(`attachment fetch failed: ${res.status}`);
+    return {
+      mime: res.headers.get("content-type") ?? "application/octet-stream",
+      data: Buffer.from(await res.arrayBuffer()).toString("base64"),
+    };
+  }
+
   private async api(method: string, path: string, body?: unknown): Promise<unknown> {
     if (!this.token || !this.apiUrl) throw new Error("not joined yet");
     const res = await fetch(`${this.apiUrl}${path}`, {

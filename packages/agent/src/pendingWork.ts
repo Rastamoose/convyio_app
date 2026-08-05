@@ -58,8 +58,14 @@ export class PendingWork {
 
   private persist(): void {
     const snapshot = Object.fromEntries(this.map);
-    this.writeQueue = this.writeQueue.then(() =>
-      fs.writeFile(this.file, JSON.stringify(snapshot, null, 2)),
-    );
+    // Swallow failures per write: a rejected link would poison the chain and
+    // silently stop every later persist. The in-memory map stays correct; only
+    // restart recovery would miss this snapshot (the next write re-snapshots
+    // the whole map, so one lost write heals on the next change).
+    this.writeQueue = this.writeQueue
+      .then(() => fs.writeFile(this.file, JSON.stringify(snapshot, null, 2)))
+      .catch((err) => {
+        console.warn("[agent] pending-work write failed — restart recovery may miss it:", err);
+      });
   }
 }

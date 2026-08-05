@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { BoardItem } from "@workspace/shared";
+import type { Attachment, BoardItem } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
 import type { GeminiBrain } from "./geminiBrain";
 import type { Memory } from "./memory";
@@ -12,9 +12,15 @@ export interface WorkItem {
   authorName: string;
   content: string;
   channel: string;
+  /** Files the triggering message carried; images are shown to the model. */
+  attachments?: Attachment[];
   /** Set when this work resumes an approved board item. */
   taskId?: string;
 }
+
+const MAX_IMAGES_PER_RUN = 4;
+/** Ceiling on image bytes fetched per run, so one batch can't balloon the request. */
+const IMAGE_BYTE_BUDGET = 8 * 1024 * 1024;
 
 /**
  * Owns the work queue and the run cycle: batches queued work per channel,
@@ -136,12 +142,15 @@ export class AgentRunner {
       onActivity: (line) => emitChunk("thought", `[toolman] ${line}`),
     });
 
+    const { images, notes } = await this.gatherImages(batch);
+
     try {
       finalText = await this.brain.run(
         {
           system: this.systemPrompt,
           context: this.buildContext(),
-          prompt: buildPrompt(batch, channel),
+          prompt: buildPrompt(batch, channel, notes),
+          images,
           tools: TOOL_DECLARATIONS,
         },
         {
@@ -182,14 +191,71 @@ export class AgentRunner {
       `Recent chat transcript:\n${this.memory.context()}`
     );
   }
+
+  /**
+   * Fetch the batch's planned images for the model, plus prompt notes for
+   * every attachment it will not see. A failed fetch downgrades that image
+   * to a note instead of failing the run.
+   */
+  private async gatherImages(
+    batch: WorkItem[],
+  ): Promise<{ images: { mimeType: string; data: string }[]; notes: string[] }> {
+    const plan = planAttachments(batch);
+    const notes = plan.omitted.map(
+      (a) => `[attachment ${a.name} (${a.mime}, ${a.size} bytes) attached — not shown]`,
+    );
+    for (const a of plan.tooLarge) notes.push(`[image ${a.name} omitted: too large]`);
+
+    const images: { mimeType: string; data: string }[] = [];
+    for (const image of plan.fetch) {
+      try {
+        const { mime, data } = await this.board.fetchAttachment(image.url);
+        images.push({ mimeType: mime, data });
+      } catch (err) {
+        console.warn(`[agent] could not fetch image ${image.name}:`, err);
+        notes.push(`[image ${image.name} unavailable]`);
+      }
+    }
+    return { images, notes };
+  }
 }
 
-function buildPrompt(items: WorkItem[], channel: string): string {
+/**
+ * Decide which of the batch's attachments the model gets as image parts:
+ * only image/* mimes, capped at the MAX_IMAGES_PER_RUN most recent, skipping
+ * any that would push the total past IMAGE_BYTE_BUDGET. Everything else is
+ * only described in the prompt text.
+ */
+function planAttachments(batch: WorkItem[]): {
+  fetch: Attachment[];
+  tooLarge: Attachment[];
+  omitted: Attachment[];
+} {
+  const all = batch.flatMap((m) => m.attachments ?? []);
+  const images = all.filter((a) => a.mime.startsWith("image/"));
+  const recent = images.slice(-MAX_IMAGES_PER_RUN);
+  const fetch: Attachment[] = [];
+  const tooLarge: Attachment[] = [];
+  let budget = IMAGE_BYTE_BUDGET;
+  for (const image of recent) {
+    if (image.size <= budget) {
+      fetch.push(image);
+      budget -= image.size;
+    } else {
+      tooLarge.push(image);
+    }
+  }
+  const omitted = all.filter((a) => !recent.includes(a));
+  return { fetch, tooLarge, omitted };
+}
+
+function buildPrompt(items: WorkItem[], channel: string, attachmentNotes: string[]): string {
   const formatted = items
     .map((m) => `- ${m.authorName}: ${m.content}`)
     .join("\n");
+  const notes = attachmentNotes.length > 0 ? `\n${attachmentNotes.join("\n")}` : "";
   return (
-    `Messages addressed to you (all in #${channel}):\n${formatted}\n\n` +
+    `Messages addressed to you (all in #${channel}):\n${formatted}${notes}\n\n` +
     `Reply in #${channel}. Transcript lines from other channels are background ` +
     `context only — never answer or continue them here. Address each sender by ` +
     `name (e.g. "harris: …" or a natural greeting using their name) so it is ` +

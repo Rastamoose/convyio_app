@@ -37,6 +37,8 @@ export interface BrainInput {
   system: string;
   context: string;
   prompt: string;
+  /** Images the triggering messages carried; data is base64-encoded bytes. */
+  images?: { mimeType: string; data: string }[];
   tools?: ToolDeclaration[];
 }
 
@@ -57,8 +59,16 @@ export class GeminiBrain {
   }
 
   async run(input: BrainInput, callbacks: BrainCallbacks, options?: BrainRunOptions): Promise<string> {
+    // Image parts go before the text: Gemini's image-understanding docs
+    // recommend placing images ahead of the text prompt for best results.
     const contents: Content[] = [
-      { role: "user", parts: [{ text: buildContents(input) }] },
+      {
+        role: "user",
+        parts: [
+          ...(input.images ?? []).map((image): Part => ({ inlineData: image })),
+          { text: buildContents(input) },
+        ],
+      },
     ];
     const tools = input.tools?.length
       ? [{ functionDeclarations: input.tools.map(toFunctionDeclaration) }]
