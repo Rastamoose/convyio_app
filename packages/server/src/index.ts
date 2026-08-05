@@ -1,25 +1,31 @@
 import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { config } from "./config";
 import { Hub } from "./hub";
-import { JsonStorage } from "./storage/JsonStorage";
-import { BoardDb } from "./board/db";
+import { Roster } from "./roster";
+import { WorkspaceDb } from "./db";
+import { MessageStore } from "./chat/MessageStore";
 import { BoardService } from "./board/BoardService";
 import { Toolman } from "./board/Toolman";
-import { Sessions, createApiHandler } from "./board/api";
-import { DemoRunner } from "./demo/DemoRunner";
+import { Sessions } from "./board/sessions";
+import { createApiHandler } from "./board/api";
+import { loadDemoScripts } from "./demo/script";
+import { DemoOrchestrator } from "./demo/DemoOrchestrator";
+
+const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 
 async function main() {
-  const storage = new JsonStorage(config.dataDir);
-  await storage.init();
-
-  const db = new BoardDb(path.join(config.dataDir, "board.db"));
+  const db = new WorkspaceDb(path.join(config.dataDir, "board.db"));
+  const messages = new MessageStore(db);
+  messages.importLegacyJson(config.dataDir);
   const service = new BoardService(db);
   const sessions = new Sessions();
-  const toolman = new Toolman(service, path.join(config.dataDir, "workspace"));
+  const workspaceDir = path.join(config.dataDir, "workspace");
+  const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
 
-  const handleApi = createApiHandler(db, service, sessions);
+  const handleApi = createApiHandler(db, service, sessions, config.corsOrigin);
   const server = http.createServer(async (req, res) => {
     const handled = await handleApi(req, res);
     if (!handled) {
@@ -28,10 +34,26 @@ async function main() {
     }
   });
 
+  const scripts = await loadDemoScripts(path.join(ASSETS_DIR, "demo/scripts"));
+  const demoChannels = [...scripts.keys()];
+  const roster = new Roster(db);
   const apiUrl = `http://localhost:${config.port}`;
-  const hub = new Hub(server, storage, db, sessions, toolman, apiUrl);
+  const hub = new Hub(server, roster, messages, sessions, toolman, {
+    apiUrl,
+    serverId: db.serverId,
+    channels: ["general", ...demoChannels],
+    demoChannels,
+  });
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
-  new DemoRunner(hub, db, service, path.join(config.dataDir, "workspace"));
+  new DemoOrchestrator(
+    hub,
+    roster,
+    db,
+    service,
+    workspaceDir,
+    path.join(ASSETS_DIR, "demo/seed"),
+    scripts,
+  );
 
   server.listen(config.port, () => {
     console.log(`[hub] listening on ws://localhost:${config.port} (http api on ${apiUrl})`);

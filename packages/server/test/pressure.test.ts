@@ -1,66 +1,13 @@
 import assert from "node:assert/strict";
-import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
-import type { Actor, BoardEventEnvelope } from "@workspace/shared";
-import { BoardDb } from "../src/board/db";
+import type { Actor } from "@workspace/shared";
+import { WorkspaceDb } from "../src/db";
 import { BoardService } from "../src/board/BoardService";
-import { Sessions, createApiHandler } from "../src/board/api";
 import { Toolman } from "../src/board/Toolman";
-
-interface Env {
-  db: BoardDb;
-  service: BoardService;
-  baseUrl: string;
-  envelopes: BoardEventEnvelope[];
-  actor(kind: "human" | "agent", name: string): { actor: Actor; token: string };
-  api(
-    method: string,
-    path: string,
-    token: string,
-    body?: unknown,
-    raw?: string,
-  ): Promise<{ status: number; body: any }>;
-  close(): void;
-}
-
-async function createEnv(): Promise<Env> {
-  const db = new BoardDb(":memory:");
-  const service = new BoardService(db);
-  const sessions = new Sessions();
-  const envelopes: BoardEventEnvelope[] = [];
-  service.onEvent = (e) => envelopes.push(e);
-  const handler = createApiHandler(db, service, sessions);
-  const server = http.createServer((req, res) => void handler(req, res));
-  await new Promise<void>((r) => server.listen(0, r));
-  const port = (server.address() as { port: number }).port;
-  return {
-    db,
-    service,
-    baseUrl: `http://localhost:${port}`,
-    envelopes,
-    actor(kind, name) {
-      const actor = db.upsertActor(kind, name);
-      return { actor, token: sessions.issue(actor.id) };
-    },
-    async api(method, urlPath, token, body, raw) {
-      const res = await fetch(`http://localhost:${port}${urlPath}`, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
-      });
-      return { status: res.status, body: await res.json() };
-    },
-    close() {
-      server.close();
-      db.close();
-    },
-  };
-}
-
-const PROPOSAL = { title: "scope", why: "because", effect: "outcome" };
+import { createEnv, PROPOSAL } from "./helpers";
 
 describe("pressure: HTTP edges", async () => {
   const env = await createEnv();
@@ -219,7 +166,7 @@ describe("pressure: HTTP edges", async () => {
 });
 
 describe("pressure: toolman sandbox", async () => {
-  const db = new BoardDb(":memory:");
+  const db = new WorkspaceDb(":memory:");
   const service = new BoardService(db);
   const root = path.join("/tmp", `toolman-pressure-${randomUUID()}`);
   const toolman = new Toolman(service, root);

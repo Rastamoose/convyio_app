@@ -1,19 +1,30 @@
 import { useState } from "react";
-import type { BoardItem, ChatMessage, Participant } from "@workspace/shared";
-import type { ActiveRun } from "../hooks/useWorkspace";
+import type { BoardItem, Participant } from "@workspace/shared";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import { presenceDot } from "../lib/status";
 import { Avatar } from "./Avatar";
+import { AgentBadge } from "./AgentBadge";
 import { ApprovalQueue } from "./ApprovalQueue";
 import { MemberCard } from "./MemberCard";
 
 const SERVER_NAME = "Workspace";
 
-function StatusDot({ online }: { online: boolean }) {
+function PresenceDot({ participant }: { participant: Participant }) {
+  const { color, pulse } = presenceDot(participant);
+  if (!pulse) {
+    return (
+      <span
+        className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar ${color}`}
+      />
+    );
+  }
   return (
-    <span
-      className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar ${
-        online ? "bg-online" : "bg-offline"
-      }`}
-    />
+    <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
+      <span
+        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${color}`}
+      />
+      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${color}`} />
+    </span>
   );
 }
 
@@ -36,36 +47,12 @@ function StatusRow({
     >
       <div className="relative">
         <Avatar name={participant.name} size={32} />
-        {working ? (
-          <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-online opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-online" />
-          </span>
-        ) : blocked ? (
-          <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-dead" />
-          </span>
-        ) : dead ? (
-          <span className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar bg-dead" />
-        ) : isAgent ? (
-          <span
-            className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar ${
-              participant.online ? "bg-away" : "bg-offline"
-            }`}
-          />
-        ) : (
-          <StatusDot online={participant.online} />
-        )}
+        <PresenceDot participant={participant} />
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-body">
           {participant.name}
-          {isAgent && (
-            <span className="ml-1.5 rounded bg-blurple px-1 py-px align-middle text-[10px] font-bold text-mention-text">
-              AGENT
-            </span>
-          )}
+          {isAgent && <AgentBadge className="ml-1.5 align-middle" />}
         </div>
         <div
           className={`truncate text-xs ${
@@ -89,34 +76,17 @@ function StatusRow({
 }
 
 export function Sidebar({
-  participants,
-  self,
-  channels,
   channel,
   onSelectChannel,
-  onSetStatus,
-  board,
-  activeRuns,
-  messages,
-  onApprove,
-  onDeny,
   onDiscuss,
   onPrefill,
 }: {
-  participants: Participant[];
-  self: Participant | null;
-  channels: string[];
   channel: string;
   onSelectChannel: (channel: string) => void;
-  onSetStatus: (status: string) => void;
-  board: BoardItem[];
-  activeRuns: ActiveRun[];
-  messages: ChatMessage[];
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
 }) {
+  const { participants, self, channels, board, setStatus } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
@@ -172,24 +142,28 @@ export function Sidebar({
         <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase">
           Rooms
         </h2>
-        {channels.map((c) => (
-          <button
-            key={c}
-            onClick={() => onSelectChannel(c)}
-            className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left font-medium ${
-              c === channel
-                ? "bg-input text-body"
-                : "text-muted hover:bg-input/50 hover:text-body"
-            }`}
-          >
-            <span
-              className={`h-4 w-0.5 shrink-0 rounded-full ${
-                c === channel ? "bg-blurple" : "bg-divider"
+        <div role="tablist" aria-label="Rooms">
+          {channels.map((c) => (
+            <button
+              key={c}
+              role="tab"
+              aria-selected={c === channel}
+              onClick={() => onSelectChannel(c)}
+              className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left font-medium ${
+                c === channel
+                  ? "bg-input text-body"
+                  : "text-muted hover:bg-input/50 hover:text-body"
               }`}
-            />
-            <span className="text-[15px]">{c}</span>
-          </button>
-        ))}
+            >
+              <span
+                className={`h-4 w-0.5 shrink-0 rounded-full ${
+                  c === channel ? "bg-blurple" : "bg-divider"
+                }`}
+              />
+              <span className="text-[15px]">{c}</span>
+            </button>
+          ))}
+        </div>
       </section>
 
       {/* User panel */}
@@ -198,7 +172,7 @@ export function Sidebar({
           <>
             <div className="relative">
               <Avatar name={self.name} size={32} />
-              <StatusDot online />
+              <PresenceDot participant={self} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold text-body">
@@ -207,15 +181,16 @@ export function Sidebar({
               {editingStatus ? (
                 <input
                   autoFocus
+                  aria-label="Set a status"
                   value={statusDraft}
                   onChange={(e) => setStatusDraft(e.target.value)}
                   onBlur={() => {
-                    onSetStatus(statusDraft);
+                    setStatus(statusDraft);
                     setEditingStatus(false);
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      onSetStatus(statusDraft);
+                      setStatus(statusDraft);
                       setEditingStatus(false);
                     }
                   }}
@@ -235,14 +210,6 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            <button
-              className="rounded p-1.5 text-muted hover:bg-input hover:text-body"
-              title="Settings"
-            >
-              <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19.14 12.94a7.07 7.07 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.61-.22l-2.39.96a7.05 7.05 0 00-1.63-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 00-.61.22L2.63 8.84a.5.5 0 00.12.64l2.03 1.58a7.07 7.07 0 000 1.88l-2.03 1.58a.5.5 0 00-.12.64l1.92 3.32c.13.22.39.31.61.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.09.48 0 .61-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z" />
-              </svg>
-            </button>
           </>
         )}
       </footer>
@@ -250,8 +217,6 @@ export function Sidebar({
       {queueOpen && pendingItems.length > 0 && (
         <ApprovalQueue
           items={pendingItems}
-          onApprove={onApprove}
-          onDeny={onDeny}
           onDiscuss={discuss}
           onClose={() => setQueueOpen(false)}
         />
@@ -259,11 +224,6 @@ export function Sidebar({
       {selected && (
         <MemberCard
           participant={selected}
-          board={board}
-          activeRuns={activeRuns}
-          messages={messages}
-          onApprove={onApprove}
-          onDeny={onDeny}
           onDiscuss={discuss}
           onPrefill={onPrefill}
           onClose={() => setSelectedId(null)}

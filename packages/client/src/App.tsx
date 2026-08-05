@@ -1,22 +1,41 @@
 import { useRef, useState } from "react";
 import type { BoardItem } from "@workspace/shared";
-import { useWorkspace } from "./hooks/useWorkspace";
+import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { UsernameModal } from "./components/UsernameModal";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar, type WorkspaceView } from "./components/TopBar";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
-import { DEMO_CHANNELS } from "./demo";
-
-const CHANNELS = ["general", ...DEMO_CHANNELS];
+import { Toasts } from "./components/Toasts";
 
 export default function App() {
   const [name, setName] = useState<string | null>(
     () => sessionStorage.getItem("displayName"),
   );
+
+  if (!name) {
+    return (
+      <UsernameModal
+        onJoin={(n) => {
+          sessionStorage.setItem("displayName", n);
+          setName(n);
+        }}
+      />
+    );
+  }
+
+  return (
+    <WorkspaceProvider name={name}>
+      <Workspace />
+    </WorkspaceProvider>
+  );
+}
+
+/** The workspace shell: view/channel navigation and cross-view jumps. */
+function Workspace() {
+  const workspace = useWorkspace();
   const [channel, setChannel] = useState("general");
-  const workspace = useWorkspace(name);
   const [prefill, setPrefill] = useState<Prefill | null>(null);
   const [view, setView] = useState<WorkspaceView>("chat");
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -73,90 +92,40 @@ export default function App() {
     workspace.sendMessage(content, channel);
   };
 
-  const channelMessages = workspace.messages.filter(
-    (m) => (m.channel ?? "general") === channel,
-  );
-
-  if (!name) {
-    return (
-      <UsernameModal
-        onJoin={(n) => {
-          sessionStorage.setItem("displayName", n);
-          setName(n);
-        }}
-      />
-    );
-  }
-
   return (
     <div className="flex h-full">
       <Sidebar
-        participants={workspace.participants}
-        self={workspace.self}
-        channels={CHANNELS}
         channel={channel}
         onSelectChannel={setChannel}
-        onSetStatus={workspace.setStatus}
-        board={workspace.board}
-        activeRuns={workspace.activeRuns}
-        messages={workspace.messages}
-        onApprove={workspace.approveItem}
-        onDeny={workspace.denyItem}
         onDiscuss={discussItem}
         onPrefill={prefillText}
       />
       <main className="flex min-w-0 flex-1 flex-col bg-chat">
-        <TopBar
-          channel={channel}
-          view={view}
-          onSetView={setView}
-          onRunDemo={
-            DEMO_CHANNELS.includes(channel)
-              ? () => workspace.startDemo(channel)
-              : undefined
-          }
-        />
+        <TopBar channel={channel} view={view} onSetView={setView} />
         {view === "chat" ? (
           <>
-            <MessageList
-              channel={channel}
-              messages={channelMessages}
-              boardLines={workspace.boardLines}
-              activeRuns={workspace.activeRuns}
-              runDurations={workspace.runDurations}
-              participants={workspace.participants}
-              selfName={workspace.self?.name ?? null}
-              onRefClick={handleRefClick}
-            />
-            <MessageInput
-              channel={channel}
-              participants={workspace.participants}
-              onSend={handleSend}
-              prefill={prefill}
-            />
+            <MessageList channel={channel} onRefClick={handleRefClick} />
+            <MessageInput channel={channel} onSend={handleSend} prefill={prefill} />
           </>
         ) : (
           <BoardView
-            board={workspace.board}
-            activeRuns={workspace.activeRuns}
             highlightRef={highlightRef}
             openItemId={openItemId}
             onOpenItem={setOpenItemId}
-            onCreate={workspace.createBoardItem}
-            onApprove={workspace.approveItem}
-            onDeny={workspace.denyItem}
             onDiscuss={discussItem}
-            onStart={workspace.startItem}
-            onComplete={workspace.completeItem}
-            onReopen={workspace.reopenItem}
-            onDelete={workspace.deleteItem}
-            onEdit={workspace.editItem}
             onJumpToTrace={jumpToTrace}
-            fetchActors={workspace.fetchActors}
-            fetchItemEvents={workspace.fetchItemEvents}
           />
         )}
       </main>
+      {!workspace.connected && (
+        <div
+          role="status"
+          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-popup px-3 py-1 text-xs font-semibold text-working shadow-lg"
+        >
+          {workspace.self ? "Reconnecting…" : "Connecting…"}
+        </div>
+      )}
+      <Toasts toasts={workspace.toasts} onDismiss={workspace.dismissToast} />
     </div>
   );
 }

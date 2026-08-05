@@ -3,16 +3,20 @@ import type { Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   clientEventSchema,
+  type ActionRequestEvent,
   type BoardEventEnvelope,
   type ChatMessage,
   type ClientEvent,
   type Participant,
+  type RunEndEvent,
   type ServerEvent,
+  type StatusUpdateEvent,
+  type SummaryEvent,
   type TraceChunk,
 } from "@workspace/shared";
-import type { Storage } from "./storage/Storage";
-import type { BoardDb } from "./board/db";
-import type { Sessions } from "./board/api";
+import type { MessageStore } from "./chat/MessageStore";
+import type { Roster } from "./roster";
+import type { Sessions } from "./board/sessions";
 import type { Toolman } from "./board/Toolman";
 
 interface Connection {
@@ -20,16 +24,22 @@ interface Connection {
   participant: Participant | null;
 }
 
+export interface HubOptions {
+  apiUrl: string;
+  serverId: string;
+  channels: string[];
+  demoChannels: string[];
+}
+
 /**
- * The dumb shell. Routes typed events between participants and persists chat
- * history. It has no notion of AI — humans and agents are both just
- * participants on identical websocket connections.
+ * The dumb shell. Routes typed events between participants, persists chat
+ * through the message store, and forwards agent actions to the toolman. It
+ * has no notion of AI — humans and agents are both just participants on
+ * identical websocket connections.
  */
 export class Hub {
   private wss: WebSocketServer;
   private connections = new Set<Connection>();
-  /** Participants keyed by name so a rejoin reclaims the same identity. */
-  private known = new Map<string, Participant>();
   /** In-memory trace buffers keyed by runId. Dropped once summarized. */
   private traceBuffers = new Map<string, TraceChunk[]>();
   /** Optional hook fired for every message posted to the channel. */
@@ -41,34 +51,51 @@ export class Hub {
 
   constructor(
     server: HttpServer,
-    private storage: Storage,
-    private db: BoardDb,
+    private roster: Roster,
+    private messages: MessageStore,
     private sessions: Sessions,
     private toolman: Toolman,
-    private apiUrl: string,
+    private options: HubOptions,
   ) {
     this.wss = new WebSocketServer({ server });
     this.wss.on("connection", (socket) => this.onConnection(socket));
-
-    // Agents are permanent members of the server, not ephemeral connections:
-    // every agent actor is in the roster from boot, grey until its process
-    // connects. Humans stay presence-only by design.
-    for (const actor of this.db.listActors("agent")) {
-      this.known.set(`agent:${actor.displayName.toLowerCase()}`, {
-        id: actor.id,
-        name: actor.displayName,
-        kind: "agent",
-        status: "",
-        runState: "idle",
-        online: false,
-      });
-    }
   }
 
-  /** Fan a board event out to every connected client (§4). */
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
     this.broadcast(envelope);
     this.onBoardEvent?.(envelope);
+  }
+
+  /** The single message-posting path: persist, broadcast, notify observers. */
+  postMessage(
+    author: Participant,
+    content: string,
+    channel: string,
+    extras: { trace?: TraceChunk[]; runId?: string } = {},
+  ): void {
+    const message: ChatMessage = {
+      id: randomUUID(),
+      authorId: author.id,
+      authorName: author.name,
+      authorKind: author.kind,
+      content,
+      timestamp: Date.now(),
+      channel,
+      ...extras,
+    };
+    this.messages.append(message);
+    this.broadcast({ type: "message", message });
+    this.onMessagePosted?.(message);
+  }
+
+  /** Clear one channel's messages (or all) and tell clients. */
+  clearChannel(channel?: string): void {
+    this.messages.clear(channel);
+    this.broadcast(channel ? { type: "clear", channel } : { type: "clear" });
+  }
+
+  broadcastPresence(): void {
+    this.broadcast({ type: "presence_sync", participants: this.roster.list() });
   }
 
   private onConnection(socket: WebSocket): void {
@@ -79,63 +106,79 @@ export class Hub {
       let event: ClientEvent;
       try {
         event = clientEventSchema.parse(JSON.parse(raw.toString()));
-      } catch {
+      } catch (err) {
+        console.warn("[hub] malformed event:", err instanceof Error ? err.message : err);
         this.send(conn, { type: "error", error: "malformed event" });
         return;
       }
       await this.dispatch(conn, event);
     });
 
-    socket.on("close", () => {
-      this.connections.delete(conn);
-      if (!conn.participant) return;
-      const { id, kind } = conn.participant;
-      if (kind === "human") {
-        // Humans exist only while a tab is open: last connection gone => logged out.
-        const stillConnected = [...this.connections].some(
-          (c) => c.participant?.id === id,
-        );
-        if (!stillConnected) {
-          for (const [key, p] of this.known) {
-            if (p.id === id) this.known.delete(key);
-          }
-        }
-      } else {
-        if (conn.participant.runState === "working") {
-          conn.participant.runState = "dead";
-        }
-        this.refreshPresence(id);
+    socket.on("close", () => this.onDisconnect(conn));
+  }
+
+  private onDisconnect(conn: Connection): void {
+    this.connections.delete(conn);
+    if (!conn.participant) return;
+    const { id, kind } = conn.participant;
+    const stillConnected = [...this.connections].some((c) => c.participant?.id === id);
+    if (kind === "human") {
+      // Humans exist only while a tab is open: last connection gone means
+      // logged out, and their API tokens die with the session.
+      if (!stillConnected) {
+        this.roster.removeHuman(id);
+        this.sessions.revokeFor(id);
       }
-      this.broadcastPresence();
-    });
+    } else {
+      if (conn.participant.runState === "working") {
+        conn.participant.runState = "dead";
+      }
+      this.roster.setOnline(id, stillConnected);
+    }
+    this.broadcastPresence();
   }
 
   private async dispatch(conn: Connection, event: ClientEvent): Promise<void> {
+    if (event.type === "join") {
+      this.handleJoin(conn, event.name, event.kind);
+      return;
+    }
+    const participant = conn.participant;
+    if (!participant) {
+      this.send(conn, { type: "error", error: "join first" });
+      return;
+    }
     switch (event.type) {
-      case "join":
-        await this.handleJoin(conn, event.name, event.kind);
-        break;
       case "message":
-        await this.handleMessage(conn, event.content, event.channel);
+        this.postMessage(participant, event.content, event.channel ?? "general");
         break;
       case "demo_start":
         this.onDemoStart?.(event.channel);
         break;
       case "clear":
-        await this.handleClear(conn);
+        this.clearChannel();
         break;
       case "interrupt":
-        await this.handleInterrupt(conn, event.target, event.content);
+        this.handleInterrupt(conn, event.target, event.content);
         break;
       case "status_set":
-        this.handleStatusSet(conn, event.status);
+        participant.status = event.status;
+        this.broadcastPresence();
         break;
       case "status_update":
+        this.agentOnly(conn, () => this.handleStatusUpdate(participant, event));
+        break;
       case "trace_start":
+        this.agentOnly(conn, () => this.handleTraceStart(participant, event.runId));
+        break;
       case "trace_chunk":
+        this.agentOnly(conn, () => this.handleTraceChunk(event.runId, event.chunk));
+        break;
       case "summary":
+        this.agentOnly(conn, () => this.handleSummary(participant, event));
+        break;
       case "run_end":
-        this.handleAgentEvent(conn, event);
+        this.agentOnly(conn, () => this.handleRunEnd(event));
         break;
       case "action_request":
         await this.handleActionRequest(conn, event);
@@ -143,27 +186,8 @@ export class Hub {
     }
   }
 
-  private async handleJoin(
-    conn: Connection,
-    name: string,
-    kind: Participant["kind"],
-  ): Promise<void> {
-    const key = `${kind}:${name.toLowerCase()}`;
-    let participant = this.known.get(key);
-    if (!participant) {
-      // Participant identity is the persistent actor identity, so board
-      // attribution and presence agree on ids.
-      const actor = this.db.upsertActor(kind, name);
-      participant = {
-        id: actor.id,
-        name,
-        kind,
-        status: "",
-        runState: "idle",
-        online: true,
-      };
-      this.known.set(key, participant);
-    }
+  private handleJoin(conn: Connection, name: string, kind: Participant["kind"]): void {
+    const participant = this.roster.join(kind, name);
 
     // Agents are singletons: a new connection for the same agent identity
     // displaces any previous one so duplicates can never double-reply.
@@ -175,284 +199,113 @@ export class Hub {
         }
       }
     }
-
-    participant.online = true;
-    participant.runState = "idle";
     conn.participant = participant;
 
     this.send(conn, {
       type: "welcome",
       self: participant,
-      history: await this.storage.loadMessages(),
-      participants: this.participantList(),
+      history: this.messages.list(),
+      participants: this.roster.list(),
+      channels: this.options.channels,
+      demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
-      apiUrl: this.apiUrl,
+      apiUrl: this.options.apiUrl,
     });
     this.broadcastPresence();
   }
 
-  private async handleMessage(
-    conn: Connection,
-    content: string,
-    channel?: string,
-  ): Promise<void> {
-    if (!conn.participant) {
-      this.send(conn, { type: "error", error: "join first" });
-      return;
-    }
-    await this.postMessage({
-      id: randomUUID(),
-      authorId: conn.participant.id,
-      authorName: conn.participant.name,
-      authorKind: conn.participant.kind,
-      content,
-      timestamp: Date.now(),
-      channel: channel ?? "general",
-    });
-  }
-
-  /** Persist + broadcast a message and notify observers. */
-  private async postMessage(message: ChatMessage): Promise<void> {
-    await this.storage.appendMessage(message);
-    this.broadcast({ type: "message", message });
-    this.onMessagePosted?.(message);
-  }
-
-  // -------------------------------------------------------------------------
-  // Demo support: synthetic participants driven by the DemoRunner. They are
-  // ordinary participants to everything downstream; only their input source
-  // (a script instead of a socket) differs.
-  // -------------------------------------------------------------------------
-
-  /** Post a message authored by a synthetic human participant. */
-  async postAsSynthetic(
-    name: string,
-    content: string,
-    channel: string,
-  ): Promise<void> {
-    const key = `human:${name.toLowerCase()}`;
-    let participant = this.known.get(key);
-    if (!participant) {
-      participant = {
-        id: randomUUID(),
-        name,
-        kind: "human",
-        status: "",
-        runState: "idle",
-        online: true,
-      };
-      this.known.set(key, participant);
-      this.broadcastPresence();
-    }
-    await this.postMessage({
-      id: randomUUID(),
-      authorId: participant.id,
-      authorName: participant.name,
-      authorKind: "human",
-      content,
-      timestamp: Date.now(),
-      channel,
-    });
-  }
-
-  /** Clear a single channel's messages and tell clients. */
-  async clearChannel(channel: string): Promise<void> {
-    await this.storage.clearMessages(channel);
-    this.broadcast({ type: "clear", channel });
-  }
-
-  /** Name of the first online agent, if any. */
-  findOnlineAgentName(): string | null {
-    for (const p of this.known.values()) {
-      if (p.kind === "agent" && p.online) return p.name;
-    }
-    return null;
-  }
-
-  /** Remove synthetic participants once a demo run finishes. */
-  removeSynthetic(names: string[]): void {
-    for (const name of names) {
-      this.known.delete(`human:${name.toLowerCase()}`);
-    }
-    this.broadcastPresence();
-  }
-
-  private async handleClear(conn: Connection): Promise<void> {
-    if (!conn.participant) {
-      this.send(conn, { type: "error", error: "join first" });
-      return;
-    }
-    await this.storage.clearMessages();
-    this.broadcast({ type: "clear" });
-  }
-
-  private async handleInterrupt(
-    conn: Connection,
-    target: string,
-    content: string,
-  ): Promise<void> {
-    if (!conn.participant) {
-      this.send(conn, { type: "error", error: "join first" });
-      return;
-    }
-    const targetKey = `agent:${target.toLowerCase()}`;
-    const targetParticipant = this.known.get(targetKey);
-    if (!targetParticipant || targetParticipant.kind !== "agent") {
+  private handleInterrupt(conn: Connection, target: string, content: string): void {
+    const participant = conn.participant!;
+    const targetParticipant = this.roster.get("agent", target);
+    if (!targetParticipant) {
       this.send(conn, { type: "error", error: `unknown agent: ${target}` });
       return;
     }
 
-    const message: ChatMessage = {
-      id: randomUUID(),
-      authorId: conn.participant.id,
-      authorName: conn.participant.name,
-      authorKind: conn.participant.kind,
-      content: `/interrupt @${target} ${content}`,
-      timestamp: Date.now(),
-    };
-    await this.storage.appendMessage(message);
-    this.broadcast({ type: "message", message });
-
+    this.postMessage(participant, `/interrupt @${target} ${content}`, "general");
     const targetConn = [...this.connections].find(
       (c) => c.participant?.id === targetParticipant.id,
     );
     if (targetConn) {
       this.send(targetConn, {
         type: "interrupt",
-        authorName: conn.participant.name,
+        authorName: participant.name,
         content,
       });
     }
   }
 
-  private handleStatusSet(conn: Connection, status: string): void {
-    if (!conn.participant) return;
-    conn.participant.status = status;
-    this.broadcastPresence();
-  }
-
   /**
-   * Toolman gateway. This is the only write path agents have to the world;
-   * authorization against the board happens inside the toolman (§5).
+   * Toolman gateway: the only write path agents have to the world.
+   * Authorization against the board happens inside the toolman so the gate
+   * cannot be bypassed by a differently-worded request.
    */
-  private async handleActionRequest(
-    conn: Connection,
-    event: Extract<ClientEvent, { type: "action_request" }>,
-  ): Promise<void> {
-    const p = conn.participant;
-    if (!p) return this.send(conn, { type: "error", error: "join first" });
+  private async handleActionRequest(conn: Connection, event: ActionRequestEvent): Promise<void> {
+    const p = conn.participant!;
     if (p.kind !== "agent") {
       return this.send(conn, { type: "error", error: "agent-only event" });
     }
-    const actor = this.db.getActor(p.id);
-    if (!actor) return this.send(conn, { type: "error", error: "unknown actor" });
+    // The roster joined this participant from a persistent actor, so the
+    // identity handed to the toolman is the server's, never the client's.
+    const actor = {
+      id: p.id,
+      kind: p.kind,
+      displayName: p.name,
+      serverId: this.options.serverId,
+    };
     const result = await this.toolman.execute(actor, event.action, event.boardItemRef ?? null);
-    console.log(
-      `[toolman] ${p.name} ${event.action.kind}${"path" in event.action ? ` ${event.action.path ?? ""}` : ""} → ${
-        result.ok ? "ok" : result.code ? `DENY ${result.code}` : `error: ${result.error}`
-      }`,
-    );
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
   }
 
-  private handleAgentEvent(
-    conn: Connection,
-    event:
-      | {
-          type: "status_update";
-          status: string;
-          runState: Participant["runState"];
-          taskId?: string | null;
-        }
-      | { type: "trace_start"; runId: string }
-      | { type: "trace_chunk"; runId: string; chunk: TraceChunk }
-      | { type: "summary"; runId: string; content: string; channel?: string }
-      | { type: "run_end"; runId: string; reason: "completed" | "aborted" },
-  ): void {
-    if (!conn.participant) {
-      this.send(conn, { type: "error", error: "join first" });
-      return;
+  private handleStatusUpdate(participant: Participant, event: StatusUpdateEvent): void {
+    participant.status = event.status;
+    participant.runState = event.runState;
+    if (event.taskId !== undefined) {
+      const next = event.taskId ?? undefined;
+      if (next !== participant.currentTaskId) {
+        participant.currentTaskId = next;
+        participant.taskStartedAt = next ? Date.now() : undefined;
+      }
     }
-    if (conn.participant.kind !== "agent") {
+    this.broadcastPresence();
+  }
+
+  private handleTraceStart(participant: Participant, runId: string): void {
+    this.traceBuffers.set(runId, []);
+    this.broadcast({
+      type: "trace_start",
+      runId,
+      agentId: participant.id,
+      agentName: participant.name,
+      timestamp: Date.now(),
+    });
+  }
+
+  private handleTraceChunk(runId: string, chunk: TraceChunk): void {
+    this.traceBuffers.get(runId)?.push(chunk);
+    this.broadcast({ type: "trace_chunk", runId, chunk });
+  }
+
+  private handleSummary(participant: Participant, event: SummaryEvent): void {
+    const trace = this.traceBuffers.get(event.runId) ?? [];
+    this.traceBuffers.delete(event.runId);
+    this.postMessage(participant, event.content, event.channel ?? "general", {
+      trace: trace.length > 0 ? trace : undefined,
+      runId: event.runId,
+    });
+  }
+
+  private handleRunEnd(event: RunEndEvent): void {
+    this.traceBuffers.delete(event.runId);
+    this.broadcast({ type: "run_end", runId: event.runId, reason: event.reason });
+  }
+
+  private agentOnly(conn: Connection, handle: () => void): void {
+    if (conn.participant?.kind !== "agent") {
       this.send(conn, { type: "error", error: "agent-only event" });
       return;
     }
-
-    switch (event.type) {
-      case "status_update": {
-        conn.participant.status = event.status;
-        conn.participant.runState = event.runState;
-        if (event.taskId !== undefined) {
-          const next = event.taskId ?? undefined;
-          if (next !== conn.participant.currentTaskId) {
-            conn.participant.currentTaskId = next;
-            conn.participant.taskStartedAt = next ? Date.now() : undefined;
-          }
-        }
-        this.broadcastPresence();
-        break;
-      }
-      case "trace_start": {
-        this.traceBuffers.set(event.runId, []);
-        this.broadcast({
-          type: "trace_start",
-          runId: event.runId,
-          agentId: conn.participant.id,
-          agentName: conn.participant.name,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-      case "trace_chunk": {
-        const buffer = this.traceBuffers.get(event.runId);
-        if (buffer) buffer.push(event.chunk);
-        this.broadcast({ type: "trace_chunk", runId: event.runId, chunk: event.chunk });
-        break;
-      }
-      case "summary": {
-        const trace = this.traceBuffers.get(event.runId) ?? [];
-        this.traceBuffers.delete(event.runId);
-        void this.postMessage({
-          id: randomUUID(),
-          authorId: conn.participant.id,
-          authorName: conn.participant.name,
-          authorKind: conn.participant.kind,
-          content: event.content,
-          timestamp: Date.now(),
-          channel: event.channel ?? "general",
-          trace: trace.length > 0 ? trace : undefined,
-          runId: event.runId,
-        });
-        break;
-      }
-      case "run_end": {
-        this.traceBuffers.delete(event.runId);
-        this.broadcast({
-          type: "run_end",
-          runId: event.runId,
-          reason: event.reason,
-        });
-        break;
-      }
-    }
-  }
-
-  /** Recompute a participant's online flag from live connections. */
-  private refreshPresence(participantId: string): void {
-    const stillConnected = [...this.connections].some(
-      (c) => c.participant?.id === participantId,
-    );
-    for (const p of this.known.values()) {
-      if (p.id === participantId) p.online = stillConnected;
-    }
-  }
-
-  private participantList(): Participant[] {
-    return [...this.known.values()];
-  }
-
-  private broadcastPresence(): void {
-    this.broadcast({ type: "presence_sync", participants: this.participantList() });
+    handle();
   }
 
   private broadcast(event: ServerEvent): void {

@@ -7,11 +7,9 @@ import type { ParticipantKind } from "./participant";
  * board a permission boundary rather than a tracker.
  */
 
-export type ActorKind = ParticipantKind;
-
 export interface Actor {
   id: string;
-  kind: ActorKind;
+  kind: ParticipantKind;
   displayName: string;
   serverId: string;
 }
@@ -39,13 +37,19 @@ export interface BoardItem {
   description: string | null;
   status: ItemStatus;
   /** Who first raised it. */
-  origin: ActorKind;
+  origin: ParticipantKind;
   createdBy: string;
   approvedBy: string | null;
   owner: string | null;
   /** Proposal fields, only populated when origin = "agent". */
   proposalWhy: string | null;
   proposalEffect: string | null;
+  /**
+   * Workspace-relative paths this item authorizes mutations under. An entry
+   * ending in "/" grants the subtree; otherwise it grants that exact file.
+   * Required on agent proposals; null on human items means unrestricted.
+   */
+  scopePaths: string[] | null;
   createdAt: number;
   approvedAt: number | null;
   startedAt: number | null;
@@ -74,13 +78,25 @@ export type BoardEventType =
   | "item.deleted"
   | "item.reopened";
 
+/** Reason a human gave when denying or blocking an item. */
+export interface ReasonPayload {
+  reason?: string;
+}
+
+/** Field-level diff attached to item.edited events. */
+export interface EditedPayload {
+  changed: Record<string, { from: unknown; to: unknown }>;
+}
+
+export type BoardEventPayload = ReasonPayload | EditedPayload | Record<string, never>;
+
 export interface BoardEventEnvelope {
   channel: "board";
   type: BoardEventType;
   server_id: string;
-  actor: { id: string; kind: ActorKind; display_name: string };
+  actor: { id: string; kind: ParticipantKind; display_name: string };
   item: BoardItem;
-  payload: Record<string, unknown>;
+  payload: BoardEventPayload;
   ts: string;
 }
 
@@ -90,8 +106,8 @@ export interface BoardItemEvent {
   type: BoardEventType;
   actorId: string;
   actorName: string;
-  actorKind: ActorKind;
-  payload: Record<string, unknown>;
+  actorKind: ParticipantKind;
+  payload: BoardEventPayload;
   createdAt: number;
 }
 
@@ -112,7 +128,8 @@ export type AuthzDenyCode =
   | "ITEM_NOT_FOUND"
   | "ITEM_WRONG_SERVER"
   | "ITEM_NOT_WORKABLE" // status not approved | in_progress
-  | "ITEM_DELETED";
+  | "ITEM_DELETED"
+  | "SCOPE_VIOLATION"; // action path falls outside the item's scope_paths
 
 export type AuthzResult =
   | { allow: true; item: BoardItem }

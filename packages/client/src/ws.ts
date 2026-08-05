@@ -5,12 +5,15 @@ const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
 type Listener = (event: ServerEvent) => void;
 
 /**
- * Thin websocket wrapper: JSON encode/decode, auto-reconnect with backoff,
- * re-join on reconnect. UI code only ever sees typed ServerEvents.
+ * WorkspaceSocket exists so UI code never handles raw WebSocket frames or
+ * reconnection: it JSON encodes/decodes, auto-reconnects with backoff, and
+ * re-joins after a drop. Consumers see only typed ServerEvents via `onEvent`
+ * plus a disconnect signal via `onDisconnect`.
  */
 export class WorkspaceSocket {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
+  private disconnectListeners = new Set<() => void>();
   private joinName: string | null = null;
   private retryMs = 500;
   private closed = false;
@@ -31,16 +34,19 @@ export class WorkspaceSocket {
     };
 
     this.socket.onmessage = (e) => {
+      // A malformed frame is a server bug, not a client failure: log it and
+      // keep the connection alive rather than tearing down the session.
       try {
         const event = JSON.parse(e.data) as ServerEvent;
         for (const l of this.listeners) l(event);
-      } catch {
-        // ignore malformed frames
+      } catch (err) {
+        console.warn("[ws] ignoring malformed frame", err, e.data);
       }
     };
 
     this.socket.onclose = () => {
       if (this.closed) return;
+      for (const l of this.disconnectListeners) l();
       setTimeout(() => this.open(), this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 10_000);
     };
@@ -59,6 +65,12 @@ export class WorkspaceSocket {
   onEvent(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Fires when the connection drops (before each reconnect attempt). */
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => this.disconnectListeners.delete(listener);
   }
 
   close(): void {

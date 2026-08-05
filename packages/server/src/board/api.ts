@@ -1,34 +1,18 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Actor, ItemStatus } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
-import type { BoardDb } from "./db";
+import type { Sessions } from "./sessions";
+import type { WorkspaceDb } from "../db";
 
-/**
- * Session registry. Tokens are issued when a participant joins over the
- * websocket and map to a persistent actor identity. HTTP routes derive the
- * actor from the token only — never from the request body (I1).
- */
-export class Sessions {
-  private tokens = new Map<string, string>();
-
-  issue(actorId: string): string {
-    const token = randomUUID();
-    this.tokens.set(token, actorId);
-    return token;
-  }
-
-  resolve(token: string): string | null {
-    return this.tokens.get(token) ?? null;
-  }
-}
+const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 
 const createBodySchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   why: z.string().max(1000).optional(),
   effect: z.string().max(1000).optional(),
+  scopePaths: scopePathsSchema.optional(),
   // I2: any supplied status is ignored; parsed here only so it is dropped.
   status: z.unknown().optional(),
 });
@@ -39,20 +23,23 @@ const patchBodySchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).nullable().optional(),
   owner: z.string().nullable().optional(),
+  scopePaths: scopePathsSchema.nullable().optional(),
 });
 
 const statusValues: ItemStatus[] = ["proposed", "denied", "approved", "in_progress", "blocked", "done"];
 
 export function createApiHandler(
-  db: BoardDb,
+  db: WorkspaceDb,
   service: BoardService,
   sessions: Sessions,
+  corsOrigin: string,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/api/")) return false;
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
     if (req.method === "OPTIONS") {
@@ -83,7 +70,7 @@ async function route(
   url: URL,
   actor: Actor,
   service: BoardService,
-  db: BoardDb,
+  db: WorkspaceDb,
 ): Promise<void> {
   const method = req.method ?? "GET";
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "board", "items", ...]
@@ -164,7 +151,7 @@ async function route(
   throw new ApiError(404, "NOT_FOUND", "no such route");
 }
 
-function authenticate(req: IncomingMessage, db: BoardDb, sessions: Sessions): Actor {
+function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions): Actor {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   const actorId = token ? sessions.resolve(token) : null;

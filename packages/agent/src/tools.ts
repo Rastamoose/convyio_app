@@ -1,5 +1,5 @@
 import type { BoardItem } from "@workspace/shared";
-import type { ToolDeclaration, ToolExecutor } from "./brain/Brain";
+import type { ToolDeclaration, ToolExecutor } from "./geminiBrain";
 import type { BoardClient } from "./boardClient";
 
 export const TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -20,8 +20,16 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         title: { type: "string", description: "What you want to add/change (one short line)" },
         why: { type: "string", description: "Why this is needed (one line)" },
         effect: { type: "string", description: "Expected effect once done (one line)" },
+        scope_paths: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Workspace-relative paths the work will touch. An entry ending in \"/\" grants " +
+            "that directory subtree; otherwise exactly that file. Approval authorizes only " +
+            "this scope — mutations outside it are refused.",
+        },
       },
-      required: ["title", "why", "effect"],
+      required: ["title", "why", "effect", "scope_paths"],
     },
   },
   {
@@ -136,6 +144,9 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             title: str("title"),
             why: str("why"),
             effect: str("effect"),
+            // An omitted/empty scope goes through as [] so the server's
+            // SCOPE_REQUIRED rejection reaches the model verbatim.
+            scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
           });
           hooks.onProposed(item);
           hooks.onActivity(`proposed ${item.ref}: ${item.title}`);
@@ -189,7 +200,10 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             return {
               denied: result.code,
               error: result.error,
-              note: "No workable board item authorizes this. Use board_propose to request the scope, then wait for approval.",
+              note:
+                result.code === "SCOPE_VIOLATION"
+                  ? "That path is outside the backing item's approved scope_paths. Stay within the approved scope, or board_propose a new item covering that path."
+                  : "No workable board item authorizes this. Use board_propose to request the scope, then wait for approval.",
             };
           }
           return result.ok ? { done: result.output } : { error: result.error };

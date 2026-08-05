@@ -3,70 +3,16 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
-import type { Actor, BoardEventEnvelope, BoardItem } from "@workspace/shared";
-import { BoardDb } from "../src/board/db";
+import type { Actor, BoardItem } from "@workspace/shared";
+import { WorkspaceDb } from "../src/db";
+import { MessageStore } from "../src/chat/MessageStore";
+import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
-import { Sessions, createApiHandler } from "../src/board/api";
+import { Sessions } from "../src/board/sessions";
+import { createApiHandler } from "../src/board/api";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
-import { JsonStorage } from "../src/storage/JsonStorage";
 import { Hub } from "../src/hub";
-
-interface Env {
-  db: BoardDb;
-  service: BoardService;
-  sessions: Sessions;
-  baseUrl: string;
-  envelopes: BoardEventEnvelope[];
-  actor(kind: "human" | "agent", name: string): { actor: Actor; token: string };
-  api(
-    method: string,
-    path: string,
-    token: string,
-    body?: unknown,
-  ): Promise<{ status: number; body: any }>;
-  close(): void;
-}
-
-async function createEnv(): Promise<Env> {
-  const db = new BoardDb(":memory:");
-  const service = new BoardService(db);
-  const sessions = new Sessions();
-  const envelopes: BoardEventEnvelope[] = [];
-  service.onEvent = (e) => envelopes.push(e);
-  const handler = createApiHandler(db, service, sessions);
-  const server = http.createServer((req, res) => void handler(req, res));
-  await new Promise<void>((r) => server.listen(0, r));
-  const port = (server.address() as { port: number }).port;
-  const baseUrl = `http://localhost:${port}`;
-  return {
-    db,
-    service,
-    sessions,
-    baseUrl,
-    envelopes,
-    actor(kind, name) {
-      const actor = db.upsertActor(kind, name);
-      return { actor, token: sessions.issue(actor.id) };
-    },
-    async api(method, path, token, body) {
-      const res = await fetch(`${baseUrl}${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      return { status: res.status, body: await res.json() };
-    },
-    close() {
-      server.close();
-      db.close();
-    },
-  };
-}
-
-const PROPOSAL = { title: "Migrate auth", why: "sessions are safer", effect: "auth uses sessions" };
+import { createEnv, PROPOSAL } from "./helpers";
 
 describe("board invariants", async () => {
   const env = await createEnv();
@@ -107,7 +53,12 @@ describe("board invariants", async () => {
     assert.equal(item.status, "approved");
     assert.equal(item.approvedBy, human.actor.id);
     assert.ok(item.approvedAt);
-    const authz = authorizeMutation(agent.actor, item.ref, { name: "write_file" }, env.service);
+    const authz = authorizeMutation(
+      agent.actor,
+      item.ref,
+      { name: "write_file", path: "notes.md" },
+      env.service,
+    );
     assert.equal(authz.allow, true);
   });
 
@@ -130,7 +81,12 @@ describe("board invariants", async () => {
       },
     ]) {
       const item = setup();
-      const authz = authorizeMutation(agent.actor, item.ref, { name: "write_file" }, env.service);
+      const authz = authorizeMutation(
+        agent.actor,
+        item.ref,
+        { name: "write_file", path: "out.md" },
+        env.service,
+      );
       assert.equal(authz.allow, false);
       assert.equal(!authz.allow && authz.code, "ITEM_NOT_WORKABLE");
     }
@@ -143,7 +99,12 @@ describe("board invariants", async () => {
     env.service.softDelete(human.actor, item.id);
     assert.equal(env.envelopes.length, 1);
     assert.equal(env.envelopes[0].type, "item.deleted");
-    const authz = authorizeMutation(agent.actor, item.ref, { name: "write_file" }, env.service);
+    const authz = authorizeMutation(
+      agent.actor,
+      item.ref,
+      { name: "write_file", path: "out.md" },
+      env.service,
+    );
     assert.equal(authz.allow, false);
     assert.equal(!authz.allow && authz.code, "ITEM_DELETED");
   });
@@ -249,16 +210,19 @@ describe("board invariants", async () => {
 
 describe("T10: full-stack approval fan-out", async () => {
   test("approval reaches all clients within 1s and unblocks agent work", async () => {
-    const db = new BoardDb(":memory:");
+    const db = new WorkspaceDb(":memory:");
     const service = new BoardService(db);
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
-    const storage = new JsonStorage(`/tmp/board-test-storage-${randomUUID()}`);
-    await storage.init();
-    const handler = createApiHandler(db, service, sessions);
+    const handler = createApiHandler(db, service, sessions, "*");
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, storage, db, sessions, toolman, "");
+    const hub = new Hub(server, new Roster(db), new MessageStore(db), sessions, toolman, {
+      apiUrl: "",
+      serverId: db.serverId,
+      channels: ["general"],
+      demoChannels: [],
+    });
     service.onEvent = (e) => hub.broadcastBoardEvent(e);
     await new Promise<void>((r) => server.listen(0, r));
     const port = (server.address() as { port: number }).port;

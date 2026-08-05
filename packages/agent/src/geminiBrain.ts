@@ -6,15 +6,53 @@ import {
   type Part,
   type Schema,
 } from "@google/genai";
-import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions, ToolDeclaration } from "./Brain";
 
-const MODEL = process.env.AGENT_MODEL ?? "gemini-2.5-flash";
 const MAX_TOOL_ROUNDS = 12;
 
-export class GeminiBrain implements Brain {
+export interface BrainCallbacks {
+  onThought(thought: string): void;
+  onText(text: string): void;
+}
+
+/** JSON-schema-shaped tool declaration, mapped to Gemini's format. */
+export interface ToolDeclaration {
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<
+      string,
+      { type: string; description?: string; items?: { type: string } }
+    >;
+    required?: string[];
+  };
+}
+
+export type ToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
+export interface BrainInput {
+  system: string;
+  context: string;
+  prompt: string;
+  tools?: ToolDeclaration[];
+}
+
+export interface BrainRunOptions {
+  signal?: AbortSignal;
+  /** Invoked for each tool call the model makes; result is fed back. */
+  onToolCall?: ToolExecutor;
+}
+
+export class GeminiBrain {
   private ai: GoogleGenAI;
 
-  constructor(apiKey: string) {
+  constructor(
+    apiKey: string,
+    private model: string,
+  ) {
     this.ai = new GoogleGenAI({ apiKey });
   }
 
@@ -30,7 +68,7 @@ export class GeminiBrain implements Brain {
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await this.ai.models.generateContentStream({
-        model: MODEL,
+        model: this.model,
         contents,
         config: {
           systemInstruction: input.system,
@@ -94,6 +132,7 @@ function toSchema(param: ToolDeclaration["parameters"]): Schema {
     properties[key] = {
       type: typeFor(value.type),
       ...(value.description ? { description: value.description } : {}),
+      ...(value.items ? { items: { type: typeFor(value.items.type) } } : {}),
     };
   }
   return { type: Type.OBJECT, properties, required: param.required };
@@ -107,6 +146,8 @@ function typeFor(t: string): Type {
       return Type.INTEGER;
     case "boolean":
       return Type.BOOLEAN;
+    case "array":
+      return Type.ARRAY;
     default:
       return Type.STRING;
   }

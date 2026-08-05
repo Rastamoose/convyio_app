@@ -4,57 +4,38 @@ import type { ChatMessage } from "@workspace/shared";
 
 const WINDOW_SIZE = 50;
 
-export interface MemoryMessage {
-  authorName: string;
-  authorKind: "human" | "agent";
-  content: string;
-  timestamp: number;
-  channel?: string;
-}
-
+/**
+ * Rolling window of recent chat messages for the model's context, persisted
+ * to a transcript file so a restarted agent is not amnesiac before its first
+ * welcome frame (which reseeds the window from server history).
+ */
 export class Memory {
-  private window: MemoryMessage[] = [];
-  private transcriptFile: string;
+  private window: ChatMessage[];
+  private readonly transcriptFile: string;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string) {
-    this.transcriptFile = path.join(dataDir, "transcript.json");
+  private constructor(transcriptFile: string, window: ChatMessage[]) {
+    this.transcriptFile = transcriptFile;
+    this.window = window;
   }
 
-  async init(): Promise<void> {
-    await fs.mkdir(path.dirname(this.transcriptFile), { recursive: true });
-    try {
-      const raw = await fs.readFile(this.transcriptFile, "utf-8");
-      const stored = JSON.parse(raw) as MemoryMessage[];
-      this.window = stored.slice(-WINDOW_SIZE);
-    } catch {
-      this.window = [];
-    }
+  static async load(dataDir: string): Promise<Memory> {
+    const transcriptFile = path.join(dataDir, "transcript.json");
+    await fs.mkdir(path.dirname(transcriptFile), { recursive: true });
+    const stored = await readTranscript(transcriptFile);
+    return new Memory(transcriptFile, stored.slice(-WINDOW_SIZE));
   }
 
   seed(history: ChatMessage[]): void {
-    this.window = history.map((m) => ({
-      authorName: m.authorName,
-      authorKind: m.authorKind,
-      content: m.content,
-      timestamp: m.timestamp,
-      channel: m.channel ?? "general",
-    }));
+    this.window = [...history];
   }
 
   append(message: ChatMessage): void {
-    const item: MemoryMessage = {
-      authorName: message.authorName,
-      authorKind: message.authorKind,
-      content: message.content,
-      timestamp: message.timestamp,
-      channel: message.channel ?? "general",
-    };
-    this.window.push(item);
+    this.window.push(message);
     if (this.window.length > WINDOW_SIZE) {
       this.window.shift();
     }
-    this.persist(item);
+    this.persist(message);
   }
 
   context(): string {
@@ -66,17 +47,23 @@ export class Memory {
       .join("\n");
   }
 
-  private persist(item: MemoryMessage): void {
+  private persist(item: ChatMessage): void {
     this.writeQueue = this.writeQueue.then(async () => {
-      let current: MemoryMessage[] = [];
-      try {
-        const raw = await fs.readFile(this.transcriptFile, "utf-8");
-        current = JSON.parse(raw) as MemoryMessage[];
-      } catch {
-        current = [];
-      }
+      const current = await readTranscript(this.transcriptFile);
       current.push(item);
       await fs.writeFile(this.transcriptFile, JSON.stringify(current, null, 2));
     });
+  }
+}
+
+/** An absent transcript is a normal first run; anything else is a real error. */
+async function readTranscript(file: string): Promise<ChatMessage[]> {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf-8")) as ChatMessage[];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[agent] could not read transcript, continuing without it:", err);
+    }
+    return [];
   }
 }

@@ -1,27 +1,23 @@
 import type { BoardItem } from "@workspace/shared";
-import type { ActiveRun } from "../hooks/useWorkspace";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import { relativeTime } from "../lib/format";
 import { Avatar } from "./Avatar";
-import { relativeTime } from "./ProposalCard";
+import { ActionButton } from "./ActionButton";
 
 export function BoardCard({
   item,
-  activeRuns,
   highlighted,
   onOpen,
-  onApprove,
-  onDeny,
   onDiscuss,
   onJumpToTrace,
 }: {
   item: BoardItem;
-  activeRuns: ActiveRun[];
   highlighted: boolean;
   onOpen: (itemId: string) => void;
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onJumpToTrace: (runId: string) => void;
 }) {
+  const { activeRuns, approveItem, denyItem } = useWorkspace();
   const liveRun =
     item.status === "in_progress"
       ? (activeRuns.find((r) => r.agentName === item.ownerName) ??
@@ -58,6 +54,14 @@ export function BoardCard({
           {item.proposalWhy}
         </div>
       )}
+      {item.status === "proposed" && item.scopePaths && item.scopePaths.length > 0 && (
+        <div
+          className="mt-1 truncate font-mono text-[10px] text-faint"
+          title={item.scopePaths.join(", ")}
+        >
+          {item.scopePaths.join(" · ")}
+        </div>
+      )}
       <div className="mt-2 flex items-center gap-2 text-[11px] text-faint">
         {item.origin === "agent" && (
           <span className="rounded bg-blurple/30 px-1 py-px text-[9px] font-bold tracking-wide text-mention-text uppercase">
@@ -85,24 +89,24 @@ export function BoardCard({
       </div>
       {item.status === "proposed" && (
         <div className="mt-2 flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={() => onApprove(item.id)}
-            className="flex-1 rounded bg-online px-2 py-1 text-xs font-semibold text-mention-text hover:opacity-90"
-          >
-            Approve
-          </button>
-          <button
-            onClick={() => onDeny(item.id)}
-            className="flex-1 rounded bg-dead px-2 py-1 text-xs font-semibold text-mention-text hover:opacity-90"
-          >
-            Deny
-          </button>
-          <button
+          <ActionButton
+            compact
+            label="Approve"
+            tone="approve"
+            onClick={() => approveItem(item.id)}
+          />
+          <ActionButton
+            compact
+            label="Deny"
+            tone="deny"
+            onClick={() => denyItem(item.id)}
+          />
+          <ActionButton
+            compact
+            label="Discuss"
+            tone="neutral"
             onClick={() => onDiscuss(item)}
-            className="flex-1 rounded bg-popup px-2 py-1 text-xs font-semibold text-body hover:bg-mention-bg-hover"
-          >
-            Discuss
-          </button>
+          />
         </div>
       )}
     </div>

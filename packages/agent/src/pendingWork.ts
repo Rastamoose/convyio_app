@@ -12,22 +12,31 @@ export interface StashedWork {
  * when its proposals are decided.
  */
 export class PendingWork {
-  private map = new Map<string, StashedWork>();
-  private file: string;
+  private readonly map: Map<string, StashedWork>;
+  private readonly file: string;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string) {
-    this.file = path.join(dataDir, "pending-work.json");
+  private constructor(file: string, map: Map<string, StashedWork>) {
+    this.file = file;
+    this.map = map;
   }
 
-  async init(): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
+  static async load(dataDir: string): Promise<PendingWork> {
+    const file = path.join(dataDir, "pending-work.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    let map = new Map<string, StashedWork>();
     try {
-      const raw = await fs.readFile(this.file, "utf-8");
-      this.map = new Map(Object.entries(JSON.parse(raw) as Record<string, StashedWork>));
-    } catch {
-      this.map = new Map();
+      const raw = await fs.readFile(file, "utf-8");
+      map = new Map(Object.entries(JSON.parse(raw) as Record<string, StashedWork>));
+    } catch (err) {
+      // An absent stash is a normal first run. A corrupt one is a real error:
+      // starting empty means approved-while-down proposals won't auto-resume,
+      // so say so instead of hiding it.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error("[agent] could not read pending-work stash, starting empty:", err);
+      }
     }
+    return new PendingWork(file, map);
   }
 
   get(itemId: string): StashedWork | undefined {

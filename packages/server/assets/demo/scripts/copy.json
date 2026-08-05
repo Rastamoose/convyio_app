@@ -1,0 +1,37 @@
+{
+  "channel": "demo",
+  "personas": ["alex", "blair"],
+  "steps": [
+    {
+      "author": "alex",
+      "say": "team — launch is Friday. the landing page hero still says \"AI workspace beta\" and it reads flat"
+    },
+    {
+      "author": "blair",
+      "say": "yeah and we still don't have a one-liner for the HN post. we agreed the angle is \"your team and your agents in one room\" but nothing is written"
+    },
+    {
+      "author": "alex",
+      "say": "constraints: no buzzwords, under 10 words for the hero, and don't use the word \"platform\" — we keep sounding like everyone else"
+    },
+    {
+      "author": "blair",
+      "say": "also the HN crowd hates marketing speak, it should sound like it was written by an engineer"
+    },
+    {
+      "author": "alex",
+      "say": "@{agent} read the conversation above. draft 3 options for the landing page hero line and 3 options for the HN post one-liner. respect the constraints we discussed.",
+      "await": "agent_reply"
+    },
+    {
+      "author": "blair",
+      "say": "@{agent} hero option 2 is closest. make it punchier and drop any mention of AI — the product is the room, not the model",
+      "await": "agent_reply"
+    },
+    {
+      "author": "alex",
+      "say": "@{agent} give me the final picks: one hero line, one HN one-liner, nothing else",
+      "await": "agent_reply"
+    }
+  ]
+}

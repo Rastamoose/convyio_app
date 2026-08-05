@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { ChatMessage, Participant } from "@workspace/shared";
+import type { ChatMessage } from "@workspace/shared";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import type { BoardLine } from "../hooks/useBoard";
+import { formatDivider, formatShortTime, formatTimestamp } from "../lib/format";
 import { Avatar } from "./Avatar";
+import { AgentBadge } from "./AgentBadge";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
-import type { ActiveRun, BoardLine } from "../hooks/useWorkspace";
 
 export function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -99,31 +102,6 @@ function dayKey(ts: number): string {
   return new Date(ts).toDateString();
 }
 
-function formatDivider(ts: number): string {
-  return new Date(ts).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function formatTimestamp(ts: number): string {
-  const d = new Date(ts);
-  return `${d.toLocaleDateString(undefined, {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  })}, ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-}
-
-function formatShortTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
 interface Rendered {
   message: ChatMessage;
   grouped: boolean; // continuation of previous author within window
@@ -151,28 +129,30 @@ type TimelineEntry =
   | { kind: "board"; line: BoardLine };
 
 export function MessageList({
-  messages,
-  boardLines,
-  activeRuns,
-  runDurations,
-  participants,
-  selfName,
   channel,
   onRefClick,
 }: {
-  messages: ChatMessage[];
-  boardLines: BoardLine[];
-  activeRuns: ActiveRun[];
-  runDurations: Map<string, number>;
-  participants: Participant[];
-  selfName: string | null;
-  // TODO(channels): channel handling is bolted on (hardcoded CHANNELS list,
-  // per-message string field, client-side filtering). Needs a proper channel
-  // model: server-owned channel list, scoped history/traces, per-channel reads.
+  // TODO(channels): channel handling is bolted on (per-message string field,
+  // client-side filtering). Needs a proper channel model: scoped
+  // history/traces, per-channel reads.
   channel: string;
   onRefClick: (ref: string) => void;
 }) {
+  const {
+    messages: allMessages,
+    boardLines,
+    activeRuns,
+    runDurations,
+    participants,
+    self,
+  } = useWorkspace();
+  const selfName = self?.name ?? null;
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const messages = useMemo(
+    () => allMessages.filter((m) => (m.channel ?? "general") === channel),
+    [allMessages, channel],
+  );
 
   const mentionRegex = useMemo(
     () => buildMentionRegex(participants.map((p) => p.name)),
@@ -268,11 +248,7 @@ export function MessageList({
                   <span className="font-medium text-body hover:underline">
                     {m.authorName}
                   </span>
-                  {m.authorKind === "agent" && (
-                    <span className="rounded bg-blurple px-1 py-px text-[10px] font-bold text-mention-text">
-                      AGENT
-                    </span>
-                  )}
+                  {m.authorKind === "agent" && <AgentBadge />}
                   <span className="text-xs text-faint">
                     {formatTimestamp(m.timestamp)}
                   </span>

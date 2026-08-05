@@ -14,9 +14,6 @@ import type { AgentSocket } from "./socket";
  * agent has no other write path; every mutating action is judged server-side.
  */
 export class BoardClient {
-  /** Fired after each full refresh so callers can recompute derived state. */
-  onRefreshed: (() => void) | null = null;
-
   private items = new Map<string, BoardItem>();
   private token: string | null = null;
   private apiUrl: string | null = null;
@@ -24,12 +21,6 @@ export class BoardClient {
 
   constructor(private socket: AgentSocket) {
     socket.onEvent((event) => {
-      if (event.type === "welcome") {
-        this.token = event.token;
-        this.apiUrl = event.apiUrl;
-        void this.refresh();
-        return;
-      }
       if (isBoardEnvelope(event)) {
         if (event.item.deletedAt) this.items.delete(event.item.id);
         else this.items.set(event.item.id, event.item);
@@ -45,7 +36,16 @@ export class BoardClient {
     });
   }
 
-  async refresh(): Promise<void> {
+  /**
+   * Adopt the session from a welcome frame and load the board snapshot.
+   * Returns false when the load failed: the cache then serves stale (possibly
+   * empty) data, which is acceptable because live board envelopes and the
+   * next (re)join heal it — but callers must not run restart-recovery sweeps
+   * against it.
+   */
+  async join(token: string, apiUrl: string): Promise<boolean> {
+    this.token = token;
+    this.apiUrl = apiUrl;
     try {
       const { items } = (await this.api("GET", "/api/board/items?include_deleted=true")) as {
         items: BoardItem[];
@@ -54,9 +54,10 @@ export class BoardClient {
       for (const item of items) {
         if (!item.deletedAt) this.items.set(item.id, item);
       }
-      this.onRefreshed?.();
+      return true;
     } catch (err) {
       console.warn("[agent] board refresh failed:", err);
+      return false;
     }
   }
 
@@ -77,7 +78,12 @@ export class BoardClient {
   // Board lifecycle (HTTP)
   // -------------------------------------------------------------------------
 
-  async propose(fields: { title: string; why: string; effect: string }): Promise<BoardItem> {
+  async propose(fields: {
+    title: string;
+    why: string;
+    effect: string;
+    scopePaths: string[];
+  }): Promise<BoardItem> {
     const { item } = (await this.api("POST", "/api/board/items", fields)) as { item: BoardItem };
     this.items.set(item.id, item);
     return item;
@@ -93,10 +99,6 @@ export class BoardClient {
 
   async block(ref: string, reason: string): Promise<BoardItem> {
     return this.transition(ref, "block", { reason });
-  }
-
-  async unblock(ref: string): Promise<BoardItem> {
-    return this.transition(ref, "unblock");
   }
 
   private async transition(ref: string, action: string, body?: unknown): Promise<BoardItem> {
@@ -154,7 +156,8 @@ export class BoardClient {
       .map((i) => {
         const proposal =
           i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
-        return `${i.ref} [${i.status}] ${i.title}${proposal}`;
+        const scope = i.scopePaths ? ` — scope: ${i.scopePaths.join(", ")}` : "";
+        return `${i.ref} [${i.status}] ${i.title}${proposal}${scope}`;
       })
       .join("\n");
   }

@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import type {
   Actor,
   BoardEventEnvelope,
+  BoardEventPayload,
   BoardEventType,
   BoardItem,
   BoardItemEvent,
   ItemStatus,
 } from "@workspace/shared";
-import type { BoardDb } from "./db";
+import type { WorkspaceDb } from "../db";
+import { validateScopePaths } from "./scope";
 
 export class ApiError extends Error {
   constructor(
@@ -28,7 +30,7 @@ export class BoardService {
   /** Realtime fan-out hook; invoked after the transaction commits. */
   onEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
 
-  constructor(private store: BoardDb) {}
+  constructor(private store: WorkspaceDb) {}
 
   // -------------------------------------------------------------------------
   // Queries
@@ -96,7 +98,7 @@ export class BoardService {
       actorId: r.actor_id,
       actorName: r.actor_name,
       actorKind: r.actor_kind,
-      payload: JSON.parse(r.payload) as Record<string, unknown>,
+      payload: JSON.parse(r.payload) as BoardEventPayload,
       createdAt: r.created_at,
     }));
   }
@@ -108,13 +110,25 @@ export class BoardService {
   /** Human create (approved by construction) or agent proposal (I2). */
   create(
     actor: Actor,
-    input: { title: string; description?: string; why?: string; effect?: string },
+    input: {
+      title: string;
+      description?: string;
+      why?: string;
+      effect?: string;
+      scopePaths?: string[];
+    },
   ): BoardItem {
-    if (actor.kind === "agent" && (!input.why || !input.effect)) {
+    const human = actor.kind === "human";
+    if (!human && (!input.why || !input.effect)) {
       throw new ApiError(400, "PROPOSAL_FIELDS_REQUIRED", "agent proposals require why and effect");
     }
+    // Agent proposals must name the paths they intend to touch, so approval
+    // grants a bounded scope instead of unrestricted workspace access.
+    if (!human && (!input.scopePaths || input.scopePaths.length === 0)) {
+      throw new ApiError(400, "SCOPE_REQUIRED", "agent proposals require non-empty scope_paths");
+    }
+    const scopePaths = this.normalizedScope(input.scopePaths);
     const now = Date.now();
-    const human = actor.kind === "human";
     const id = randomUUID();
     return this.mutate(actor, human ? "item.created" : "item.proposed", () => {
       const ref = this.store.nextRef(actor.serverId);
@@ -122,8 +136,9 @@ export class BoardService {
         .prepare(
           `INSERT INTO board_items
              (id, server_id, ref, title, description, status, origin, created_by,
-              approved_by, owner, proposal_why, proposal_effect, created_at, approved_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              approved_by, owner, proposal_why, proposal_effect, scope_paths,
+              created_at, approved_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -138,6 +153,7 @@ export class BoardService {
           null,
           human ? null : input.why!,
           human ? null : input.effect!,
+          scopePaths ? JSON.stringify(scopePaths) : null,
           now,
           human ? now : null,
         );
@@ -219,7 +235,12 @@ export class BoardService {
   edit(
     actor: Actor,
     idOrRef: string,
-    fields: { title?: string; description?: string | null; owner?: string | null },
+    fields: {
+      title?: string;
+      description?: string | null;
+      owner?: string | null;
+      scopePaths?: string[] | null;
+    },
   ): BoardItem {
     this.assertHuman(actor, "HUMAN_ONLY");
     const item = this.mustFind(actor.serverId, idOrRef);
@@ -229,24 +250,34 @@ export class BoardService {
         throw new ApiError(400, "OWNER_NOT_FOUND", "owner must be an actor on this server");
       }
     }
-    const changed: Record<string, unknown> = {};
+    const scopePaths =
+      fields.scopePaths === undefined
+        ? undefined
+        : this.normalizedScope(fields.scopePaths ?? undefined) ?? null;
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
     for (const key of ["title", "description", "owner"] as const) {
       if (fields[key] !== undefined && fields[key] !== item[key]) {
         changed[key] = { from: item[key], to: fields[key] };
       }
+    }
+    if (scopePaths !== undefined && JSON.stringify(scopePaths) !== JSON.stringify(item.scopePaths)) {
+      changed.scopePaths = { from: item.scopePaths, to: scopePaths };
     }
     if (Object.keys(changed).length === 0) return item;
     return this.mutate(actor, "item.edited", () => {
       this.store.db
         .prepare(
           `UPDATE board_items SET
-             title = ?, description = ?, owner = ?
+             title = ?, description = ?, owner = ?, scope_paths = ?
            WHERE id = ?`,
         )
         .run(
           fields.title !== undefined ? fields.title : item.title,
           fields.description !== undefined ? fields.description : item.description,
           fields.owner !== undefined ? fields.owner : item.owner,
+          scopePaths !== undefined
+            ? scopePaths && JSON.stringify(scopePaths)
+            : item.scopePaths && JSON.stringify(item.scopePaths),
           item.id,
         );
       return item.id;
@@ -290,7 +321,7 @@ export class BoardService {
     actor: Actor,
     type: BoardEventType,
     apply: () => string,
-    payload: Record<string, unknown> = {},
+    payload: BoardEventPayload = {},
   ): BoardItem {
     const itemId = this.store.transaction(() => {
       const id = apply();
@@ -313,6 +344,14 @@ export class BoardService {
       ts: new Date().toISOString(),
     });
     return item;
+  }
+
+  /** Validate + normalize scope entries, or undefined when none given. */
+  private normalizedScope(entries: string[] | undefined): string[] | undefined {
+    if (entries === undefined) return undefined;
+    const result = validateScopePaths(entries);
+    if ("error" in result) throw new ApiError(400, "BAD_SCOPE", result.error);
+    return result.paths;
   }
 
   private mustFind(serverId: string, idOrRef: string): BoardItem {
@@ -361,6 +400,7 @@ interface ItemRow {
   owner: string | null;
   proposal_why: string | null;
   proposal_effect: string | null;
+  scope_paths: string | null;
   created_at: number;
   approved_at: number | null;
   started_at: number | null;
@@ -385,6 +425,7 @@ function toItem(row: ItemRow): BoardItem {
     owner: row.owner,
     proposalWhy: row.proposal_why,
     proposalEffect: row.proposal_effect,
+    scopePaths: row.scope_paths ? (JSON.parse(row.scope_paths) as string[]) : null,
     createdAt: row.created_at,
     approvedAt: row.approved_at,
     startedAt: row.started_at,

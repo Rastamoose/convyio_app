@@ -133,6 +133,10 @@ export interface WelcomeEvent {
   self: Participant;
   history: ChatMessage[];
   participants: Participant[];
+  /** Channels this server exposes, in display order. */
+  channels: string[];
+  /** Channels that play a scripted demo when demo_start names them. */
+  demoChannels: string[];
   /** Bearer token for the HTTP API, bound to this actor identity. */
   token: string;
   /** Base URL of the HTTP API (same host/port as the websocket). */

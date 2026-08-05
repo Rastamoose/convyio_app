@@ -8,6 +8,7 @@ import {
   type ToolmanAction,
 } from "@workspace/shared";
 import type { BoardService } from "./BoardService";
+import { scopeAllows } from "./scope";
 
 export interface ToolmanResult {
   ok: boolean;
@@ -17,29 +18,25 @@ export interface ToolmanResult {
 }
 
 /**
- * Tool registry. Each tool declares whether it mutates the world; anything
- * not registered — or registered without the flag — is treated as mutating
- * (fail closed).
+ * Tools that never change the world. Anything not listed here — including
+ * tools that do not exist yet — is treated as mutating (fail closed).
  */
-const TOOL_REGISTRY: Record<string, { mutating: boolean }> = {
-  read_file: { mutating: false },
-  list_files: { mutating: false },
-  write_file: { mutating: true },
-  append_file: { mutating: true },
-};
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files"]);
 
 export function isMutating(toolName: string): boolean {
-  return TOOL_REGISTRY[toolName]?.mutating ?? true;
+  return !READ_ONLY_TOOLS.has(toolName);
 }
 
 /**
- * Single authorization entry point for the toolman (§5). Humans are not
- * gated by the board; agent mutations require a workable item.
+ * Single authorization decision for agent actions. Kept as a pure function —
+ * separate from the filesystem mechanics in Toolman — so the policy can be
+ * unit-tested without touching disk. Humans are not gated by the board;
+ * agent mutations require a workable item whose scope covers the target path.
  */
 export function authorizeMutation(
   actor: Actor,
   boardItemRef: string | null,
-  action: { name: string },
+  action: { name: string; path?: string },
   board: BoardService,
 ): AuthzResult {
   const mutating = isMutating(action.name);
@@ -70,6 +67,24 @@ export function authorizeMutation(
       message: `${item.ref} is ${item.status}; mutating work requires approved or in_progress`,
     };
   }
+  if (item.scopePaths) {
+    if (!action.path || !scopeAllows(item.scopePaths, action.path)) {
+      return {
+        allow: false,
+        code: "SCOPE_VIOLATION",
+        message: `${action.path ?? "(no path)"} is outside ${item.ref}'s scope (${item.scopePaths.join(", ")})`,
+      };
+    }
+  } else if (item.origin === "agent") {
+    // Agent proposals always carry scope (enforced at creation); an
+    // agent-origin item without one fails closed rather than granting
+    // unrestricted access.
+    return {
+      allow: false,
+      code: "SCOPE_VIOLATION",
+      message: `${item.ref} declares no scope_paths; agent items cannot authorize unscoped work`,
+    };
+  }
   return { allow: true, item };
 }
 
@@ -93,7 +108,12 @@ export class Toolman {
     action: ToolmanAction,
     boardItemRef: string | null,
   ): Promise<ToolmanResult> {
-    const authz = authorizeMutation(actor, boardItemRef, { name: action.kind }, this.board);
+    const authz = authorizeMutation(
+      actor,
+      boardItemRef,
+      { name: action.kind, path: "path" in action ? action.path : undefined },
+      this.board,
+    );
     if (!authz.allow) {
       // Every denial is an audit record.
       console.warn(
@@ -102,10 +122,9 @@ export class Toolman {
       return { ok: false, code: authz.code, error: authz.message };
     }
 
-    let target: string;
-    try {
-      target = this.sandboxed("path" in action ? (action.path ?? ".") : ".");
-    } catch {
+    const target = this.sandboxed("path" in action ? (action.path ?? ".") : ".");
+    if (target === null) {
+      console.warn(`[toolman] DENY ${actor.displayName} ${action.kind}: path escapes the workspace sandbox`);
       return { ok: false, error: "path escapes the workspace sandbox" };
     }
 
@@ -140,10 +159,11 @@ export class Toolman {
     }
   }
 
-  private sandboxed(relative: string): string {
+  /** Resolve a path inside the workspace root, or null if it escapes. */
+  private sandboxed(relative: string): string | null {
     const resolved = path.resolve(this.workspaceRoot, relative);
     if (resolved !== this.workspaceRoot && !resolved.startsWith(this.workspaceRoot + path.sep)) {
-      throw new Error("outside sandbox");
+      return null;
     }
     return resolved;
   }

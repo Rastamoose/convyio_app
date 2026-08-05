@@ -1,39 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import type { BoardItem, ChatMessage, Participant } from "@workspace/shared";
-import type { ActiveRun } from "../hooks/useWorkspace";
+import type { BoardItem, Participant } from "@workspace/shared";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import { formatElapsed } from "../lib/format";
 import { Avatar } from "./Avatar";
+import { AgentBadge } from "./AgentBadge";
 import { ProposalCard } from "./ProposalCard";
-
-function formatElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h ${m % 60}m`;
-  if (m > 0) return `${m}m ${s % 60}s`;
-  return `${s}s`;
-}
 
 export function MemberCard({
   participant,
-  board,
-  activeRuns,
-  messages,
-  onApprove,
-  onDeny,
   onDiscuss,
   onPrefill,
   onClose,
 }: {
   participant: Participant;
-  board: BoardItem[];
-  activeRuns: ActiveRun[];
-  messages: ChatMessage[];
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
   onClose: () => void;
 }) {
+  const { board, activeRuns, messages } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
 
@@ -100,11 +84,7 @@ export function MemberCard({
         <div className="min-w-0">
           <div className="truncate font-semibold text-body">
             {participant.name}
-            {isAgent && (
-              <span className="ml-1.5 rounded bg-blurple px-1 py-px align-middle text-[10px] font-bold text-mention-text">
-                AGENT
-              </span>
-            )}
+            {isAgent && <AgentBadge className="ml-1.5 align-middle" />}
           </div>
           <div className="truncate text-xs text-muted">
             {participant.online ? "Online" : "Offline"}
@@ -141,8 +121,6 @@ export function MemberCard({
               </div>
               <ProposalCard
                 item={pendingItem}
-                onApprove={onApprove}
-                onDeny={onDeny}
                 onDiscuss={(item) => {
                   onClose();
                   onDiscuss(item);

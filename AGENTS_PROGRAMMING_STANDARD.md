@@ -29,13 +29,13 @@ Fill this in per project before doing anything else. If a line below is still a
 placeholder, discover the real value first and replace it.
 
 ```
-Build:        <!-- FILL IN -->
-Test:         <!-- FILL IN -->
-Test one:     <!-- FILL IN -->
-Lint / types: <!-- FILL IN -->
-Run:          <!-- FILL IN -->
-Never touch:  <!-- generated files, lockfiles, vendored dirs, migrations, .env -->
-Ask first:    <!-- new dependency, schema change, public API change, auth/secrets -->
+Build:        npm run build -w @workspace/client   (server/agent/shared run from source via tsx)
+Test:         npm test -w @workspace/server && npm test -w @workspace/shared && npm test -w @workspace/agent && npm test -w @workspace/client
+Test one:     npm test -w @workspace/server -- --test-name-pattern "<name>"   (vitest -t "<name>" for client)
+Lint / types: npx tsc --noEmit -p packages/<name>   (each of shared, server, client, agent)
+Run:          npm run dev   (server ws+http :3001, client :5173, agent; needs GEMINI_API_KEY in .env)
+Never touch:  package-lock.json (except via npm), data/ (runtime state), .env
+Ask first:    new dependency, SQLite schema change, wire-protocol or HTTP API change, auth/toolman changes
 ```
 
 ---

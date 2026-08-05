@@ -1,31 +1,11 @@
 import { useEffect, useState } from "react";
-import type {
-  Actor,
-  BoardItem,
-  BoardItemEvent,
-  ItemStatus,
-} from "@workspace/shared";
-import type { BoardItemEdit } from "../hooks/useWorkspace";
+import type { Actor, BoardItem, BoardItemEvent } from "@workspace/shared";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import { ITEM_STATUS_BADGE, ITEM_STATUS_LABEL } from "../lib/status";
+import { relativeTime } from "../lib/format";
 import { Avatar } from "./Avatar";
-import { relativeTime } from "./ProposalCard";
-
-const STATUS_BADGE: Record<ItemStatus, string> = {
-  proposed: "text-dead",
-  approved: "text-working",
-  in_progress: "text-online",
-  blocked: "text-away",
-  done: "text-muted",
-  denied: "text-faint line-through",
-};
-
-const STATUS_LABEL: Record<ItemStatus, string> = {
-  proposed: "Proposed",
-  approved: "To do",
-  in_progress: "In progress",
-  blocked: "Blocked",
-  done: "Done",
-  denied: "Denied",
-};
+import { AgentBadge } from "./AgentBadge";
+import { ActionButton } from "./ActionButton";
 
 const EVENT_VERB: Record<string, string> = {
   "item.created": "created",
@@ -43,17 +23,25 @@ const EVENT_VERB: Record<string, string> = {
 
 function eventDetail(event: BoardItemEvent): string | null {
   if (event.type === "item.denied" || event.type === "item.blocked") {
-    const reason = event.payload.reason;
-    return typeof reason === "string" && reason ? reason : null;
+    if ("reason" in event.payload && typeof event.payload.reason === "string") {
+      return event.payload.reason || null;
+    }
+    return null;
   }
-  if (event.type === "item.edited") {
-    // Server payload: { changed: { field: { from, to } } }
-    const changed = event.payload.changed;
-    const fields =
-      changed && typeof changed === "object" ? Object.keys(changed as object) : [];
+  if (event.type === "item.edited" && "changed" in event.payload) {
+    const fields = Object.keys(event.payload.changed);
     return fields.length > 0 ? fields.join(", ") : null;
   }
   return null;
+}
+
+/** "a, b\nc" → ["a", "b", "c"]; an all-whitespace input means unrestricted. */
+function parseScopePaths(text: string): string[] | null {
+  const paths = text
+    .split(/[\n,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return paths.length > 0 ? paths : null;
 }
 
 function Label({ children }: { children: string }) {
@@ -64,62 +52,29 @@ function Label({ children }: { children: string }) {
   );
 }
 
-function ActionButton({
-  label,
-  tone,
-  onClick,
-}: {
-  label: string;
-  tone: "approve" | "deny" | "neutral" | "primary" | "destructive";
-  onClick: () => void;
-}) {
-  const styles = {
-    approve: "bg-online text-mention-text hover:opacity-90",
-    deny: "bg-dead text-mention-text hover:opacity-90",
-    neutral: "bg-popup text-body hover:bg-mention-bg-hover",
-    primary: "bg-blurple text-mention-text hover:opacity-90",
-    destructive:
-      "border border-dead/50 bg-transparent text-dead hover:bg-dead/10",
-  }[tone];
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded px-3 py-1.5 text-xs font-semibold ${styles}`}
-    >
-      {label}
-    </button>
-  );
-}
-
 export function ItemDrawer({
   item,
   onClose,
-  onApprove,
-  onDeny,
   onDiscuss,
-  onStart,
-  onComplete,
-  onReopen,
-  onDelete,
-  onEdit,
-  fetchActors,
-  fetchItemEvents,
 }: {
   item: BoardItem;
   onClose: () => void;
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
-  onStart: (itemId: string) => void;
-  onComplete: (itemId: string) => void;
-  onReopen: (itemId: string) => void;
-  onDelete: (itemId: string) => void;
-  onEdit: (itemId: string, fields: BoardItemEdit) => void;
-  fetchActors: () => Promise<Actor[]>;
-  fetchItemEvents: (itemId: string) => Promise<BoardItemEvent[]>;
 }) {
+  const {
+    approveItem,
+    denyItem,
+    startItem,
+    completeItem,
+    reopenItem,
+    deleteItem,
+    editItem,
+    fetchActors,
+    fetchItemEvents,
+  } = useWorkspace();
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [descDraft, setDescDraft] = useState<string | null>(null);
+  const [scopeDraft, setScopeDraft] = useState<string | null>(null);
   const [ownerOpen, setOwnerOpen] = useState(false);
   const [actors, setActors] = useState<Actor[] | null>(null);
   const [events, setEvents] = useState<BoardItemEvent[]>([]);
@@ -145,22 +100,33 @@ export function ItemDrawer({
   useEffect(() => {
     setTitleDraft(null);
     setDescDraft(null);
+    setScopeDraft(null);
     setOwnerOpen(false);
   }, [item.id]);
 
   const saveTitle = () => {
     if (titleDraft != null) {
       const next = titleDraft.trim();
-      if (next && next !== item.title) onEdit(item.id, { title: next });
+      if (next && next !== item.title) editItem(item.id, { title: next });
     }
     setTitleDraft(null);
   };
 
   const saveDescription = () => {
     if (descDraft != null && descDraft !== (item.description ?? "")) {
-      onEdit(item.id, { description: descDraft });
+      editItem(item.id, { description: descDraft });
     }
     setDescDraft(null);
+  };
+
+  const saveScopePaths = () => {
+    if (scopeDraft != null) {
+      const next = parseScopePaths(scopeDraft);
+      if (JSON.stringify(next) !== JSON.stringify(item.scopePaths)) {
+        editItem(item.id, { scopePaths: next });
+      }
+    }
+    setScopeDraft(null);
   };
 
   const openOwnerPicker = () => {
@@ -170,43 +136,43 @@ export function ItemDrawer({
 
   const assignOwner = (actorId: string | null) => {
     setOwnerOpen(false);
-    if (actorId !== item.owner) onEdit(item.id, { owner: actorId });
+    if (actorId !== item.owner) editItem(item.id, { owner: actorId });
   };
 
   const actions = {
     proposed: (
       <>
-        <ActionButton label="Approve" tone="approve" onClick={() => onApprove(item.id)} />
-        <ActionButton label="Deny" tone="deny" onClick={() => onDeny(item.id)} />
+        <ActionButton label="Approve" tone="approve" onClick={() => approveItem(item.id)} />
+        <ActionButton label="Deny" tone="deny" onClick={() => denyItem(item.id)} />
         <ActionButton label="Discuss" tone="neutral" onClick={() => onDiscuss(item)} />
       </>
     ),
     approved: (
       <>
-        <ActionButton label="Start" tone="primary" onClick={() => onStart(item.id)} />
-        <ActionButton label="Delete" tone="destructive" onClick={() => onDelete(item.id)} />
+        <ActionButton label="Start" tone="primary" onClick={() => startItem(item.id)} />
+        <ActionButton label="Delete" tone="destructive" onClick={() => deleteItem(item.id)} />
       </>
     ),
     in_progress: (
       <>
-        <ActionButton label="Complete" tone="approve" onClick={() => onComplete(item.id)} />
-        <ActionButton label="Delete" tone="destructive" onClick={() => onDelete(item.id)} />
+        <ActionButton label="Complete" tone="approve" onClick={() => completeItem(item.id)} />
+        <ActionButton label="Delete" tone="destructive" onClick={() => deleteItem(item.id)} />
       </>
     ),
     blocked: (
       <>
-        <ActionButton label="Complete" tone="approve" onClick={() => onComplete(item.id)} />
-        <ActionButton label="Delete" tone="destructive" onClick={() => onDelete(item.id)} />
+        <ActionButton label="Complete" tone="approve" onClick={() => completeItem(item.id)} />
+        <ActionButton label="Delete" tone="destructive" onClick={() => deleteItem(item.id)} />
       </>
     ),
     done: (
       <>
-        <ActionButton label="Reopen" tone="primary" onClick={() => onReopen(item.id)} />
-        <ActionButton label="Delete" tone="destructive" onClick={() => onDelete(item.id)} />
+        <ActionButton label="Reopen" tone="primary" onClick={() => reopenItem(item.id)} />
+        <ActionButton label="Delete" tone="destructive" onClick={() => deleteItem(item.id)} />
       </>
     ),
     denied: (
-      <ActionButton label="Delete" tone="destructive" onClick={() => onDelete(item.id)} />
+      <ActionButton label="Delete" tone="destructive" onClick={() => deleteItem(item.id)} />
     ),
   }[item.status];
 
@@ -217,16 +183,17 @@ export function ItemDrawer({
           {item.ref}
         </span>
         <span
-          className={`text-[11px] font-bold tracking-wide uppercase ${STATUS_BADGE[item.status]}`}
+          className={`text-[11px] font-bold tracking-wide uppercase ${ITEM_STATUS_BADGE[item.status]}`}
         >
-          {STATUS_LABEL[item.status]}
+          {ITEM_STATUS_LABEL[item.status]}
         </span>
         <button
           onClick={onClose}
+          aria-label="Close item details"
           className="ml-auto rounded p-1 text-muted hover:bg-input hover:text-body"
           title="Close"
         >
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </button>
@@ -235,6 +202,7 @@ export function ItemDrawer({
       {titleDraft != null ? (
         <input
           autoFocus
+          aria-label="Item title"
           value={titleDraft}
           onChange={(e) => setTitleDraft(e.target.value)}
           onBlur={saveTitle}
@@ -263,6 +231,7 @@ export function ItemDrawer({
         {descDraft != null ? (
           <textarea
             autoFocus
+            aria-label="Item description"
             value={descDraft}
             onChange={(e) => setDescDraft(e.target.value)}
             onBlur={saveDescription}
@@ -310,6 +279,48 @@ export function ItemDrawer({
         </div>
       )}
 
+      <div className="mb-3">
+        <Label>Scope paths</Label>
+        {scopeDraft != null ? (
+          <textarea
+            autoFocus
+            aria-label="Scope paths, one per line or comma-separated"
+            value={scopeDraft}
+            onChange={(e) => setScopeDraft(e.target.value)}
+            onBlur={saveScopePaths}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveScopePaths();
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setScopeDraft(null);
+              }
+            }}
+            rows={3}
+            className="w-full resize-none rounded bg-input px-2 py-1.5 font-mono text-xs text-body outline-none"
+            placeholder={'One path per line; end with "/" for a subtree. Empty = unrestricted.'}
+            maxLength={2000}
+          />
+        ) : (
+          <button
+            onClick={() => setScopeDraft((item.scopePaths ?? []).join("\n"))}
+            className="w-full rounded px-1 py-0.5 text-left hover:bg-input/50"
+            title="Click to edit"
+          >
+            {item.scopePaths && item.scopePaths.length > 0 ? (
+              <ul className="font-mono text-xs text-body">
+                {item.scopePaths.map((path) => (
+                  <li key={path} className="break-all">
+                    {path}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className="text-xs text-faint">Unrestricted</span>
+            )}
+          </button>
+        )}
+      </div>
+
       <div className="relative mb-3">
         <Label>Owner</Label>
         <button
@@ -344,11 +355,7 @@ export function ItemDrawer({
                 >
                   <Avatar name={actor.displayName} size={18} />
                   {actor.displayName}
-                  {actor.kind === "agent" && (
-                    <span className="rounded bg-blurple px-1 py-px text-[9px] font-bold text-mention-text">
-                      AGENT
-                    </span>
-                  )}
+                  {actor.kind === "agent" && <AgentBadge />}
                 </button>
               ))
             )}

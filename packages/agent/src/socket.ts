@@ -31,12 +31,20 @@ export class AgentSocket {
     });
 
     this.socket.on("message", (data) => {
+      const raw = data.toString();
+      let event: ServerEvent;
       try {
-        const event = JSON.parse(data.toString()) as ServerEvent;
-        for (const l of this.listeners) l(event);
-      } catch {
-        // ignore malformed frames
+        event = JSON.parse(raw) as ServerEvent;
+      } catch (err) {
+        // JSON.stringify escapes control characters so the frame can't forge log lines.
+        console.warn(
+          "[agent ws] dropping malformed frame:",
+          err instanceof Error ? err.message : err,
+          JSON.stringify(raw.slice(0, 200)),
+        );
+        return;
       }
+      for (const l of this.listeners) l(event);
     });
 
     this.socket.on("close", () => {

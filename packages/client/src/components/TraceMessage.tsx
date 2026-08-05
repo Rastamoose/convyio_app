@@ -1,11 +1,8 @@
 import { useMemo, useState } from "react";
 import type { ChatMessage, TraceChunk } from "@workspace/shared";
+import { formatElapsed } from "../lib/format";
 import { Avatar } from "./Avatar";
-
-function formatElapsed(ms: number): string {
-  const s = Math.max(1, Math.round(ms / 1000));
-  return `${s}s`;
-}
+import { AgentBadge } from "./AgentBadge";
 
 function Chevron({ expanded }: { expanded: boolean }) {
   return (
@@ -55,9 +52,7 @@ export function TraceMessageLive({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-body hover:underline">{agentName}</span>
-          <span className="rounded bg-blurple px-1 py-px text-[10px] font-bold text-mention-text">
-            AGENT
-          </span>
+          <AgentBadge />
         </div>
         <div className="mb-1 flex items-center gap-2 text-sm text-muted">
           <span className="relative flex h-2.5 w-2.5">

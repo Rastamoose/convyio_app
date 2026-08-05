@@ -4,14 +4,10 @@ import { ProposalCard } from "./ProposalCard";
 
 export function ApprovalQueue({
   items,
-  onApprove,
-  onDeny,
   onDiscuss,
   onClose,
 }: {
   items: BoardItem[];
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onClose: () => void;
 }) {
@@ -42,13 +38,7 @@ export function ApprovalQueue({
       </h2>
       <div className="space-y-2">
         {items.map((item) => (
-          <ProposalCard
-            key={item.id}
-            item={item}
-            onApprove={onApprove}
-            onDeny={onDeny}
-            onDiscuss={onDiscuss}
-          />
+          <ProposalCard key={item.id} item={item} onDiscuss={onDiscuss} />
         ))}
       </div>
     </div>

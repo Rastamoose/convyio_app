@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Actor, ActorKind } from "@workspace/shared";
+import type { Actor, ParticipantKind } from "@workspace/shared";
 
 /**
- * SQLite persistence for the board (spec allows SQLite for local dev; the
- * schema mirrors the Postgres DDL). Chat messages remain in JSON storage —
- * only board data is relational.
+ * Workspace persistence: one SQLite file holding actors, chat messages, and
+ * the board. board_events is append-only — it is both the audit trail and the
+ * realtime feed, so rows are never updated or deleted. Per-server refs come
+ * from ref_counters so concurrent creates still allocate unique sequential
+ * refs inside their transactions.
  */
 
 const SCHEMA = `
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS board_items (
   owner            TEXT REFERENCES actors(id),
   proposal_why     TEXT,
   proposal_effect  TEXT,
+  scope_paths      TEXT,
   created_at       INTEGER NOT NULL,
   approved_at      INTEGER,
   started_at       INTEGER,
@@ -60,11 +63,27 @@ CREATE TABLE IF NOT EXISTS ref_counters (
   n          INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+  id           TEXT PRIMARY KEY,
+  author_id    TEXT NOT NULL,
+  author_name  TEXT NOT NULL,
+  author_kind  TEXT NOT NULL CHECK (author_kind IN ('human', 'agent')),
+  content      TEXT NOT NULL,
+  channel      TEXT NOT NULL DEFAULT 'general',
+  run_id       TEXT,
+  trace        TEXT,
+  created_at   INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_server_status ON board_items (server_id, status);
 CREATE INDEX IF NOT EXISTS idx_events_server_created ON board_events (server_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages (channel, created_at);
 `;
 
-export class BoardDb {
+/** Columns added after first release; applied to databases created before them. */
+const MIGRATIONS = [`ALTER TABLE board_items ADD COLUMN scope_paths TEXT`];
+
+export class WorkspaceDb {
   readonly db: DatabaseSync;
   readonly serverId: string;
 
@@ -74,8 +93,8 @@ export class BoardDb {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
+    this.applyMigrations();
     this.serverId = this.ensureServer();
-    this.seed();
   }
 
   /** Run fn inside a transaction; rolls back on throw. */
@@ -108,7 +127,7 @@ export class BoardDb {
   }
 
   /** Find or create a persistent actor identity for a joining participant. */
-  upsertActor(kind: ActorKind, displayName: string): Actor {
+  upsertActor(kind: ParticipantKind, displayName: string): Actor {
     const existing = this.db
       .prepare(
         `SELECT * FROM actors WHERE server_id = ? AND kind = ? AND lower(display_name) = lower(?)`,
@@ -136,13 +155,25 @@ export class BoardDb {
     return row ? toActor(row) : null;
   }
 
-  listActors(kind?: ActorKind): Actor[] {
+  listActors(kind?: ParticipantKind): Actor[] {
     const rows = (
       kind
         ? this.db.prepare(`SELECT * FROM actors WHERE server_id = ? AND kind = ?`).all(this.serverId, kind)
         : this.db.prepare(`SELECT * FROM actors WHERE server_id = ?`).all(this.serverId)
     ) as unknown as ActorRow[];
     return rows.map(toActor);
+  }
+
+  private applyMigrations(): void {
+    for (const migration of MIGRATIONS) {
+      try {
+        this.db.exec(migration);
+      } catch (err) {
+        // "duplicate column" means the schema is already current; anything
+        // else is a real failure and must abort startup.
+        if (!(err instanceof Error) || !err.message.includes("duplicate column")) throw err;
+      }
+    }
   }
 
   private ensureServer(): string {
@@ -155,17 +186,6 @@ export class BoardDb {
     return id;
   }
 
-  /** Seed data: two humans and one agent actor (idempotent). */
-  private seed(): void {
-    const count = this.db
-      .prepare(`SELECT count(*) AS c FROM actors WHERE server_id = ?`)
-      .get(this.serverId) as { c: number };
-    if (count.c > 0) return;
-    this.upsertActor("human", "harris");
-    this.upsertActor("human", "dana");
-    this.upsertActor("agent", "noodle");
-  }
-
   close(): void {
     this.db.close();
   }
@@ -173,7 +193,7 @@ export class BoardDb {
 
 interface ActorRow {
   id: string;
-  kind: ActorKind;
+  kind: ParticipantKind;
   display_name: string;
   server_id: string;
 }

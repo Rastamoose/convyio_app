@@ -1,59 +1,32 @@
 import { useEffect, useState } from "react";
-import type {
-  Actor,
-  BoardItem,
-  BoardItemEvent,
-  ItemStatus,
-} from "@workspace/shared";
-import type { ActiveRun, BoardItemEdit } from "../hooks/useWorkspace";
+import type { BoardItem, ItemStatus } from "@workspace/shared";
+import { useWorkspace } from "../hooks/WorkspaceContext";
+import { ITEM_STATUS_LABEL } from "../lib/status";
 import { BoardCard } from "./BoardCard";
 import { ItemDrawer } from "./ItemDrawer";
 
-const COLUMNS: { status: ItemStatus; label: string }[] = [
-  { status: "proposed", label: "Proposed" },
-  { status: "approved", label: "To do" },
-  { status: "in_progress", label: "In progress" },
-  { status: "blocked", label: "Blocked" },
-  { status: "done", label: "Done" },
+const COLUMN_STATUSES: ItemStatus[] = [
+  "proposed",
+  "approved",
+  "in_progress",
+  "blocked",
+  "done",
 ];
 
 export function BoardView({
-  board,
-  activeRuns,
   highlightRef,
   openItemId,
   onOpenItem,
-  onCreate,
-  onApprove,
-  onDeny,
   onDiscuss,
-  onStart,
-  onComplete,
-  onReopen,
-  onDelete,
-  onEdit,
   onJumpToTrace,
-  fetchActors,
-  fetchItemEvents,
 }: {
-  board: BoardItem[];
-  activeRuns: ActiveRun[];
   highlightRef: string | null;
   openItemId: string | null;
   onOpenItem: (itemId: string | null) => void;
-  onCreate: (title: string, description?: string) => void;
-  onApprove: (itemId: string) => void;
-  onDeny: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
-  onStart: (itemId: string) => void;
-  onComplete: (itemId: string) => void;
-  onReopen: (itemId: string) => void;
-  onDelete: (itemId: string) => void;
-  onEdit: (itemId: string, fields: BoardItemEdit) => void;
   onJumpToTrace: (runId: string) => void;
-  fetchActors: () => Promise<Actor[]>;
-  fetchItemEvents: (itemId: string) => Promise<BoardItemEvent[]>;
 }) {
+  const { board, createBoardItem } = useWorkspace();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
@@ -77,15 +50,15 @@ export function BoardView({
 
   const submit = () => {
     if (!canSubmit) return;
-    onCreate(title.trim(), description.trim() || undefined);
+    createBoardItem(title.trim(), description.trim() || undefined);
     setTitle("");
     setDescription("");
     setDescriptionOpen(false);
   };
 
-  const columns = showDenied
-    ? [...COLUMNS, { status: "denied" as ItemStatus, label: "Denied" }]
-    : COLUMNS;
+  const columns: ItemStatus[] = showDenied
+    ? [...COLUMN_STATUSES, "denied"]
+    : COLUMN_STATUSES;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -101,6 +74,7 @@ export function BoardView({
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}
+            aria-label="New board item title"
             className="w-64 rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
             placeholder="Add a board item…"
             maxLength={200}
@@ -136,6 +110,7 @@ export function BoardView({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
+            aria-label="New board item description"
             className="w-full resize-none rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
             placeholder="Description (optional)"
             maxLength={1000}
@@ -144,7 +119,7 @@ export function BoardView({
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
-        {columns.map(({ status, label }) => {
+        {columns.map((status) => {
           const items = board.filter((i) => i.status === status);
           const proposed = status === "proposed";
           return (
@@ -160,7 +135,7 @@ export function BoardView({
                     proposed ? "text-dead" : "text-muted"
                   }`}
                 >
-                  {label}
+                  {ITEM_STATUS_LABEL[status]}
                 </span>
                 <span className="rounded-full bg-input px-1.5 py-px text-[10px] font-bold text-muted">
                   {items.length}
@@ -174,11 +149,8 @@ export function BoardView({
                     <BoardCard
                       key={item.id}
                       item={item}
-                      activeRuns={activeRuns}
                       highlighted={highlightRef === item.ref}
                       onOpen={onOpenItem}
-                      onApprove={onApprove}
-                      onDeny={onDeny}
                       onDiscuss={onDiscuss}
                       onJumpToTrace={onJumpToTrace}
                     />
@@ -194,16 +166,7 @@ export function BoardView({
         <ItemDrawer
           item={openItem}
           onClose={() => onOpenItem(null)}
-          onApprove={onApprove}
-          onDeny={onDeny}
           onDiscuss={onDiscuss}
-          onStart={onStart}
-          onComplete={onComplete}
-          onReopen={onReopen}
-          onDelete={onDelete}
-          onEdit={onEdit}
-          fetchActors={fetchActors}
-          fetchItemEvents={fetchItemEvents}
         />
       )}
     </div>

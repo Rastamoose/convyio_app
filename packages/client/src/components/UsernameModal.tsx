@@ -15,10 +15,14 @@ export function UsernameModal({ onJoin }: { onJoin: (name: string) => void }) {
         <p className="mb-6 text-muted">
           One room, humans and agents side by side. Pick a display name.
         </p>
-        <label className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase">
+        <label
+          htmlFor="display-name"
+          className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase"
+        >
           Display name
         </label>
         <input
+          id="display-name"
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
