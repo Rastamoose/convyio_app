@@ -86,11 +86,14 @@ export function Sidebar({
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
 }) {
-  const { participants, self, channels, board, setStatus } = useWorkspace();
+  const { participants, self, channels, board, setStatus, createChannel } =
+    useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const [roomDraft, setRoomDraft] = useState("");
 
   const sorted = [...participants].sort(
     (a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name),
@@ -102,6 +105,21 @@ export function Sidebar({
     setQueueOpen(false);
     setSelectedId(null);
     onDiscuss(item);
+  };
+
+  const submitRoom = async () => {
+    const name = roomDraft.trim();
+    if (!name) {
+      setCreatingRoom(false);
+      return;
+    }
+    const created = await createChannel(name);
+    // On failure the input stays open with the draft; the toast has the error.
+    if (created) {
+      setCreatingRoom(false);
+      setRoomDraft("");
+      onSelectChannel(created);
+    }
   };
 
   return (
@@ -139,9 +157,37 @@ export function Sidebar({
 
       {/* Rooms */}
       <section className="min-h-0 flex-1 overflow-y-auto border-t border-divider px-2 pt-3">
-        <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase">
-          Rooms
-        </h2>
+        <div className="mb-1 flex items-center justify-between px-2">
+          <h2 className="text-[11px] font-bold tracking-wide text-muted uppercase">
+            Rooms
+          </h2>
+          <button
+            aria-label="Create a room"
+            onClick={() => {
+              setRoomDraft("");
+              setCreatingRoom(true);
+            }}
+            className="rounded px-1 text-sm leading-none text-muted hover:text-body"
+          >
+            +
+          </button>
+        </div>
+        {creatingRoom && (
+          <input
+            autoFocus
+            aria-label="New room name"
+            value={roomDraft}
+            onChange={(e) => setRoomDraft(e.target.value)}
+            onBlur={() => setCreatingRoom(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setCreatingRoom(false);
+              if (e.key === "Enter") void submitRoom();
+            }}
+            maxLength={32}
+            placeholder="new-room"
+            className="mb-0.5 w-full rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none placeholder:text-faint"
+          />
+        )}
         <div role="tablist" aria-label="Rooms">
           {channels.map((c) => (
             <button

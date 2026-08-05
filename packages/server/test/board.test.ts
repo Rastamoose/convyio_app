@@ -5,6 +5,7 @@ import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import type { Actor, BoardItem } from "@workspace/shared";
 import { WorkspaceDb } from "../src/db";
+import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
@@ -215,12 +216,13 @@ describe("T10: full-stack approval fan-out", async () => {
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
-    const handler = createApiHandler(db, service, sessions, "*");
+    const channels = new Channels(db);
+    channels.seed([{ name: "general", isDemo: false }]);
+    const handler = createApiHandler(db, service, sessions, channels, "*");
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, new Roster(db), new MessageStore(db), sessions, toolman, {
+    const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, sessions, toolman, {
       apiUrl: "",
       serverId: db.serverId,
-      channels: ["general"],
       demoChannels: [],
     });
     service.onEvent = (e) => hub.broadcastBoardEvent(e);

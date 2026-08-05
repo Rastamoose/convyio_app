@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { Actor, BoardEventEnvelope } from "@workspace/shared";
 import { WorkspaceDb } from "../src/db";
+import { Channels } from "../src/chat/Channels";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
@@ -9,6 +10,7 @@ export interface Env {
   db: WorkspaceDb;
   service: BoardService;
   sessions: Sessions;
+  channels: Channels;
   baseUrl: string;
   envelopes: BoardEventEnvelope[];
   actor(kind: "human" | "agent", name: string): { actor: Actor; token: string };
@@ -27,9 +29,11 @@ export async function createEnv(): Promise<Env> {
   const db = new WorkspaceDb(":memory:");
   const service = new BoardService(db);
   const sessions = new Sessions();
+  const channels = new Channels(db);
+  channels.seed([{ name: "general", isDemo: false }]);
   const envelopes: BoardEventEnvelope[] = [];
   service.onEvent = (e) => envelopes.push(e);
-  const handler = createApiHandler(db, service, sessions, "*");
+  const handler = createApiHandler(db, service, sessions, channels, "*");
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
@@ -38,6 +42,7 @@ export async function createEnv(): Promise<Env> {
     db,
     service,
     sessions,
+    channels,
     baseUrl,
     envelopes,
     actor(kind, name) {

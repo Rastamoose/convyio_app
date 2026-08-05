@@ -5,6 +5,7 @@ import { config } from "./config";
 import { Hub } from "./hub";
 import { Roster } from "./roster";
 import { WorkspaceDb } from "./db";
+import { Channels } from "./chat/Channels";
 import { MessageStore } from "./chat/MessageStore";
 import { BoardService } from "./board/BoardService";
 import { Toolman } from "./board/Toolman";
@@ -25,7 +26,15 @@ async function main() {
   const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
 
-  const handleApi = createApiHandler(db, service, sessions, config.corsOrigin);
+  const scripts = await loadDemoScripts(path.join(ASSETS_DIR, "demo/scripts"));
+  const demoChannels = [...scripts.keys()].sort();
+  const channels = new Channels(db);
+  channels.seed([
+    { name: "general", isDemo: false },
+    ...demoChannels.map((name) => ({ name, isDemo: true })),
+  ]);
+
+  const handleApi = createApiHandler(db, service, sessions, channels, config.corsOrigin);
   const server = http.createServer(async (req, res) => {
     const handled = await handleApi(req, res);
     if (!handled) {
@@ -34,17 +43,15 @@ async function main() {
     }
   });
 
-  const scripts = await loadDemoScripts(path.join(ASSETS_DIR, "demo/scripts"));
-  const demoChannels = [...scripts.keys()];
   const roster = new Roster(db);
   const apiUrl = `http://localhost:${config.port}`;
-  const hub = new Hub(server, roster, messages, sessions, toolman, {
+  const hub = new Hub(server, roster, messages, channels, sessions, toolman, {
     apiUrl,
     serverId: db.serverId,
-    channels: ["general", ...demoChannels],
     demoChannels,
   });
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
+  channels.onCreated = (name) => hub.broadcastChannelCreated(name);
   new DemoOrchestrator(
     hub,
     roster,

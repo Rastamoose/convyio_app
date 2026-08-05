@@ -38,6 +38,11 @@ export function useConnection(
         case "presence_sync":
           setParticipants(event.participants);
           break;
+        case "channel_created":
+          setChannels((prev) =>
+            prev.includes(event.channel) ? prev : [...prev, event.channel],
+          );
+          break;
       }
       onEventRef.current(event);
     });

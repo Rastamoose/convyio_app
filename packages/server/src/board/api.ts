@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Actor, ItemStatus } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { Sessions } from "./sessions";
+import type { Channels } from "../chat/Channels";
 import type { WorkspaceDb } from "../db";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
@@ -16,6 +17,8 @@ const createBodySchema = z.object({
   // I2: any supplied status is ignored; parsed here only so it is dropped.
   status: z.unknown().optional(),
 });
+
+const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
@@ -32,6 +35,7 @@ export function createApiHandler(
   db: WorkspaceDb,
   service: BoardService,
   sessions: Sessions,
+  channels: Channels,
   corsOrigin: string,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
@@ -49,7 +53,7 @@ export function createApiHandler(
 
     try {
       const actor = authenticate(req, db, sessions);
-      await route(req, res, url, actor, service, db);
+      await route(req, res, url, actor, service, db, channels);
     } catch (err) {
       if (err instanceof ApiError) {
         json(res, err.status, { error: err.code, message: err.message });
@@ -71,6 +75,7 @@ async function route(
   actor: Actor,
   service: BoardService,
   db: WorkspaceDb,
+  channels: Channels,
 ): Promise<void> {
   const method = req.method ?? "GET";
   const parts = url.pathname.split("/").filter(Boolean); // ["api", "board", "items", ...]
@@ -78,6 +83,12 @@ async function route(
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
     return json(res, 200, { actors: db.listActors() });
+  }
+
+  // POST /api/channels — any signed-in human can add a channel.
+  if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
+    const body = channelBodySchema.parse(await readBody(req));
+    return json(res, 201, { channel: { name: channels.create(actor, body.name) } });
   }
 
   if (parts[1] !== "board" || parts[2] !== "items") {

@@ -14,6 +14,7 @@ import {
   type SummaryEvent,
   type TraceChunk,
 } from "@workspace/shared";
+import type { Channels } from "./chat/Channels";
 import type { MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
@@ -27,7 +28,6 @@ interface Connection {
 export interface HubOptions {
   apiUrl: string;
   serverId: string;
-  channels: string[];
   demoChannels: string[];
 }
 
@@ -53,6 +53,7 @@ export class Hub {
     server: HttpServer,
     private roster: Roster,
     private messages: MessageStore,
+    private channels: Channels,
     private sessions: Sessions,
     private toolman: Toolman,
     private options: HubOptions,
@@ -64,6 +65,10 @@ export class Hub {
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
     this.broadcast(envelope);
     this.onBoardEvent?.(envelope);
+  }
+
+  broadcastChannelCreated(name: string): void {
+    this.broadcast({ type: "channel_created", channel: name });
   }
 
   /** The single message-posting path: persist, broadcast, notify observers. */
@@ -149,9 +154,15 @@ export class Hub {
       return;
     }
     switch (event.type) {
-      case "message":
-        this.postMessage(participant, event.content, event.channel ?? "general");
+      case "message": {
+        const channel = event.channel ?? "general";
+        if (!this.channels.exists(channel)) {
+          this.send(conn, { type: "error", error: `unknown channel: ${channel}` });
+          break;
+        }
+        this.postMessage(participant, event.content, channel);
         break;
+      }
       case "demo_start":
         this.onDemoStart?.(event.channel);
         break;
@@ -206,7 +217,7 @@ export class Hub {
       self: participant,
       history: this.messages.list(),
       participants: this.roster.list(),
-      channels: this.options.channels,
+      channels: this.channels.list(),
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: this.options.apiUrl,

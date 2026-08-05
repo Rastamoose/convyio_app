@@ -10,6 +10,7 @@ import { isBoardEnvelope } from "@workspace/shared";
 import { useConnection } from "./useConnection";
 import { useChatMessages } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
+import { useApiSession } from "./useApiSession";
 import { useBoard, type BoardItemEdit, type BoardLine } from "./useBoard";
 import { useToasts, type Toast } from "./useToasts";
 
@@ -31,6 +32,8 @@ export interface WorkspaceState {
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
   startDemo: (channel: string) => void;
+  /** Resolves to the created channel's normalized name, or null on failure. */
+  createChannel: (name: string) => Promise<string | null>;
   createBoardItem: (title: string, description?: string) => void;
   approveItem: (itemId: string) => void;
   denyItem: (itemId: string) => void;
@@ -69,7 +72,8 @@ export function WorkspaceProvider({
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const chat = useChatMessages();
   const traces = useAgentTraces();
-  const board = useBoard(pushToast);
+  const api = useApiSession();
+  const board = useBoard(pushToast, api);
 
   const connection = useConnection(name, (event) => {
     if (isBoardEnvelope(event)) {
@@ -80,7 +84,9 @@ export function WorkspaceProvider({
       case "welcome":
         chat.replaceAll(event.history);
         traces.reset();
-        board.startSession(event.apiUrl, event.token);
+        // The session must be bound before the board loads its snapshot.
+        api.start(event.apiUrl, event.token);
+        board.startSession();
         break;
       case "message":
         chat.append(event.message);
@@ -105,6 +111,26 @@ export function WorkspaceProvider({
     }
   });
 
+  const createChannel = async (name: string): Promise<string | null> => {
+    const request = api.fetch("/api/channels", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    if (!request) return null;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not create the channel: ${await api.errorMessage(res)}`);
+        return null;
+      }
+      const data = (await res.json()) as { channel: { name: string } };
+      return data.channel.name;
+    } catch (err) {
+      pushToast(`Could not create the channel: ${String(err)}`);
+      return null;
+    }
+  };
+
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
@@ -127,6 +153,7 @@ export function WorkspaceProvider({
     interrupt: (target, content) =>
       connection.send({ type: "interrupt", target, content }),
     startDemo: (channel) => connection.send({ type: "demo_start", channel }),
+    createChannel,
     createBoardItem: board.createItem,
     approveItem: board.approve,
     denyItem: board.deny,

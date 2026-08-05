@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS ref_counters (
   n          INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS channels (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  created_by  TEXT REFERENCES actors(id), -- NULL = system-seeded
+  is_demo     INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS messages (
   id           TEXT PRIMARY KEY,
   author_id    TEXT NOT NULL,

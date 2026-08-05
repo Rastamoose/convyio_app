@@ -189,6 +189,12 @@ export interface ClearBroadcast {
   channel?: string;
 }
 
+/** A new chat channel exists; clients append it to their channel list. */
+export interface ChannelCreatedEvent {
+  type: "channel_created";
+  channel: string;
+}
+
 export interface InterruptBroadcast {
   type: "interrupt";
   authorName: string;
@@ -209,6 +215,7 @@ export type ServerEvent =
   | TraceStartBroadcast
   | TraceChunkBroadcast
   | ClearBroadcast
+  | ChannelCreatedEvent
   | InterruptBroadcast
   | RunEndBroadcast
   | ActionResultEvent

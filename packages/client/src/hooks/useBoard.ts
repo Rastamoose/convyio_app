@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type {
   Actor,
   BoardEventEnvelope,
@@ -6,6 +6,7 @@ import type {
   BoardItemEvent,
   ItemStatus,
 } from "@workspace/shared";
+import type { ApiSession } from "./useApiSession";
 
 /** Compact system line derived from a board event, interleaved into chat. */
 export interface BoardLine {
@@ -41,43 +42,17 @@ function boardLineText(envelope: BoardEventEnvelope): string | null {
 }
 
 /**
- * Board state plus its HTTP API client. Mutations update the local board
+ * Board state and its API calls. Mutations update the local board
  * optimistically and roll back on failure; every failure is reported through
  * `onError` (and logged) so the user sees it.
  */
-export function useBoard(onError: (message: string) => void) {
-  const tokenRef = useRef<string | null>(null);
-  const apiUrlRef = useRef<string | null>(null);
+export function useBoard(onError: (message: string) => void, api: ApiSession) {
   const [items, setItems] = useState<BoardItem[]>([]);
   const [lines, setLines] = useState<BoardLine[]>([]);
 
   const fail = (what: string, detail: string) => {
     console.warn("[board]", what, detail);
     onError(`${what}: ${detail}`);
-  };
-
-  const responseError = async (res: Response): Promise<string> => {
-    const data = (await res.json().catch(() => null)) as {
-      message?: string;
-    } | null;
-    return data?.message ?? `request failed: ${res.status}`;
-  };
-
-  const apiFetch = (
-    path: string,
-    init?: RequestInit,
-  ): Promise<Response> | null => {
-    const token = tokenRef.current;
-    const apiUrl = apiUrlRef.current;
-    if (!token || !apiUrl) return null;
-    return fetch(`${apiUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
-    });
   };
 
   const upsertItem = (item: BoardItem) => {
@@ -103,7 +78,7 @@ export function useBoard(onError: (message: string) => void) {
     );
     const rollback = () =>
       setItems((prev) => prev.map((i) => (i.id === itemId ? previous : i)));
-    const request = apiFetch(`/api/board/items/${itemId}/${action}`, {
+    const request = api.fetch(`/api/board/items/${itemId}/${action}`, {
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -111,7 +86,7 @@ export function useBoard(onError: (message: string) => void) {
     void request
       .then(async (res) => {
         if (res.ok) return;
-        fail(`Could not ${action} ${previous.ref}`, await responseError(res));
+        fail(`Could not ${action} ${previous.ref}`, await api.errorMessage(res));
         rollback();
       })
       .catch((err) => {
@@ -123,16 +98,14 @@ export function useBoard(onError: (message: string) => void) {
   return {
     items,
     lines,
-    /** Welcome frame arrived: bind the API session and load the snapshot. */
-    startSession: (apiUrl: string, token: string) => {
-      apiUrlRef.current = apiUrl;
-      tokenRef.current = token;
+    /** Welcome frame arrived (API session already bound): load the snapshot. */
+    startSession: () => {
       setLines([]);
-      const request = apiFetch("/api/board/items?include_deleted=true");
+      const request = api.fetch("/api/board/items?include_deleted=true");
       if (!request) return;
       void request
         .then(async (res) => {
-          if (!res.ok) throw new Error(await responseError(res));
+          if (!res.ok) throw new Error(await api.errorMessage(res));
           return res.json() as Promise<{ items: BoardItem[] }>;
         })
         .then(({ items: loaded }) =>
@@ -152,7 +125,7 @@ export function useBoard(onError: (message: string) => void) {
       }
     },
     createItem: (title: string, description?: string) => {
-      const request = apiFetch("/api/board/items", {
+      const request = api.fetch("/api/board/items", {
         method: "POST",
         body: JSON.stringify({ title, description }),
       });
@@ -160,7 +133,7 @@ export function useBoard(onError: (message: string) => void) {
       void request
         .then(async (res) => {
           if (!res.ok) {
-            fail("Could not create the item", await responseError(res));
+            fail("Could not create the item", await api.errorMessage(res));
             return;
           }
           const data = (await res.json().catch(() => null)) as {
@@ -183,14 +156,14 @@ export function useBoard(onError: (message: string) => void) {
         setItems((prev) =>
           prev.some((i) => i.id === itemId) ? prev : [previous, ...prev],
         );
-      const request = apiFetch(`/api/board/items/${itemId}`, {
+      const request = api.fetch(`/api/board/items/${itemId}`, {
         method: "DELETE",
       });
       if (!request) return;
       void request
         .then(async (res) => {
           if (res.ok) return;
-          fail(`Could not delete ${previous.ref}`, await responseError(res));
+          fail(`Could not delete ${previous.ref}`, await api.errorMessage(res));
           restore();
         })
         .catch((err) => {
@@ -225,7 +198,7 @@ export function useBoard(onError: (message: string) => void) {
       );
       const rollback = () =>
         setItems((prev) => prev.map((i) => (i.id === itemId ? previous : i)));
-      const request = apiFetch(`/api/board/items/${itemId}`, {
+      const request = api.fetch(`/api/board/items/${itemId}`, {
         method: "PATCH",
         body: JSON.stringify(fields),
       });
@@ -233,7 +206,7 @@ export function useBoard(onError: (message: string) => void) {
       void request
         .then(async (res) => {
           if (!res.ok) {
-            fail(`Could not edit ${previous.ref}`, await responseError(res));
+            fail(`Could not edit ${previous.ref}`, await api.errorMessage(res));
             rollback();
             return;
           }
@@ -248,12 +221,12 @@ export function useBoard(onError: (message: string) => void) {
         });
     },
     fetchActors: async (): Promise<Actor[]> => {
-      const request = apiFetch("/api/actors");
+      const request = api.fetch("/api/actors");
       if (!request) return [];
       try {
         const res = await request;
         if (!res.ok) {
-          fail("Could not load actors", await responseError(res));
+          fail("Could not load actors", await api.errorMessage(res));
           return [];
         }
         const data = (await res.json()) as { actors?: Actor[] };
@@ -264,12 +237,12 @@ export function useBoard(onError: (message: string) => void) {
       }
     },
     fetchItemEvents: async (itemId: string): Promise<BoardItemEvent[]> => {
-      const request = apiFetch(`/api/board/items/${itemId}/events`);
+      const request = api.fetch(`/api/board/items/${itemId}/events`);
       if (!request) return [];
       try {
         const res = await request;
         if (!res.ok) {
-          fail("Could not load item activity", await responseError(res));
+          fail("Could not load item activity", await api.errorMessage(res));
           return [];
         }
         const data = (await res.json()) as { events?: BoardItemEvent[] };
