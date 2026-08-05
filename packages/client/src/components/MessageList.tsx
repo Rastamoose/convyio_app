@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
-import type { ChatMessage } from "@workspace/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Attachment, ChatMessage } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import type { BoardLine } from "../hooks/useBoard";
 import { formatDivider, formatShortTime, formatTimestamp } from "../lib/format";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
+import { AttachmentGallery } from "./AttachmentGallery";
+import { AttachmentLightbox } from "./AttachmentLightbox";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
 
 export function escapeRegex(s: string): string {
@@ -148,6 +150,8 @@ export function MessageList({
   } = useWorkspace();
   const selfName = self?.name ?? null;
   const bottomRef = useRef<HTMLDivElement>(null);
+  // The image currently enlarged; one lightbox serves the whole list.
+  const [lightbox, setLightbox] = useState<Attachment | null>(null);
 
   const messages = useMemo(
     () => allMessages.filter((m) => (m.channel ?? "general") === channel),
@@ -228,9 +232,19 @@ export function MessageList({
               <div className="w-10 shrink-0 pt-1 text-right text-[10px] text-faint opacity-0 group-hover:opacity-100">
                 {formatShortTime(m.timestamp)}
               </div>
-              <p className="min-w-0 leading-[1.375rem] break-words whitespace-pre-wrap">
-                {renderContent(m.content, mentionRegex, true, onRefClick)}
-              </p>
+              <div className="min-w-0 flex-1">
+                {m.content && (
+                  <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
+                    {renderContent(m.content, mentionRegex, true, onRefClick)}
+                  </p>
+                )}
+                {m.attachments && m.attachments.length > 0 && (
+                  <AttachmentGallery
+                    attachments={m.attachments}
+                    onImageClick={setLightbox}
+                  />
+                )}
+              </div>
             </div>
           ) : (
             <div
@@ -259,9 +273,17 @@ export function MessageList({
                     durationMs={runDurations.get(m.runId ?? "")}
                   />
                 ) : (
-                  <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
-                    {renderContent(m.content, mentionRegex, true, onRefClick)}
-                  </p>
+                  m.content && (
+                    <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
+                      {renderContent(m.content, mentionRegex, true, onRefClick)}
+                    </p>
+                  )
+                )}
+                {m.attachments && m.attachments.length > 0 && (
+                  <AttachmentGallery
+                    attachments={m.attachments}
+                    onImageClick={setLightbox}
+                  />
                 )}
               </div>
             </div>
@@ -278,6 +300,12 @@ export function MessageList({
         />
       ))}
       <div ref={bottomRef} />
+      {lightbox && (
+        <AttachmentLightbox
+          attachment={lightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }

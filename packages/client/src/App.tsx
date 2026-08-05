@@ -4,6 +4,7 @@ import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { UsernameModal } from "./components/UsernameModal";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar, type WorkspaceView } from "./components/TopBar";
+import { FileDropZone } from "./components/FileDropZone";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
@@ -72,8 +73,9 @@ function Workspace() {
     }, 50);
   };
 
-  const handleSend = (content: string) => {
-    if (content.startsWith("/")) {
+  const handleSend = (content: string, attachmentIds: string[]) => {
+    // Attachment-carrying sends are always messages, never slash commands.
+    if (attachmentIds.length === 0 && content.startsWith("/")) {
       const command = content.slice(1).split(/\s+/)[0].toLowerCase();
       switch (command) {
         case "clear":
@@ -89,7 +91,7 @@ function Workspace() {
         }
       }
     }
-    workspace.sendMessage(content, channel);
+    workspace.sendMessage(content, channel, attachmentIds);
   };
 
   return (
@@ -103,10 +105,12 @@ function Workspace() {
       <main className="flex min-w-0 flex-1 flex-col bg-chat">
         <TopBar channel={channel} view={view} onSetView={setView} />
         {view === "chat" ? (
-          <>
+          <FileDropZone
+            onFiles={(files) => workspace.addAttachments(channel, files)}
+          >
             <MessageList channel={channel} onRefClick={handleRefClick} />
             <MessageInput channel={channel} onSend={handleSend} prefill={prefill} />
-          </>
+          </FileDropZone>
         ) : (
           <BoardView
             highlightRef={highlightRef}

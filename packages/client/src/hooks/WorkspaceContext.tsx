@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
   Actor,
+  Attachment,
   BoardItem,
   BoardItemEvent,
   ChatMessage,
@@ -11,6 +12,10 @@ import { useConnection } from "./useConnection";
 import { useChatMessages } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
 import { useApiSession } from "./useApiSession";
+import {
+  useAttachmentDrafts,
+  type AttachmentDraft,
+} from "./useAttachmentDrafts";
 import { useBoard, type BoardItemEdit, type BoardLine } from "./useBoard";
 import { useToasts, type Toast } from "./useToasts";
 
@@ -27,7 +32,18 @@ export interface WorkspaceState {
   boardLines: BoardLine[];
   toasts: Toast[];
   dismissToast: (id: number) => void;
-  sendMessage: (content: string, channel?: string) => void;
+  sendMessage: (
+    content: string,
+    channel?: string,
+    attachmentIds?: string[],
+  ) => void;
+  attachmentDraftsFor: (channel: string) => AttachmentDraft[];
+  addAttachments: (channel: string, files: File[]) => void;
+  removeAttachment: (channel: string, localId: string) => void;
+  /** Clears the channel's drafts, returning the completed uploads' ids. */
+  takeReadyAttachmentIds: (channel: string) => string[];
+  /** Displayable absolute URL for an attachment's server-relative url. */
+  attachmentUrl: (attachment: Attachment) => string;
   setStatus: (status: string) => void;
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
@@ -73,6 +89,7 @@ export function WorkspaceProvider({
   const chat = useChatMessages();
   const traces = useAgentTraces();
   const api = useApiSession();
+  const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
 
   const connection = useConnection(name, (event) => {
@@ -146,8 +163,19 @@ export function WorkspaceProvider({
     boardLines: board.lines,
     toasts,
     dismissToast,
-    sendMessage: (content, channel) =>
-      connection.send({ type: "message", content, channel }),
+    sendMessage: (content, channel, attachmentIds) =>
+      connection.send({
+        type: "message",
+        content,
+        channel,
+        attachmentIds:
+          attachmentIds && attachmentIds.length > 0 ? attachmentIds : undefined,
+      }),
+    attachmentDraftsFor: attachments.draftsFor,
+    addAttachments: attachments.add,
+    removeAttachment: attachments.remove,
+    takeReadyAttachmentIds: attachments.takeReadyIds,
+    attachmentUrl: (attachment) => api.url(attachment.url),
     setStatus: (status) => connection.send({ type: "status_set", status }),
     clearMessages: () => connection.send({ type: "clear" }),
     interrupt: (target, content) =>

@@ -45,7 +45,9 @@ the wire protocol (websocket) and the HTTP board API.
 - `hooks/useApiSession` — the bearer-token fetch path, bound from the welcome
   frame; every HTTP call goes through it.
 - `hooks/useChatMessages`, `hooks/useBoard` (items + optimistic updates),
-  `hooks/useAgentTraces`, `hooks/useToasts` — one state domain each.
+  `hooks/useAgentTraces`, `hooks/useToasts`, `hooks/useAttachmentDrafts`
+  (per-channel pending uploads: immediate upload, previews, ready-id handoff
+  on send) — one state domain each.
 - `hooks/WorkspaceContext` — composes the hooks; components consume context,
   never the socket or fetch.
 - `lib/format.ts`, `lib/status.ts` — the only copies of date formatting and
