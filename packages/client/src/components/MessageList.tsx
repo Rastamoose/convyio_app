@@ -7,6 +7,7 @@ import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { AttachmentLightbox } from "./AttachmentLightbox";
+import { PinIcon, PinnedMessages } from "./PinnedMessages";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
 
 export function escapeRegex(s: string): string {
@@ -147,11 +148,50 @@ export function MessageList({
     runDurations,
     participants,
     self,
+    pinMessage,
   } = useWorkspace();
   const selfName = self?.name ?? null;
   const bottomRef = useRef<HTMLDivElement>(null);
   // The image currently enlarged; one lightbox serves the whole list.
   const [lightbox, setLightbox] = useState<Attachment | null>(null);
+  // The message briefly flashed after a jump from the pinned panel.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const highlightTimer = useRef<number | null>(null);
+
+  const jumpToMessage = (messageId: string) => {
+    document
+      .getElementById(`msg-${messageId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightId(messageId);
+    if (highlightTimer.current != null) {
+      window.clearTimeout(highlightTimer.current);
+    }
+    highlightTimer.current = window.setTimeout(
+      () => setHighlightId(null),
+      2000,
+    );
+  };
+
+  const pinButton = (m: ChatMessage) => {
+    const pinned = m.pinnedAt != null;
+    return (
+      <button
+        onClick={() => pinMessage(m.id, !pinned)}
+        title={pinned ? "Unpin message" : "Pin message"}
+        className="absolute -top-2.5 right-4 hidden rounded border border-divider bg-popup p-1 text-muted shadow-sm group-hover:block hover:text-body"
+      >
+        <PinIcon className="h-3.5 w-3.5" />
+      </button>
+    );
+  };
+
+  const pinnedIndicator = (m: ChatMessage) =>
+    m.pinnedAt != null && (
+      <span className="flex items-center gap-1 text-xs text-faint">
+        <PinIcon className="h-3 w-3" />
+        Pinned by {m.pinnedBy}
+      </span>
+    );
 
   const messages = useMemo(
     () => allMessages.filter((m) => (m.channel ?? "general") === channel),
@@ -182,6 +222,7 @@ export function MessageList({
 
   return (
     <div className="flex-1 overflow-y-auto pb-4">
+      <PinnedMessages messages={messages} onJump={jumpToMessage} />
       {messages.length === 0 && activeRuns.length === 0 && (
         <div className="px-4 pt-10">
           <h2 className="text-xl font-semibold text-body">{channel}</h2>
@@ -211,7 +252,11 @@ export function MessageList({
         }
         const { message: m, grouped, newDay } = entry;
         return (
-        <div key={m.id} id={`msg-${m.id}`}>
+        <div
+          key={m.id}
+          id={`msg-${m.id}`}
+          className={`transition ${highlightId === m.id ? "bg-blurple/20" : ""}`}
+        >
           {newDay && (
             <div className="mx-4 mt-4 mb-1 flex items-center gap-2">
               <div className="h-px flex-1 bg-divider" />
@@ -223,7 +268,7 @@ export function MessageList({
           )}
           {grouped ? (
             <div
-              className={`group flex gap-4 py-0.5 pr-4 pl-4 ${
+              className={`group relative flex gap-4 py-0.5 pr-4 pl-4 ${
                 mentionsName(m.content, selfName)
                   ? "border-l-2 border-mention-accent bg-mention-bg pl-[14px] hover:bg-mention-bg-hover"
                   : "hover:bg-chat-hover"
@@ -233,6 +278,7 @@ export function MessageList({
                 {formatShortTime(m.timestamp)}
               </div>
               <div className="min-w-0 flex-1">
+                {pinnedIndicator(m)}
                 {m.content && (
                   <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
                     {renderContent(m.content, mentionRegex, true, onRefClick)}
@@ -245,10 +291,11 @@ export function MessageList({
                   />
                 )}
               </div>
+              {pinButton(m)}
             </div>
           ) : (
             <div
-              className={`mt-4 flex gap-4 py-0.5 pr-4 pl-4 ${
+              className={`group relative mt-4 flex gap-4 py-0.5 pr-4 pl-4 ${
                 mentionsName(m.content, selfName)
                   ? "border-l-2 border-mention-accent bg-mention-bg pl-[14px] hover:bg-mention-bg-hover"
                   : "hover:bg-chat-hover"
@@ -266,6 +313,7 @@ export function MessageList({
                   <span className="text-xs text-faint">
                     {formatTimestamp(m.timestamp)}
                   </span>
+                  {pinnedIndicator(m)}
                 </div>
                 {m.trace ? (
                   <TraceMessageFinished
@@ -286,6 +334,7 @@ export function MessageList({
                   />
                 )}
               </div>
+              {pinButton(m)}
             </div>
           )}
         </div>

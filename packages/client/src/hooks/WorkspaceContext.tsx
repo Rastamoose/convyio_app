@@ -37,6 +37,7 @@ export interface WorkspaceState {
     channel?: string,
     attachmentIds?: string[],
   ) => void;
+  pinMessage: (messageId: string, pinned: boolean) => void;
   attachmentDraftsFor: (channel: string) => AttachmentDraft[];
   addAttachments: (channel: string, files: File[]) => void;
   removeAttachment: (channel: string, localId: string) => void;
@@ -109,6 +110,9 @@ export function WorkspaceProvider({
         chat.append(event.message);
         if (event.message.runId) traces.completeRun(event.message.runId);
         break;
+      case "message_updated":
+        chat.update(event.message);
+        break;
       case "trace_start":
         traces.startRun(event.runId, event.agentName, event.timestamp);
         break;
@@ -171,6 +175,8 @@ export function WorkspaceProvider({
         attachmentIds:
           attachmentIds && attachmentIds.length > 0 ? attachmentIds : undefined,
       }),
+    pinMessage: (messageId, pinned) =>
+      connection.send({ type: "pin", messageId, pinned }),
     attachmentDraftsFor: attachments.draftsFor,
     addAttachments: attachments.add,
     removeAttachment: attachments.remove,
