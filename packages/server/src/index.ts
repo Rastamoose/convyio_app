@@ -5,6 +5,7 @@ import { config } from "./config";
 import { Hub } from "./hub";
 import { Roster } from "./roster";
 import { WorkspaceDb } from "./db";
+import { Attachments } from "./chat/Attachments";
 import { Channels } from "./chat/Channels";
 import { MessageStore } from "./chat/MessageStore";
 import { BoardService } from "./board/BoardService";
@@ -34,7 +35,8 @@ async function main() {
     ...demoChannels.map((name) => ({ name, isDemo: true })),
   ]);
 
-  const handleApi = createApiHandler(db, service, sessions, channels, config.corsOrigin);
+  const attachments = new Attachments(db, path.join(config.dataDir, "uploads"));
+  const handleApi = createApiHandler(db, service, sessions, channels, attachments, config.corsOrigin);
   const server = http.createServer(async (req, res) => {
     const handled = await handleApi(req, res);
     if (!handled) {
@@ -45,7 +47,7 @@ async function main() {
 
   const roster = new Roster(db);
   const apiUrl = `http://localhost:${config.port}`;
-  const hub = new Hub(server, roster, messages, channels, sessions, toolman, {
+  const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     apiUrl,
     serverId: db.serverId,
     demoChannels,

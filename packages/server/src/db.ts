@@ -80,6 +80,19 @@ CREATE TABLE IF NOT EXISTS messages (
   channel      TEXT NOT NULL DEFAULT 'general',
   run_id       TEXT,
   trace        TEXT,
+  attachments  TEXT,
+  created_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attachments (
+  id           TEXT PRIMARY KEY,
+  uploader_id  TEXT NOT NULL REFERENCES actors(id),
+  message_id   TEXT, -- NULL until bound to a sent message
+  name         TEXT NOT NULL,
+  mime         TEXT NOT NULL,
+  size         INTEGER NOT NULL,
+  width        INTEGER,
+  height       INTEGER,
   created_at   INTEGER NOT NULL
 );
 
@@ -89,7 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages (channel, cr
 `;
 
 /** Columns added after first release; applied to databases created before them. */
-const MIGRATIONS = [`ALTER TABLE board_items ADD COLUMN scope_paths TEXT`];
+const MIGRATIONS = [
+  `ALTER TABLE board_items ADD COLUMN scope_paths TEXT`,
+  `ALTER TABLE messages ADD COLUMN attachments TEXT`,
+];
 
 export class WorkspaceDb {
   readonly db: DatabaseSync;

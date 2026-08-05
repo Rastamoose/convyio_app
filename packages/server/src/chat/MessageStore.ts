@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ChatMessage, TraceChunk } from "@workspace/shared";
+import type { Attachment, ChatMessage, TraceChunk } from "@workspace/shared";
 import type { WorkspaceDb } from "../db";
 
 /** Chat history persistence. Exists so the hub never touches SQL. */
@@ -18,8 +18,8 @@ export class MessageStore {
     this.store.db
       .prepare(
         `INSERT INTO messages
-           (id, author_id, author_name, author_kind, content, channel, run_id, trace, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, author_id, author_name, author_kind, content, channel, run_id, trace, attachments, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         message.id,
@@ -30,6 +30,7 @@ export class MessageStore {
         message.channel ?? "general",
         message.runId ?? null,
         message.trace ? JSON.stringify(message.trace) : null,
+        message.attachments ? JSON.stringify(message.attachments) : null,
         message.timestamp,
       );
   }
@@ -68,6 +69,7 @@ interface MessageRow {
   channel: string;
   run_id: string | null;
   trace: string | null;
+  attachments: string | null;
   created_at: number;
 }
 
@@ -83,5 +85,6 @@ function toMessage(row: MessageRow): ChatMessage {
   };
   if (row.run_id) message.runId = row.run_id;
   if (row.trace) message.trace = JSON.parse(row.trace) as TraceChunk[];
+  if (row.attachments) message.attachments = JSON.parse(row.attachments) as Attachment[];
   return message;
 }

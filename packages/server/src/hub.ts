@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   clientEventSchema,
   type ActionRequestEvent,
+  type Attachment,
   type BoardEventEnvelope,
   type ChatMessage,
   type ClientEvent,
@@ -14,6 +15,8 @@ import {
   type SummaryEvent,
   type TraceChunk,
 } from "@workspace/shared";
+import { ApiError } from "./board/BoardService";
+import type { Attachments } from "./chat/Attachments";
 import type { Channels } from "./chat/Channels";
 import type { MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
@@ -54,6 +57,7 @@ export class Hub {
     private roster: Roster,
     private messages: MessageStore,
     private channels: Channels,
+    private attachments: Attachments,
     private sessions: Sessions,
     private toolman: Toolman,
     private options: HubOptions,
@@ -71,22 +75,27 @@ export class Hub {
     this.broadcast({ type: "channel_created", channel: name });
   }
 
-  /** The single message-posting path: persist, broadcast, notify observers. */
+  /**
+   * The single message-posting path: persist, broadcast, notify observers.
+   * extras.id lets a caller pre-allocate the message id — needed to bind
+   * attachments to the message before it is posted.
+   */
   postMessage(
     author: Participant,
     content: string,
     channel: string,
-    extras: { trace?: TraceChunk[]; runId?: string } = {},
+    extras: { id?: string; trace?: TraceChunk[]; runId?: string; attachments?: Attachment[] } = {},
   ): void {
+    const { id = randomUUID(), ...rest } = extras;
     const message: ChatMessage = {
-      id: randomUUID(),
+      id,
       authorId: author.id,
       authorName: author.name,
       authorKind: author.kind,
       content,
       timestamp: Date.now(),
       channel,
-      ...extras,
+      ...rest,
     };
     this.messages.append(message);
     this.broadcast({ type: "message", message });
@@ -160,7 +169,20 @@ export class Hub {
           this.send(conn, { type: "error", error: `unknown channel: ${channel}` });
           break;
         }
-        this.postMessage(participant, event.content, channel);
+        // The message id is allocated before posting so uploads can be bound
+        // to it; a failed bind drops the whole message.
+        const messageId = randomUUID();
+        let attachments: Attachment[] | undefined;
+        if (event.attachmentIds?.length) {
+          try {
+            attachments = this.attachments.bind(messageId, event.attachmentIds, participant.id);
+          } catch (err) {
+            if (!(err instanceof ApiError)) throw err;
+            this.send(conn, { type: "error", error: err.message });
+            break;
+          }
+        }
+        this.postMessage(participant, event.content, channel, { id: messageId, attachments });
         break;
       }
       case "demo_start":

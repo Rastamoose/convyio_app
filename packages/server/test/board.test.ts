@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import type { Actor, BoardItem } from "@workspace/shared";
 import { WorkspaceDb } from "../src/db";
+import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { Roster } from "../src/roster";
@@ -218,9 +222,10 @@ describe("T10: full-stack approval fan-out", async () => {
     await toolman.init();
     const channels = new Channels(db);
     channels.seed([{ name: "general", isDemo: false }]);
-    const handler = createApiHandler(db, service, sessions, channels, "*");
+    const attachments = new Attachments(db, fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-")));
+    const handler = createApiHandler(db, service, sessions, channels, attachments, "*");
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, sessions, toolman, {
+    const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, attachments, sessions, toolman, {
       apiUrl: "",
       serverId: db.serverId,
       demoChannels: [],

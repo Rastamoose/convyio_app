@@ -18,10 +18,20 @@ export const joinEventSchema = z.object({
   kind: z.enum(["human", "agent"]).default("human"),
 });
 
-export const messageEventSchema = z.object({
+const messageEventShape = z.object({
   type: z.literal("message"),
-  content: z.string().min(1).max(4000),
+  content: z.string().max(4000),
   channel: z.string().max(64).optional(),
+  /** Ids of prior POST /api/uploads uploads to bind to this message. */
+  attachmentIds: z.array(z.string()).max(10).optional(),
+});
+
+/** A message must carry text or at least one attachment; fully empty is invalid. */
+const messageHasSubstance = (event: { content: string; attachmentIds?: string[] }) =>
+  event.content.trim().length > 0 || (event.attachmentIds?.length ?? 0) > 0;
+
+export const messageEventSchema = messageEventShape.refine(messageHasSubstance, {
+  message: "message needs content or attachments",
 });
 
 export const statusSetEventSchema = z.object({
@@ -95,20 +105,26 @@ export const actionRequestEventSchema = z.object({
   ]),
 });
 
-export const clientEventSchema = z.discriminatedUnion("type", [
-  joinEventSchema,
-  messageEventSchema,
-  clearEventSchema,
-  statusSetEventSchema,
-  statusUpdateEventSchema,
-  traceStartEventSchema,
-  traceChunkEventSchema,
-  summaryEventSchema,
-  interruptEventSchema,
-  demoStartEventSchema,
-  runEndEventSchema,
-  actionRequestEventSchema,
-]);
+export const clientEventSchema = z
+  .discriminatedUnion("type", [
+    joinEventSchema,
+    // zod v3 discriminated unions only accept plain objects, so the shape goes
+    // in and messageEventSchema's emptiness refine is re-applied just below.
+    messageEventShape,
+    clearEventSchema,
+    statusSetEventSchema,
+    statusUpdateEventSchema,
+    traceStartEventSchema,
+    traceChunkEventSchema,
+    summaryEventSchema,
+    interruptEventSchema,
+    demoStartEventSchema,
+    runEndEventSchema,
+    actionRequestEventSchema,
+  ])
+  .refine((event) => event.type !== "message" || messageHasSubstance(event), {
+    message: "message needs content or attachments",
+  });
 
 export type JoinEvent = z.infer<typeof joinEventSchema>;
 export type MessageEvent = z.infer<typeof messageEventSchema>;

@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Actor, ItemStatus } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { Sessions } from "./sessions";
+import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
 import type { WorkspaceDb } from "../db";
 
@@ -36,6 +38,7 @@ export function createApiHandler(
   service: BoardService,
   sessions: Sessions,
   channels: Channels,
+  attachments: Attachments,
   corsOrigin: string,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
@@ -44,16 +47,28 @@ export function createApiHandler(
 
     res.setHeader("Access-Control-Allow-Origin", corsOrigin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Authorization, Content-Type, X-File-Name, X-Image-Width, X-Image-Height",
+    );
     if (req.method === "OPTIONS") {
       res.writeHead(204).end();
       return true;
     }
 
     try {
-      const actor = authenticate(req, db, sessions);
-      await route(req, res, url, actor, service, db, channels);
+      const method = req.method ?? "GET";
+      const parts = url.pathname.split("/").filter(Boolean); // ["api", ...]
+      // Fetching an upload is deliberately unauthenticated: the unguessable
+      // UUID in the path is the capability (the Discord-CDN model), and <img>
+      // tags cannot send Authorization headers. Everything else stays gated.
+      if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
+        serveUpload(res, attachments, parts[2], method === "HEAD");
+      } else {
+        const actor = authenticate(req, db, sessions);
+        await route(req, res, parts, url, actor, service, db, channels, attachments);
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         json(res, err.status, { error: err.code, message: err.message });
@@ -71,14 +86,15 @@ export function createApiHandler(
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
+  parts: string[], // ["api", "board", "items", ...]
   url: URL,
   actor: Actor,
   service: BoardService,
   db: WorkspaceDb,
   channels: Channels,
+  attachments: Attachments,
 ): Promise<void> {
   const method = req.method ?? "GET";
-  const parts = url.pathname.split("/").filter(Boolean); // ["api", "board", "items", ...]
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
@@ -89,6 +105,13 @@ async function route(
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
     return json(res, 201, { channel: { name: channels.create(actor, body.name) } });
+  }
+
+  // POST /api/uploads — raw binary body; metadata rides in headers because
+  // multipart would mean a whole parser for no extra capability.
+  if (parts[1] === "uploads" && parts.length === 2 && method === "POST") {
+    const bytes = await readRawBody(req, MAX_ATTACHMENT_BYTES);
+    return json(res, 201, { attachment: attachments.save(actor, uploadMeta(req), bytes) });
   }
 
   if (parts[1] !== "board" || parts[2] !== "items") {
@@ -171,15 +194,71 @@ function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions)
   return actor;
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
+/** GET/HEAD /api/uploads/:id/:name — the :name segment is URL aesthetics only. */
+function serveUpload(
+  res: ServerResponse,
+  attachments: Attachments,
+  id: string,
+  headOnly: boolean,
+): void {
+  const found = attachments.get(id);
+  if (!found) throw new ApiError(404, "NOT_FOUND", "no such upload");
+  const { attachment, filePath } = found;
+  res.writeHead(200, {
+    "Content-Type": attachment.mime,
+    "Content-Length": attachment.size,
+    "Content-Disposition": `inline; filename="${attachment.name}"`,
+    // The bytes at an id never change, so clients may cache forever.
+    "Cache-Control": "private, max-age=31536000, immutable",
+  });
+  if (headOnly) return void res.end();
+  const stream = fs.createReadStream(filePath);
+  // Headers are already sent; a missing/unreadable file can only abort.
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
+}
+
+/** Upload metadata rides in headers; the body is the file bytes verbatim. */
+function uploadMeta(req: IncomingMessage): { name: string; mime: string; width?: number; height?: number } {
+  const contentType = req.headers["content-type"]?.split(";")[0].trim();
+  const encodedName = req.headers["x-file-name"];
+  let name = "file";
+  if (typeof encodedName === "string" && encodedName) {
+    try {
+      name = decodeURIComponent(encodedName);
+    } catch {
+      throw new ApiError(400, "BAD_FILE_NAME", "x-file-name must be URI-encoded");
+    }
+  }
+  return {
+    name,
+    mime: contentType || "application/octet-stream",
+    width: intHeader(req, "x-image-width"),
+    height: intHeader(req, "x-image-height"),
+  };
+}
+
+function intHeader(req: IncomingMessage, header: string): number | undefined {
+  const raw = req.headers[header];
+  if (typeof raw !== "string") return undefined;
+  const value = Number.parseInt(raw, 10);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+/** Stream-read a request body, rejecting as soon as the cap is crossed. */
+async function readRawBody(req: IncomingMessage, cap: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 256 * 1024) throw new ApiError(413, "TOO_LARGE", "body too large");
+    if (size > cap) throw new ApiError(413, "TOO_LARGE", "body too large");
     chunks.push(chunk as Buffer);
   }
-  const raw = Buffer.concat(chunks).toString("utf-8");
+  return Buffer.concat(chunks);
+}
+
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const raw = (await readRawBody(req, 256 * 1024)).toString("utf-8");
   if (!raw) return {};
   try {
     return JSON.parse(raw);

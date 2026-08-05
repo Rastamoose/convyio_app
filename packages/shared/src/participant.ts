@@ -20,6 +20,21 @@ export interface TraceChunk {
   content: string;
 }
 
+/** An uploaded file bound to a chat message. */
+export interface Attachment {
+  id: string;
+  /** Original filename, sanitized server-side. */
+  name: string;
+  mime: string;
+  /** Bytes. */
+  size: number;
+  /** Image pixel dimensions, client-probed; present only for image/* uploads. */
+  width?: number;
+  height?: number;
+  /** Server-relative path, e.g. "/api/uploads/<id>/<name>"; clients prefix their apiUrl. */
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   authorId: string;
@@ -33,4 +48,6 @@ export interface ChatMessage {
   trace?: TraceChunk[];
   /** Optional run id linking the message to a live/finished agent run. */
   runId?: string;
+  /** Files uploaded via POST /api/uploads and bound to this message on send. */
+  attachments?: Attachment[];
 }

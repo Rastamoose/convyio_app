@@ -19,17 +19,20 @@ the wire protocol (websocket) and the HTTP board API.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
 - `Channels` (`chat/`) — the set of chat channels: seeds defaults, validates
   names, records new ones.  → WorkspaceDb
+- `Attachments` (`chat/`) — owns uploaded files: stores bytes on disk
+  (`data/uploads/<id>`), records metadata, binds them to messages, serves
+  them back.  → WorkspaceDb
 - `Roster` — participant identity + live presence.  → WorkspaceDb
 - `Hub` — routes websocket frames; the single message-posting path.
-  → Roster, MessageStore, Channels, Sessions, Toolman
+  → Roster, MessageStore, Channels, Attachments, Sessions, Toolman
 - `BoardService` — every board transition, each with its audit row in one
   transaction, fanned out after commit.  → WorkspaceDb
 - `Toolman` — the enforcement point for agent actions; sandboxed filesystem
   mechanics. `authorizeMutation` is the pure policy decision.  → BoardService
 - `scope.ts` — scope-path semantics: normalize, match, validate.
 - `Sessions` — bearer tokens with TTL and revocation.
-- `api.ts` — HTTP routes for board items, actors, and channel creation.
-  → BoardService, Sessions, WorkspaceDb, Channels
+- `api.ts` — HTTP routes for board items, actors, channel creation, and
+  file uploads.  → BoardService, Sessions, WorkspaceDb, Channels, Attachments
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
   pipeline.  → Hub, Roster, BoardService
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
@@ -98,5 +101,11 @@ the wire protocol (websocket) and the HTTP board API.
 - 2026-08-05 — Sessions are in-memory with a 12h TTL, revoked when a human's
   last connection closes. A server restart logs everyone out; accepted for a
   single-node deployment.
+- 2026-08-05 — `GET /api/uploads/:id/:name` is deliberately unauthenticated:
+  the unguessable UUID id is the capability, the same model as Discord CDN
+  links, because `<img>` tags cannot send Authorization headers. Consequence:
+  anyone holding an attachment URL can fetch its bytes. Uploading stays
+  bearer-token gated; unbound uploads are swept after 1h (lazily, on the
+  next upload).
 - One hardcoded server: `server_id` is plumbed through the data model but
   there is no multi-tenancy in the transport.
