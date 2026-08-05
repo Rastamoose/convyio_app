@@ -89,6 +89,12 @@ export const runEndEventSchema = z.object({
   reason: z.enum(["completed", "aborted"]).default("completed"),
 });
 
+export const pinEventSchema = z.object({
+  type: z.literal("pin"),
+  messageId: z.string(),
+  pinned: z.boolean(),
+});
+
 // --- Toolman events ----------------------------------------------------------
 
 /** Agent asks the toolman to perform an action on its behalf. */
@@ -120,6 +126,7 @@ export const clientEventSchema = z
     interruptEventSchema,
     demoStartEventSchema,
     runEndEventSchema,
+    pinEventSchema,
     actionRequestEventSchema,
   ])
   .refine((event) => event.type !== "message" || messageHasSubstance(event), {
@@ -137,6 +144,7 @@ export type ClearEvent = z.infer<typeof clearEventSchema>;
 export type InterruptEvent = z.infer<typeof interruptEventSchema>;
 export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
+export type PinEvent = z.infer<typeof pinEventSchema>;
 export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 
@@ -172,6 +180,12 @@ export interface ActionResultEvent {
 
 export interface MessageBroadcast {
   type: "message";
+  message: ChatMessage;
+}
+
+/** An existing message changed in place (currently: pinned or unpinned). */
+export interface MessageUpdatedBroadcast {
+  type: "message_updated";
   message: ChatMessage;
 }
 
@@ -226,6 +240,7 @@ export interface RunEndBroadcast {
 export type ServerEvent =
   | WelcomeEvent
   | MessageBroadcast
+  | MessageUpdatedBroadcast
   | PresenceSyncEvent
   | ErrorEvent
   | TraceStartBroadcast

@@ -35,6 +35,14 @@ export class MessageStore {
       );
   }
 
+  /** Pin (recording the pinner's display name) or unpin (null); null result = unknown id. */
+  setPinned(id: string, pinnedBy: string | null): ChatMessage | null {
+    const row = this.store.db
+      .prepare(`UPDATE messages SET pinned_at = ?, pinned_by = ? WHERE id = ? RETURNING *`)
+      .get(pinnedBy ? Date.now() : null, pinnedBy, id) as MessageRow | undefined;
+    return row ? toMessage(row) : null;
+  }
+
   /** Delete all messages, or only those in the given channel. */
   clear(channel?: string): void {
     if (channel) {
@@ -70,6 +78,8 @@ interface MessageRow {
   run_id: string | null;
   trace: string | null;
   attachments: string | null;
+  pinned_at: number | null;
+  pinned_by: string | null;
   created_at: number;
 }
 
@@ -86,5 +96,9 @@ function toMessage(row: MessageRow): ChatMessage {
   if (row.run_id) message.runId = row.run_id;
   if (row.trace) message.trace = JSON.parse(row.trace) as TraceChunk[];
   if (row.attachments) message.attachments = JSON.parse(row.attachments) as Attachment[];
+  if (row.pinned_at) {
+    message.pinnedAt = row.pinned_at;
+    if (row.pinned_by) message.pinnedBy = row.pinned_by;
+  }
   return message;
 }

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS messages (
   run_id       TEXT,
   trace        TEXT,
   attachments  TEXT,
+  pinned_at    INTEGER,
+  pinned_by    TEXT,
   created_at   INTEGER NOT NULL
 );
 
@@ -105,6 +107,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages (channel, cr
 const MIGRATIONS = [
   `ALTER TABLE board_items ADD COLUMN scope_paths TEXT`,
   `ALTER TABLE messages ADD COLUMN attachments TEXT`,
+  `ALTER TABLE messages ADD COLUMN pinned_at INTEGER`,
+  `ALTER TABLE messages ADD COLUMN pinned_by TEXT`,
 ];
 
 export class WorkspaceDb {

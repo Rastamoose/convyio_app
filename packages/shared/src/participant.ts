@@ -50,4 +50,8 @@ export interface ChatMessage {
   runId?: string;
   /** Files uploaded via POST /api/uploads and bound to this message on send. */
   attachments?: Attachment[];
+  /** Set while the message is pinned in its channel. */
+  pinnedAt?: number;
+  /** Display name of the human who pinned it. */
+  pinnedBy?: string;
 }

@@ -9,6 +9,7 @@ import {
   type ChatMessage,
   type ClientEvent,
   type Participant,
+  type PinEvent,
   type RunEndEvent,
   type ServerEvent,
   type StatusUpdateEvent,
@@ -191,6 +192,9 @@ export class Hub {
       case "clear":
         this.clearChannel();
         break;
+      case "pin":
+        this.handlePin(conn, event);
+        break;
       case "interrupt":
         this.handleInterrupt(conn, event.target, event.content);
         break;
@@ -245,6 +249,24 @@ export class Hub {
       apiUrl: this.options.apiUrl,
     });
     this.broadcastPresence();
+  }
+
+  /** Pinning is a human act: agents mutate the world only through the toolman. */
+  private handlePin(conn: Connection, event: PinEvent): void {
+    const participant = conn.participant!;
+    if (participant.kind !== "human") {
+      this.send(conn, { type: "error", error: "human-only event" });
+      return;
+    }
+    const message = this.messages.setPinned(
+      event.messageId,
+      event.pinned ? participant.name : null,
+    );
+    if (!message) {
+      this.send(conn, { type: "error", error: `unknown message: ${event.messageId}` });
+      return;
+    }
+    this.broadcast({ type: "message_updated", message });
   }
 
   private handleInterrupt(conn: Connection, target: string, content: string): void {
