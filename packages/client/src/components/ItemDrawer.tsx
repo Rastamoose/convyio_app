@@ -36,7 +36,7 @@ function eventDetail(event: BoardItemEvent): string | null {
 }
 
 /** "a, b\nc" → ["a", "b", "c"]; an all-whitespace input means unrestricted. */
-function parseScopePaths(text: string): string[] | null {
+export function parseScopePaths(text: string): string[] | null {
   const paths = text
     .split(/[\n,]+/)
     .map((p) => p.trim())

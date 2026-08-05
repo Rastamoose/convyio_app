@@ -30,9 +30,9 @@ placeholder, discover the real value first and replace it.
 
 ```
 Build:        npm run build -w @workspace/client   (server/agent/shared run from source via tsx)
-Test:         npm test -w @workspace/server && npm test -w @workspace/shared && npm test -w @workspace/agent && npm test -w @workspace/client
+Test:         npm test   (root: shared, server, agent, client in sequence)
 Test one:     npm test -w @workspace/server -- --test-name-pattern "<name>"   (vitest -t "<name>" for client)
-Lint / types: npx tsc --noEmit -p packages/<name>   (each of shared, server, client, agent)
+Lint / types: npm run typecheck   (root; or npx tsc --noEmit -p packages/<name>)
 Run:          npm run dev   (server ws+http :3001, client :5173, agent; needs GEMINI_API_KEY in .env)
 Never touch:  package-lock.json (except via npm), data/ (runtime state), .env
 Ask first:    new dependency, SQLite schema change, wire-protocol or HTTP API change, auth/toolman changes
