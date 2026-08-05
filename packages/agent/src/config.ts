@@ -2,10 +2,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// dotenv.config() with no path defaults to CWD, but npm workspaces run this
+// script with cwd = packages/agent, not the repo root where .env lives. Point
+// at it explicitly so `npm run dev` picks up the root .env either way.
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 export const AGENT_NAME = process.env.AGENT_NAME ?? "noodle";
 export const WS_URL = process.env.WS_URL ?? "ws://localhost:3001";

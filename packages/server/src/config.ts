@@ -1,7 +1,14 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// dotenv.config() with no path defaults to CWD, but npm workspaces run this
+// with cwd = packages/server, not the repo root where .env lives. Point at
+// it explicitly so `npm run dev` picks up the root .env (Docker Compose
+// doesn't need this — it injects .env as real container env vars already).
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 export const config = {
   port: Number(process.env.PORT ?? 3001),
