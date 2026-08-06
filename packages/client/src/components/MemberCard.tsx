@@ -1,18 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { BoardItem, Participant } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { formatElapsed } from "../lib/format";
+import { presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { ProposalCard } from "./ProposalCard";
 
 export function MemberCard({
   participant,
+  anchor,
   onDiscuss,
   onPrefill,
   onClose,
 }: {
   participant: Participant;
+  /** Viewport rect of the sidebar row that opened the card. */
+  anchor: DOMRect;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
   onClose: () => void;
@@ -20,6 +24,14 @@ export function MemberCard({
   const { board, activeRuns, messages } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
+  const [top, setTop] = useState(anchor.top);
+
+  // Align with the clicked row, clamped so the card never runs past the
+  // viewport bottom (layout effect: measured height, adjusted before paint).
+  useLayoutEffect(() => {
+    const height = ref.current?.offsetHeight ?? 0;
+    setTop(Math.max(8, Math.min(anchor.top, window.innerHeight - height - 8)));
+  }, [anchor, participant]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -77,7 +89,8 @@ export function MemberCard({
   return (
     <div
       ref={ref}
-      className="fixed top-16 left-[248px] z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg bg-popup p-4 shadow-lg"
+      style={{ top, left: anchor.right + 8 }}
+      className="animate-pop-in fixed z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg bg-popup p-4 shadow-lg"
     >
       <div className="mb-3 flex items-center gap-3">
         <Avatar name={participant.name} size={48} />
@@ -86,8 +99,8 @@ export function MemberCard({
             {participant.name}
             {isAgent && <AgentBadge className="ml-1.5 align-middle" />}
           </div>
-          <div className="truncate text-xs text-muted">
-            {participant.online ? "Online" : "Offline"}
+          <div className="truncate text-xs text-muted" title={presenceLabel(participant)}>
+            {presenceLabel(participant)}
             {!isAgent && participant.status ? ` — ${participant.status}` : ""}
           </div>
         </div>
@@ -137,13 +150,13 @@ export function MemberCard({
                   .getElementById(jumpId)
                   ?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="flex-1 rounded bg-input px-2 py-1.5 text-xs font-semibold text-body hover:bg-mention-bg-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-input"
+              className="flex-1 cursor-pointer rounded bg-input px-2 py-1.5 text-xs font-semibold text-body hover:bg-mention-bg-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-input"
             >
               Jump to trace
             </button>
             <button
               onClick={mention}
-              className="flex-1 rounded bg-blurple px-2 py-1.5 text-xs font-semibold text-mention-text hover:opacity-90"
+              className="flex-1 cursor-pointer rounded bg-blurple px-2 py-1.5 text-xs font-semibold text-mention-text hover:opacity-90"
             >
               Mention
             </button>

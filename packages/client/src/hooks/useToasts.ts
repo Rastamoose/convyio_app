@@ -1,19 +1,21 @@
 import { useCallback, useRef, useState } from "react";
 
+export type ToastKind = "error" | "info" | "success";
+
 export interface Toast {
   id: number;
   text: string;
+  kind: ToastKind;
 }
-
-const TOAST_LIFETIME_MS = 8000;
 
 /**
  * Transient user-facing notices (failed board operations, server errors).
- * Toasts auto-expire; `dismiss` removes one early.
+ * The hook only owns the list; auto-expiry (with hover pause) lives in the
+ * `Toasts` component so timers can react to pointer state.
  */
 export function useToasts(): {
   toasts: Toast[];
-  push: (text: string) => void;
+  push: (text: string, kind?: ToastKind) => void;
   dismiss: (id: number) => void;
 } {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -23,14 +25,11 @@ export function useToasts(): {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const push = useCallback(
-    (text: string) => {
-      const id = ++nextIdRef.current;
-      setToasts((prev) => [...prev, { id, text }]);
-      window.setTimeout(() => dismiss(id), TOAST_LIFETIME_MS);
-    },
-    [dismiss],
-  );
+  // Default "error": every pre-existing caller pushes failure notices.
+  const push = useCallback((text: string, kind: ToastKind = "error") => {
+    const id = ++nextIdRef.current;
+    setToasts((prev) => [...prev, { id, text, kind }]);
+  }, []);
 
   return { toasts, push, dismiss };
 }

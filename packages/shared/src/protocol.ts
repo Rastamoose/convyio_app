@@ -38,6 +38,10 @@ const messageEventShape = z.object({
   channel: z.string().max(64).optional(),
   /** Ids of prior POST /api/uploads uploads to bind to this message. */
   attachmentIds: z.array(z.string()).max(10).optional(),
+  /** Id of an existing message this one replies to; clients resolve it locally. */
+  replyToId: z.string().optional(),
+  /** Client-chosen token echoed on the resulting broadcast (optimistic UI); never persisted. */
+  nonce: z.string().max(64).optional(),
 });
 
 /** A message must carry text or at least one attachment; fully empty is invalid. */
@@ -109,6 +113,30 @@ export const pinEventSchema = z.object({
   pinned: z.boolean(),
 });
 
+export const messageEditEventSchema = z.object({
+  type: z.literal("message_edit"),
+  messageId: z.string(),
+  content: z.string().min(1).max(4000),
+});
+
+export const messageDeleteEventSchema = z.object({
+  type: z.literal("message_delete"),
+  messageId: z.string(),
+});
+
+export const messageReactEventSchema = z.object({
+  type: z.literal("message_react"),
+  messageId: z.string(),
+  emoji: z.string().min(1).max(32),
+  op: z.enum(["add", "remove"]),
+});
+
+/** Ephemeral typing signal: relayed to everyone else, never persisted. */
+export const typingEventSchema = z.object({
+  type: z.literal("typing"),
+  channel: z.string().max(64),
+});
+
 // --- Toolman events ----------------------------------------------------------
 
 /** Agent asks the toolman to perform an action on its behalf. */
@@ -141,6 +169,10 @@ export const clientEventSchema = z
     demoStartEventSchema,
     runEndEventSchema,
     pinEventSchema,
+    messageEditEventSchema,
+    messageDeleteEventSchema,
+    messageReactEventSchema,
+    typingEventSchema,
     actionRequestEventSchema,
   ])
   .refine((event) => event.type !== "message" || messageHasSubstance(event), {
@@ -162,6 +194,10 @@ export type InterruptEvent = z.infer<typeof interruptEventSchema>;
 export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
 export type PinEvent = z.infer<typeof pinEventSchema>;
+export type MessageEditEvent = z.infer<typeof messageEditEventSchema>;
+export type MessageDeleteEvent = z.infer<typeof messageDeleteEventSchema>;
+export type MessageReactEvent = z.infer<typeof messageReactEventSchema>;
+export type TypingEvent = z.infer<typeof typingEventSchema>;
 export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 
@@ -198,12 +234,30 @@ export interface ActionResultEvent {
 export interface MessageBroadcast {
   type: "message";
   message: ChatMessage;
+  /** Echo of the sender's nonce, present only on the broadcast that send triggered. */
+  nonce?: string;
 }
 
-/** An existing message changed in place (currently: pinned or unpinned). */
+/** An existing message changed in place (pins, edits, reactions). */
 export interface MessageUpdatedBroadcast {
   type: "message_updated";
   message: ChatMessage;
+}
+
+/** A message was hard-deleted; clients drop it from their history. */
+export interface MessageDeletedBroadcast {
+  type: "message_deleted";
+  messageId: string;
+  channel: string;
+}
+
+/** Someone is composing in a channel; ephemeral, never echoed to the sender. */
+export interface TypingBroadcast {
+  type: "typing";
+  actorId: string;
+  name: string;
+  channel: string;
+  timestamp: number;
 }
 
 export interface PresenceSyncEvent {
@@ -258,6 +312,8 @@ export type ServerEvent =
   | WelcomeEvent
   | MessageBroadcast
   | MessageUpdatedBroadcast
+  | MessageDeletedBroadcast
+  | TypingBroadcast
   | PresenceSyncEvent
   | ErrorEvent
   | TraceStartBroadcast

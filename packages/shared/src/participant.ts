@@ -35,6 +35,12 @@ export interface Attachment {
   url: string;
 }
 
+/** One emoji's reactions on a message: who reacted, in reaction order. */
+export interface MessageReaction {
+  emoji: string;
+  actors: { id: string; name: string }[];
+}
+
 export interface ChatMessage {
   id: string;
   authorId: string;
@@ -54,4 +60,10 @@ export interface ChatMessage {
   pinnedAt?: number;
   /** Display name of the human who pinned it. */
   pinnedBy?: string;
+  /** When the author last edited the content. */
+  editedAt?: number;
+  /** Id of the message this one replies to; clients resolve it from history. */
+  replyToId?: string;
+  /** Emoji reactions, grouped per emoji in first-reaction order. */
+  reactions?: MessageReaction[];
 }

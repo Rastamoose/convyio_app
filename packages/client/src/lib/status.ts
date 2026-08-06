@@ -41,3 +41,14 @@ export function presenceDot(participant: Participant): {
   }
   return { color: participant.online ? "bg-online" : "bg-offline", pulse: false };
 }
+
+/** Human-readable presence, mirroring presenceDot's colors (dot tooltips etc.). */
+export function presenceLabel(participant: Participant): string {
+  if (participant.kind === "agent") {
+    if (participant.runState === "working") return "Working";
+    if (participant.runState === "blocked") return "Blocked — needs a human";
+    if (participant.runState === "dead") return "Dead";
+    return participant.online ? "Idle" : "Offline";
+  }
+  return participant.online ? "Online" : "Offline";
+}

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ItemStatus, Participant, RunState } from "@workspace/shared";
-import { ITEM_STATUS_BADGE, ITEM_STATUS_LABEL, presenceDot } from "./status";
+import {
+  ITEM_STATUS_BADGE,
+  ITEM_STATUS_LABEL,
+  presenceDot,
+  presenceLabel,
+} from "./status";
 
 // Explicit list (not derived from the maps under test) so a status silently
 // missing a label/badge fails here; tsc flags this array when the union grows.
@@ -27,24 +32,24 @@ describe("item status maps", () => {
   });
 });
 
-describe("presenceDot", () => {
-  const agent = (runState: RunState, online = true): Participant => ({
-    id: "a1",
-    name: "agent-1",
-    kind: "agent",
-    status: "",
-    runState,
-    online,
-  });
-  const human = (online: boolean): Participant => ({
-    id: "h1",
-    name: "harris",
-    kind: "human",
-    status: "",
-    runState: "idle",
-    online,
-  });
+const agent = (runState: RunState, online = true): Participant => ({
+  id: "a1",
+  name: "agent-1",
+  kind: "agent",
+  status: "",
+  runState,
+  online,
+});
+const human = (online: boolean): Participant => ({
+  id: "h1",
+  name: "harris",
+  kind: "human",
+  status: "",
+  runState: "idle",
+  online,
+});
 
+describe("presenceDot", () => {
   it("shows a working agent as pulsing green", () => {
     expect(presenceDot(agent("working"))).toEqual({
       color: "bg-online",
@@ -90,5 +95,28 @@ describe("presenceDot", () => {
       color: "bg-offline",
       pulse: false,
     });
+  });
+});
+
+describe("presenceLabel", () => {
+  it("labels agent run states", () => {
+    expect(presenceLabel(agent("working"))).toBe("Working");
+    expect(presenceLabel(agent("blocked"))).toBe("Blocked — needs a human");
+    expect(presenceLabel(agent("dead"))).toBe("Dead");
+    expect(presenceLabel(agent("idle"))).toBe("Idle");
+    expect(presenceLabel(agent("done"))).toBe("Idle");
+    expect(presenceLabel(agent("idle", false))).toBe("Offline");
+  });
+
+  it("labels working/blocked/dead agents by run state even when offline", () => {
+    // Mirrors presenceDot: run state wins over the online flag.
+    expect(presenceLabel(agent("working", false))).toBe("Working");
+    expect(presenceLabel(agent("blocked", false))).toBe("Blocked — needs a human");
+    expect(presenceLabel(agent("dead", false))).toBe("Dead");
+  });
+
+  it("labels humans simply online/offline", () => {
+    expect(presenceLabel(human(true))).toBe("Online");
+    expect(presenceLabel(human(false))).toBe("Offline");
   });
 });

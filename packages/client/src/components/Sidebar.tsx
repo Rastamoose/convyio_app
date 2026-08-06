@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { BoardItem, Participant } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
-import { presenceDot } from "../lib/status";
+import { presenceDot, presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { ApprovalQueue } from "./ApprovalQueue";
@@ -11,19 +11,26 @@ const SERVER_NAME = "Workspace";
 
 function PresenceDot({ participant }: { participant: Participant }) {
   const { color, pulse } = presenceDot(participant);
+  const label = presenceLabel(participant);
   if (!pulse) {
     return (
       <span
-        className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar ${color}`}
+        title={label}
+        className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar transition-colors duration-200 ${color}`}
       />
     );
   }
   return (
-    <span className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar">
+    <span
+      title={label}
+      className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar"
+    >
       <span
-        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${color}`}
+        className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 transition-colors duration-200 ${color}`}
       />
-      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${color}`} />
+      <span
+        className={`relative inline-flex h-1.5 w-1.5 rounded-full transition-colors duration-200 ${color}`}
+      />
     </span>
   );
 }
@@ -33,20 +40,23 @@ function StatusRow({
   onSelect,
 }: {
   participant: Participant;
-  onSelect: (participant: Participant) => void;
+  onSelect: (participant: Participant, anchor: DOMRect) => void;
 }) {
   const isAgent = participant.kind === "agent";
   const working = isAgent && participant.runState === "working";
   const blocked = isAgent && participant.runState === "blocked";
   const dead = isAgent && participant.runState === "dead";
+  const offline = !participant.online;
   return (
     <div
-      className="flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 hover:bg-white/5"
+      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-white/5 ${
+        offline ? "opacity-40 hover:opacity-100" : ""
+      }`}
       onMouseDown={(e) => e.stopPropagation()}
-      onClick={() => onSelect(participant)}
+      onClick={(e) => onSelect(participant, e.currentTarget.getBoundingClientRect())}
     >
       <div className="relative">
-        <Avatar name={participant.name} size={32} />
+        <Avatar name={participant.name} size={32} grayscale={offline} />
         <PresenceDot participant={participant} />
       </div>
       <div className="min-w-0">
@@ -91,19 +101,26 @@ export function Sidebar({
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{
+    participantId: string;
+    anchor: DOMRect;
+  } | null>(null);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [roomDraft, setRoomDraft] = useState("");
 
-  const sorted = [...participants].sort(
-    (a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name),
-  );
-  const pendingItems = board.filter((i) => i.status === "proposed");
-  const selected = participants.find((p) => p.id === selectedId) ?? null;
+  const byName = (a: Participant, b: Participant) => a.name.localeCompare(b.name);
+  const online = participants.filter((p) => p.online).sort(byName);
+  const offline = participants.filter((p) => !p.online).sort(byName);
+  const pendingItems = board
+    .filter((i) => i.status === "proposed")
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const selectedMember = selected
+    ? (participants.find((p) => p.id === selected.participantId) ?? null)
+    : null;
 
   const discuss = (item: BoardItem) => {
     setQueueOpen(false);
-    setSelectedId(null);
+    setSelected(null);
     onDiscuss(item);
   };
 
@@ -125,7 +142,7 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-60 flex-col bg-sidebar">
       {/* Workspace header */}
-      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4">
+      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4 select-none">
         <span className="truncate font-semibold text-body">{SERVER_NAME}</span>
         <span className="truncate text-[11px] leading-tight text-faint">
           humans &amp; agents, one room
@@ -134,14 +151,11 @@ export function Sidebar({
 
       {/* Status area — top third, becomes the status strip */}
       <section className="min-h-0 basis-1/3 overflow-y-auto px-2 pt-3">
-        <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase">
-          Status — {sorted.filter((p) => p.online).length} online
-        </h2>
         {pendingItems.length > 0 && (
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setQueueOpen((o) => !o)}
-            className="mb-1.5 flex w-full items-center gap-2 rounded-lg bg-dead/20 px-2 py-1.5 text-left text-sm font-semibold text-dead hover:bg-dead/30"
+            className="mb-1.5 flex w-full cursor-pointer items-center gap-2 rounded-lg bg-dead/20 px-2 py-1.5 text-left text-sm font-semibold text-dead select-none hover:bg-dead/30"
           >
             <span className="relative flex h-2 w-2 shrink-0">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
@@ -150,24 +164,42 @@ export function Sidebar({
             Awaiting approval ({pendingItems.length})
           </button>
         )}
-        {sorted.map((p) => (
-          <StatusRow key={p.id} participant={p} onSelect={(m) => setSelectedId(m.id)} />
+        <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none">
+          Online — {online.length}
+        </h2>
+        {online.map((p) => (
+          <StatusRow
+            key={p.id}
+            participant={p}
+            onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
+          />
         ))}
+        {offline.length > 0 && (
+          <>
+            <h2 className="mt-2 mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none">
+              Offline — {offline.length}
+            </h2>
+            {offline.map((p) => (
+              <StatusRow
+                key={p.id}
+                participant={p}
+                onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
+              />
+            ))}
+          </>
+        )}
       </section>
 
       {/* Rooms */}
       <section className="min-h-0 flex-1 overflow-y-auto border-t border-divider px-2 pt-3">
         <div className="mb-1 flex items-center justify-between px-2">
-          <h2 className="text-[11px] font-bold tracking-wide text-muted uppercase">
+          <h2 className="text-[11px] font-bold tracking-wide text-muted uppercase select-none">
             Rooms
           </h2>
           <button
             aria-label="Create a room"
-            onClick={() => {
-              setRoomDraft("");
-              setCreatingRoom(true);
-            }}
-            className="rounded px-1 text-sm leading-none text-muted hover:text-body"
+            onClick={() => setCreatingRoom(true)}
+            className="cursor-pointer rounded px-1 text-sm leading-none text-muted select-none hover:text-body"
           >
             +
           </button>
@@ -178,9 +210,13 @@ export function Sidebar({
             aria-label="New room name"
             value={roomDraft}
             onChange={(e) => setRoomDraft(e.target.value)}
+            // Blur closes but keeps the draft; Escape closes and discards it.
             onBlur={() => setCreatingRoom(false)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") setCreatingRoom(false);
+              if (e.key === "Escape") {
+                setRoomDraft("");
+                setCreatingRoom(false);
+              }
               if (e.key === "Enter") void submitRoom();
             }}
             maxLength={32}
@@ -195,18 +231,14 @@ export function Sidebar({
               role="tab"
               aria-selected={c === channel}
               onClick={() => onSelectChannel(c)}
-              className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left font-medium ${
+              className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
                 c === channel
                   ? "bg-input text-body"
-                  : "text-muted hover:bg-input/50 hover:text-body"
+                  : "text-muted hover:bg-input/70 hover:text-body"
               }`}
             >
-              <span
-                className={`h-4 w-0.5 shrink-0 rounded-full ${
-                  c === channel ? "bg-blurple" : "bg-divider"
-                }`}
-              />
-              <span className="text-[15px]">{c}</span>
+              <span className="shrink-0 text-[15px] text-faint">#</span>
+              <span className="min-w-0 truncate text-[15px]">{c}</span>
             </button>
           ))}
         </div>
@@ -221,7 +253,7 @@ export function Sidebar({
               <PresenceDot participant={self} />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-semibold text-body">
+              <div className="truncate text-sm font-semibold text-body select-none">
                 {self.name}
               </div>
               {editingStatus ? (
@@ -250,7 +282,7 @@ export function Sidebar({
                     setStatusDraft(self.status);
                     setEditingStatus(true);
                   }}
-                  className="block w-full truncate text-left text-xs text-muted hover:text-body"
+                  className="block w-full cursor-pointer truncate text-left text-xs text-muted select-none hover:text-body"
                 >
                   {self.status || "Set a status…"}
                 </button>
@@ -259,7 +291,7 @@ export function Sidebar({
             {signOut && (
               <button
                 onClick={signOut}
-                className="shrink-0 rounded px-1.5 py-1 text-[11px] text-muted hover:bg-white/5 hover:text-body"
+                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-white/5 hover:text-body"
               >
                 Sign out
               </button>
@@ -275,12 +307,13 @@ export function Sidebar({
           onClose={() => setQueueOpen(false)}
         />
       )}
-      {selected && (
+      {selectedMember && selected && (
         <MemberCard
-          participant={selected}
+          participant={selectedMember}
+          anchor={selected.anchor}
           onDiscuss={discuss}
           onPrefill={onPrefill}
-          onClose={() => setSelectedId(null)}
+          onClose={() => setSelected(null)}
         />
       )}
     </aside>

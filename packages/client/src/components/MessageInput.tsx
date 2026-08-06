@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Participant } from "@workspace/shared";
-import { buildMentionRegex, renderContent } from "./MessageList";
+import { buildMentionRegex, renderContent } from "../lib/markdown";
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { useMessageDrafts } from "../hooks/useMessageDrafts";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 
@@ -19,6 +20,9 @@ interface SlashCommand {
   name: string;
   description: string;
 }
+
+const MAX_LENGTH = 4000;
+const COUNTER_AT = 200;
 
 const COMMANDS: SlashCommand[] = [
   { name: "clear", description: "Clear all messages in the channel" },
@@ -49,7 +53,8 @@ export function MessageInput({
   prefill,
 }: {
   channel: string;
-  onSend: (content: string, attachmentIds: string[]) => void;
+  /** Returns true when the content was consumed (sent or a valid command). */
+  onSend: (content: string, attachmentIds: string[]) => boolean;
   prefill?: Prefill | null;
 }) {
   const {
@@ -59,27 +64,58 @@ export function MessageInput({
     removeAttachment,
     takeReadyAttachmentIds,
   } = useWorkspace();
-  const [draft, setDraft] = useState("");
+  const { draft, setDraft, clearDraft } = useMessageDrafts(channel);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const attachments = attachmentDraftsFor(channel);
   const uploadsInFlight = attachments.some((a) => a.status === "uploading");
   const hasReadyAttachment = attachments.some((a) => a.status === "ready");
+  const remaining = MAX_LENGTH - draft.length;
 
   useEffect(() => {
     if (!prefill) return;
-    setDraft((prev) => {
-      if (prev.includes(prefill.text.trim())) return prev;
-      const sep = prev && !prev.endsWith(" ") ? " " : "";
-      return prev + sep + prefill.text;
-    });
+    if (!draft.includes(prefill.text.trim())) {
+      const sep = draft && !draft.endsWith(" ") ? " " : "";
+      setDraft(draft + sep + prefill.text);
+    }
     inputRef.current?.focus();
   }, [prefill]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    setMention(null);
+  }, [channel]);
+
+  // Typing anywhere with nothing focused lands the keystroke in the composer.
+  useEffect(() => {
+    const redirect = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLElement && active.isContentEditable)
+      ) {
+        return;
+      }
+      inputRef.current?.focus();
+    };
+    document.addEventListener("keydown", redirect);
+    return () => document.removeEventListener("keydown", redirect);
+  }, []);
+
+  // Auto-grow with content; the max-height class caps it and scrolls beyond.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
 
   const mentionRegex = useMemo(
     () => buildMentionRegex(participants.map((p) => p.name)),
@@ -128,12 +164,16 @@ export function MessageInput({
     if (uploadsInFlight) return;
     const trimmed = draft.trim();
     if (!trimmed && !hasReadyAttachment) return;
-    onSend(trimmed, takeReadyAttachmentIds(channel));
-    setDraft("");
+    // Attachments are only taken when present (they force a message send, so
+    // onSend consumes them); a refused command must not eat the tray.
+    const ids = hasReadyAttachment ? takeReadyAttachmentIds(channel) : [];
+    if (!onSend(trimmed, ids)) return;
+    clearDraft();
     setMention(null);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && e.nativeEvent.isComposing) return;
     if (mentionOpen) {
       if (e.key === "ArrowUp") {
         e.preventDefault();
@@ -145,7 +185,7 @@ export function MessageInput({
         setHighlighted((h) => (h + 1) % matches.length);
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
         e.preventDefault();
         pickMention(matches[highlighted]);
         return;
@@ -167,24 +207,24 @@ export function MessageInput({
         setHighlighted((h) => (h + 1) % commandMatches.length);
         return;
       }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        pickCommand(commandMatches[highlighted]);
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        // A slash command is not a message: pending attachments stay put.
-        onSend(`/${commandMatches[highlighted].name}`, []);
-        setDraft("");
-        return;
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+        // Autocomplete, never execute; when the box already holds the
+        // highlighted command, Enter falls through and sends it as typed.
+        if (e.key === "Tab" || draft !== `/${commandMatches[highlighted].name}`) {
+          e.preventDefault();
+          pickCommand(commandMatches[highlighted]);
+          return;
+        }
       }
       if (e.key === "Escape") {
         setCommandDismissed(true);
         return;
       }
     }
-    if (e.key === "Enter") submit();
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
   };
 
   return (
@@ -331,7 +371,7 @@ export function MessageInput({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-3 rounded-lg bg-input px-4">
+      <div className="relative flex items-end gap-3 rounded-lg bg-input px-4">
         <input
           ref={fileRef}
           type="file"
@@ -348,7 +388,7 @@ export function MessageInput({
           onClick={() => fileRef.current?.click()}
           aria-label="Attach files"
           title="Attach files"
-          className="shrink-0 rounded p-0.5 text-muted hover:text-body"
+          className="mb-2.5 shrink-0 rounded p-0.5 text-muted hover:text-body"
         >
           <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
@@ -363,13 +403,16 @@ export function MessageInput({
         <div className="relative min-w-0 flex-1">
           <div
             ref={displayRef}
-            className="pointer-events-none min-w-0 overflow-hidden whitespace-pre py-2.5 text-body"
+            className="pointer-events-none absolute inset-0 overflow-hidden break-words whitespace-pre-wrap py-2.5 text-body"
           >
-            {!draft && <span className="text-faint">{`Write in ${channel}…`}</span>}
+            {!draft && <span className="text-faint">{`Message #${channel}`}</span>}
             {draft && renderContent(draft, mentionRegex, false)}
+            {/* pre-wrap drops a trailing newline the textarea still shows */}
+            {draft.endsWith("\n") && "\u200b"}
           </div>
-          <input
+          <textarea
             ref={inputRef}
+            rows={1}
             aria-label={`Message ${channel}`}
             value={draft}
             onChange={(e) => {
@@ -386,15 +429,24 @@ export function MessageInput({
             onBlur={() => setMention(null)}
             onScroll={(e) => {
               if (displayRef.current) {
-                displayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                displayRef.current.scrollTop = e.currentTarget.scrollTop;
               }
             }}
-            className="absolute inset-0 w-full bg-transparent py-2.5 text-transparent outline-none"
+            className="relative block max-h-[40vh] w-full resize-none overflow-y-auto break-words bg-transparent py-2.5 text-transparent outline-none"
             style={{ caretColor: "var(--color-body)" }}
             placeholder=""
-            maxLength={4000}
+            maxLength={MAX_LENGTH}
           />
         </div>
+        {remaining <= COUNTER_AT && (
+          <span
+            className={`pointer-events-none absolute right-2 bottom-1 text-xs ${
+              remaining < 50 ? "text-dead" : "text-muted"
+            }`}
+          >
+            {remaining}
+          </span>
+        )}
       </div>
     </div>
   );

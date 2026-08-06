@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  formatDivider,
   formatElapsed,
+  formatFullDateTime,
   formatShortTime,
   formatTimestamp,
   relativeTime,
@@ -14,17 +16,25 @@ const localTs = (
   d: number,
   h: number,
   mi: number,
-): number => new Date(y, mo, d, h, mi).getTime();
+  s = 0,
+): number => new Date(y, mo, d, h, mi, s).getTime();
 
 const digits = (s: string) => s.replace(/\D/g, "");
+
+// Day-relative labels compare against the real clock, so tests that hit them
+// freeze "now" at a mid-afternoon instant: nothing can straddle midnight and
+// fixed test dates can never collide with the machine's actual today.
+const NOW = localTs(2026, 2, 12, 15, 30);
+const pinNow = () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+};
 
 describe("relativeTime", () => {
   afterEach(() => vi.useRealTimers());
 
-  const NOW = new Date("2026-03-12T12:00:00Z").getTime();
   const at = (msAgo: number) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
+    pinNow();
     return relativeTime(NOW - msAgo);
   };
 
@@ -73,7 +83,24 @@ describe("formatElapsed", () => {
 });
 
 describe("formatTimestamp", () => {
-  it("contains the full date and the 24h time for a fixed instant", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("renders 'Today at' + 24h time for a same-day timestamp", () => {
+    pinNow();
+    const out = formatTimestamp(NOW - 90 * 60_000); // 14:00 today
+    expect(out.startsWith("Today at ")).toBe(true);
+    expect(digits(out)).toBe("1400");
+  });
+
+  it("renders 'Yesterday at' + 24h time for the previous calendar day", () => {
+    pinNow();
+    const out = formatTimestamp(localTs(2026, 2, 11, 23, 59));
+    expect(out.startsWith("Yesterday at ")).toBe(true);
+    expect(digits(out)).toBe("2359");
+  });
+
+  it("falls back to the full date and 24h time for older days", () => {
+    pinNow();
     const out = formatTimestamp(localTs(2026, 2, 7, 14, 5));
     expect(out).toContain("2026");
     // 2-digit day/month/hour/minute regardless of locale ordering.
@@ -83,10 +110,29 @@ describe("formatTimestamp", () => {
   });
 
   it("changes the date part across a day boundary", () => {
+    pinNow();
     const datePart = (ts: number) => formatTimestamp(ts).split(",")[0];
     expect(datePart(localTs(2026, 2, 8, 0, 1))).not.toBe(
       datePart(localTs(2026, 2, 7, 23, 59)),
     );
+  });
+});
+
+describe("formatDivider", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("labels the current and previous calendar day", () => {
+    pinNow();
+    expect(formatDivider(NOW - 60_000)).toBe("Today");
+    expect(formatDivider(localTs(2026, 2, 11, 0, 0))).toBe("Yesterday");
+  });
+
+  it("uses the long date for anything older", () => {
+    pinNow();
+    const out = formatDivider(localTs(2026, 2, 10, 12, 0));
+    expect(out).toContain("2026");
+    expect(out).toContain("10");
+    expect(out).not.toMatch(/Today|Yesterday/);
   });
 });
 
@@ -96,5 +142,14 @@ describe("formatShortTime", () => {
     expect(digits(formatShortTime(localTs(2026, 2, 7, 0, 0)))).toMatch(
       /^(00|24)00$/,
     );
+  });
+});
+
+describe("formatFullDateTime", () => {
+  it("includes the long date and a seconds-precision 24h time", () => {
+    const out = formatFullDateTime(localTs(2026, 2, 12, 14, 5, 32));
+    expect(out).toContain("2026");
+    expect(out).toContain("12");
+    expect(digits(out)).toContain("140532");
   });
 });

@@ -67,6 +67,11 @@ export function useConnection(
     channels,
     demoChannels,
     connected,
-    send: (event: ClientEvent) => socketRef.current?.send(event),
+    /** Sends a frame; returns false (without throwing) when the socket isn't usable. */
+    send: (event: ClientEvent): boolean => {
+      if (!connected) return false;
+      socketRef.current?.send(event);
+      return true;
+    },
   };
 }

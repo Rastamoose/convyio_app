@@ -124,24 +124,29 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
         ]);
       }
     },
-    createItem: (title: string, description?: string) => {
+    /** Resolves true when the item landed — callers gate their form reset on it. */
+    createItem: (title: string, description?: string): Promise<boolean> => {
       const request = api.fetch("/api/board/items", {
         method: "POST",
         body: JSON.stringify({ title, description }),
       });
-      if (!request) return;
-      void request
+      if (!request) return Promise.resolve(false);
+      return request
         .then(async (res) => {
           if (!res.ok) {
             fail("Could not create the item", await api.errorMessage(res));
-            return;
+            return false;
           }
           const data = (await res.json().catch(() => null)) as {
             item?: BoardItem;
           } | null;
           if (data?.item) upsertItem(data.item);
+          return true;
         })
-        .catch((err) => fail("Could not create the item", String(err)));
+        .catch((err) => {
+          fail("Could not create the item", String(err));
+          return false;
+        });
     },
     approve: (itemId: string) => transition(itemId, "approve", "approved"),
     deny: (itemId: string) => transition(itemId, "deny", "denied", {}),
