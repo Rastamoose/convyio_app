@@ -1,29 +1,31 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useToasts } from "./useToasts";
 
+// Auto-expiry (and its hover pause) lives in the Toasts component, not here.
 describe("useToasts", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it("push shows a toast with the given text", () => {
+  it("push shows a toast with the given text, defaulting to an error", () => {
     const { result } = renderHook(() => useToasts());
 
     act(() => result.current.push("Could not approve task-1"));
 
     expect(result.current.toasts).toHaveLength(1);
     expect(result.current.toasts[0].text).toBe("Could not approve task-1");
+    expect(result.current.toasts[0].kind).toBe("error");
   });
 
-  it("auto-expires a toast after its lifetime, not before", () => {
+  it("push records an explicit kind", () => {
     const { result } = renderHook(() => useToasts());
-    act(() => result.current.push("transient"));
 
-    act(() => vi.advanceTimersByTime(7_999));
-    expect(result.current.toasts).toHaveLength(1);
+    act(() => {
+      result.current.push("Task marked done", "success");
+      result.current.push("Agent reconnected", "info");
+    });
 
-    act(() => vi.advanceTimersByTime(1));
-    expect(result.current.toasts).toHaveLength(0);
+    expect(result.current.toasts.map((t) => t.kind)).toEqual([
+      "success",
+      "info",
+    ]);
   });
 
   it("dismiss removes only the targeted toast", () => {

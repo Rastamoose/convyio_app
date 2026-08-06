@@ -57,6 +57,7 @@ async function main() {
     db,
     service,
     sessions,
+    messages,
     channels,
     attachments,
     config.corsOrigin,

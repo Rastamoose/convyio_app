@@ -1,7 +1,8 @@
 import type { BoardItem } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
-import { relativeTime } from "../lib/format";
+import { formatFullDateTime, relativeTime } from "../lib/format";
 import { Avatar } from "./Avatar";
+import { AgentBadge } from "./AgentBadge";
 import { ActionButton } from "./ActionButton";
 
 export function BoardCard({
@@ -28,7 +29,7 @@ export function BoardCard({
     <div
       id={`board-item-${item.ref}`}
       onClick={() => onOpen(item.id)}
-      className={`cursor-pointer rounded bg-input p-3 transition hover:ring-1 hover:ring-blurple/60 ${
+      className={`cursor-pointer rounded bg-input p-3 transition duration-150 hover:ring-1 hover:ring-blurple/60 ${
         highlighted ? "bg-blurple/20 ring-1 ring-blurple" : ""
       }`}
     >
@@ -43,6 +44,7 @@ export function BoardCard({
         )}
       </div>
       <div
+        title={item.title}
         className={`line-clamp-2 text-sm ${
           item.status === "denied" ? "text-muted line-through" : "text-body"
         }`}
@@ -63,12 +65,10 @@ export function BoardCard({
         </div>
       )}
       <div className="mt-2 flex items-center gap-2 text-[11px] text-faint">
-        {item.origin === "agent" && (
-          <span className="rounded bg-blurple/30 px-1 py-px text-[9px] font-bold tracking-wide text-mention-text uppercase">
-            agent
-          </span>
-        )}
-        <span>{relativeTime(item.createdAt)}</span>
+        {item.origin === "agent" && <AgentBadge />}
+        <span title={formatFullDateTime(item.createdAt)}>
+          {relativeTime(item.createdAt)}
+        </span>
         {liveRun && (
           <span className="ml-auto flex items-center gap-1">
             <span className="relative flex h-1.5 w-1.5">

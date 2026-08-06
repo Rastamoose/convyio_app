@@ -7,6 +7,7 @@ import type { Sessions } from "./sessions";
 import type { Auth } from "../auth/Auth";
 import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
+import { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT, type MessageStore } from "../chat/MessageStore";
 import type { WorkspaceDb } from "../db";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
@@ -51,6 +52,7 @@ export function createApiHandler(
   db: WorkspaceDb,
   service: BoardService,
   sessions: Sessions,
+  messages: MessageStore,
   channels: Channels,
   attachments: Attachments,
   corsOrigin: string,
@@ -88,7 +90,7 @@ export function createApiHandler(
         serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
         const actor = authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, service, db, channels, attachments);
+        await route(req, res, parts, url, actor, service, db, messages, channels, attachments);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -112,6 +114,7 @@ async function route(
   actor: Actor,
   service: BoardService,
   db: WorkspaceDb,
+  messages: MessageStore,
   channels: Channels,
   attachments: Attachments,
 ): Promise<void> {
@@ -126,6 +129,21 @@ async function route(
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
     return json(res, 201, { channel: { name: channels.create(actor, body.name) } });
+  }
+
+  // GET /api/messages?channel=&before=&limit= — an older page of chat
+  // history than what the welcome frame's per-channel cap carried.
+  if (parts[1] === "messages" && parts.length === 2 && method === "GET") {
+    const channel = url.searchParams.get("channel");
+    if (!channel) throw new ApiError(400, "BAD_CHANNEL", "channel is required");
+    // Number(null) is 0, not NaN, so a missing `before` must be checked
+    // before the numeric coercion or it would silently pass as "before 0".
+    const beforeRaw = url.searchParams.get("before");
+    const before = beforeRaw === null ? NaN : Number(beforeRaw);
+    if (!Number.isFinite(before)) {
+      throw new ApiError(400, "BAD_BEFORE", "before must be a numeric timestamp");
+    }
+    return json(res, 200, { messages: messages.olderPage(channel, before, historyLimit(url)) });
   }
 
   // POST /api/uploads — raw binary body; metadata rides in headers because
@@ -300,6 +318,15 @@ function uploadMeta(req: IncomingMessage): { name: string; mime: string; width?:
     width: intHeader(req, "x-image-width"),
     height: intHeader(req, "x-image-height"),
   };
+}
+
+/** Clamp ?limit= to [1, MAX_HISTORY_LIMIT]; missing or non-numeric falls
+ *  back to the default rather than rejecting outright. */
+function historyLimit(url: URL): number {
+  const raw = url.searchParams.get("limit");
+  const n = raw === null ? DEFAULT_HISTORY_LIMIT : Number(raw);
+  if (!Number.isInteger(n) || n < 1) return DEFAULT_HISTORY_LIMIT;
+  return Math.min(n, MAX_HISTORY_LIMIT);
 }
 
 function intHeader(req: IncomingMessage, header: string): number | undefined {

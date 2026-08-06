@@ -18,7 +18,7 @@ export function TopBar({
       role="tab"
       aria-selected={view === target}
       onClick={() => onSetView(target)}
-      className={`rounded-lg px-3 py-1 text-sm font-semibold transition ${
+      className={`cursor-pointer rounded-lg px-3 py-1 text-sm font-semibold transition select-none ${
         view === target
           ? "bg-input text-body"
           : "text-muted hover:bg-input/50 hover:text-body"
@@ -36,8 +36,10 @@ export function TopBar({
       </div>
       {view === "chat" && (
         <>
-          <span className="ml-1.5 font-semibold text-body">{channel}</span>
-          <span className="rounded bg-sidebar px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase">
+          <span className="ml-1.5 min-w-0 truncate font-semibold text-body select-none">
+            <span className="text-faint">#</span> {channel}
+          </span>
+          <span className="shrink-0 rounded bg-sidebar px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase select-none">
             room
           </span>
         </>
@@ -45,7 +47,7 @@ export function TopBar({
       {demoChannels.includes(channel) && (
         <button
           onClick={() => startDemo(channel)}
-          className="ml-auto flex items-center gap-1.5 rounded-lg bg-blurple px-3 py-1 text-sm font-semibold text-mention-text transition hover:bg-working"
+          className="ml-auto flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-blurple px-3 py-1 text-sm font-semibold text-mention-text transition select-none hover:bg-working"
           title="Play the scripted demo conversation"
         >
           <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

@@ -9,6 +9,9 @@ import {
   type ChatMessage,
   type ClientEvent,
   type JoinEvent,
+  type MessageDeleteEvent,
+  type MessageEditEvent,
+  type MessageReactEvent,
   type Participant,
   type PinEvent,
   type RunEndEvent,
@@ -20,7 +23,7 @@ import {
 import { ApiError } from "./board/BoardService";
 import type { Attachments } from "./chat/Attachments";
 import type { Channels } from "./chat/Channels";
-import type { MessageStore } from "./chat/MessageStore";
+import { DEFAULT_HISTORY_LIMIT, type MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
 import type { Toolman } from "./board/Toolman";
@@ -97,9 +100,17 @@ export class Hub {
     author: Participant,
     content: string,
     channel: string,
-    extras: { id?: string; trace?: TraceChunk[]; runId?: string; attachments?: Attachment[] } = {},
+    extras: {
+      id?: string;
+      trace?: TraceChunk[];
+      runId?: string;
+      attachments?: Attachment[];
+      replyToId?: string;
+      /** Echoed top-level on the resulting broadcast; never part of the message. */
+      nonce?: string;
+    } = {},
   ): void {
-    const { id = randomUUID(), ...rest } = extras;
+    const { id = randomUUID(), nonce, ...rest } = extras;
     const message: ChatMessage = {
       id,
       authorId: author.id,
@@ -111,7 +122,9 @@ export class Hub {
       ...rest,
     };
     this.messages.append(message);
-    this.broadcast({ type: "message", message });
+    this.broadcast(
+      nonce === undefined ? { type: "message", message } : { type: "message", message, nonce },
+    );
     this.onMessagePosted?.(message);
   }
 
@@ -182,6 +195,11 @@ export class Hub {
           this.send(conn, { type: "error", error: `unknown channel: ${channel}` });
           break;
         }
+        // Replies point at real messages only; clients resolve them from history.
+        if (event.replyToId && !this.messages.get(event.replyToId)) {
+          this.send(conn, { type: "error", error: `unknown message: ${event.replyToId}` });
+          break;
+        }
         // The message id is allocated before posting so uploads can be bound
         // to it; a failed bind drops the whole message.
         const messageId = randomUUID();
@@ -195,7 +213,12 @@ export class Hub {
             break;
           }
         }
-        this.postMessage(participant, event.content, channel, { id: messageId, attachments });
+        this.postMessage(participant, event.content, channel, {
+          id: messageId,
+          attachments,
+          replyToId: event.replyToId,
+          nonce: event.nonce,
+        });
         break;
       }
       case "demo_start":
@@ -206,6 +229,25 @@ export class Hub {
         break;
       case "pin":
         this.handlePin(conn, event);
+        break;
+      case "message_edit":
+        this.handleMessageEdit(conn, event);
+        break;
+      case "message_delete":
+        this.handleMessageDelete(conn, event);
+        break;
+      case "message_react":
+        this.handleMessageReact(conn, event);
+        break;
+      case "typing":
+        // Ephemeral relay: nothing persists, and the sender knows they type.
+        this.broadcastExcept(conn, {
+          type: "typing",
+          actorId: participant.id,
+          name: participant.name,
+          channel: event.channel,
+          timestamp: Date.now(),
+        });
         break;
       case "interrupt":
         this.handleInterrupt(conn, event.target, event.content);
@@ -263,10 +305,13 @@ export class Hub {
     }
     conn.participant = participant;
 
+    // Bounded per channel (not "last N overall"): clients filter history by
+    // channel client-side, so a flat cap would leave quiet channels empty.
+    // Older messages page in via GET /api/messages.
     this.send(conn, {
       type: "welcome",
       self: participant,
-      history: this.messages.list(),
+      history: this.messages.recentByChannel(this.channels.list(), DEFAULT_HISTORY_LIMIT),
       participants: this.roster.list(),
       channels: this.channels.list(),
       demoChannels: this.options.demoChannels,
@@ -292,6 +337,63 @@ export class Hub {
       return;
     }
     this.broadcast({ type: "message_updated", message });
+  }
+
+  /** Resolve a message the connection's participant authored, or send the
+   *  refusal. Identity comes from the connection, never the frame. */
+  private authoredMessage(conn: Connection, messageId: string): ChatMessage | null {
+    const message = this.messages.get(messageId);
+    if (!message) {
+      this.send(conn, { type: "error", error: `unknown message: ${messageId}` });
+      return null;
+    }
+    if (message.authorId !== conn.participant!.id) {
+      this.send(conn, { type: "error", error: "not the message author" });
+      return null;
+    }
+    return message;
+  }
+
+  private handleMessageEdit(conn: Connection, event: MessageEditEvent): void {
+    if (!this.authoredMessage(conn, event.messageId)) return;
+    const message = this.messages.edit(event.messageId, event.content)!;
+    this.broadcast({ type: "message_updated", message });
+  }
+
+  private handleMessageDelete(conn: Connection, event: MessageDeleteEvent): void {
+    const message = this.authoredMessage(conn, event.messageId);
+    if (!message) return;
+    this.messages.delete(event.messageId);
+    this.broadcast({
+      type: "message_deleted",
+      messageId: event.messageId,
+      channel: message.channel ?? "general",
+    });
+  }
+
+  /** Reactions are idempotent; only an actual change is worth a broadcast. */
+  private handleMessageReact(conn: Connection, event: MessageReactEvent): void {
+    const participant = conn.participant!;
+    if (!this.messages.get(event.messageId)) {
+      this.send(conn, { type: "error", error: `unknown message: ${event.messageId}` });
+      return;
+    }
+    let changed: boolean;
+    if (event.op === "add") {
+      const outcome = this.messages.addReaction(event.messageId, event.emoji, {
+        id: participant.id,
+        name: participant.name,
+      });
+      if (outcome === "capped") {
+        this.send(conn, { type: "error", error: "reaction limit reached" });
+        return;
+      }
+      changed = outcome === "added";
+    } else {
+      changed = this.messages.removeReaction(event.messageId, event.emoji, participant.id);
+    }
+    if (!changed) return;
+    this.broadcast({ type: "message_updated", message: this.messages.get(event.messageId)! });
   }
 
   private handleInterrupt(conn: Connection, target: string, content: string): void {
@@ -392,6 +494,16 @@ export class Hub {
     const payload = JSON.stringify(event);
     for (const conn of this.connections) {
       if (conn.socket.readyState === WebSocket.OPEN) {
+        conn.socket.send(payload);
+      }
+    }
+  }
+
+  /** Broadcast to every connection but the sender's (typing must not echo). */
+  private broadcastExcept(sender: Connection, event: ServerEvent): void {
+    const payload = JSON.stringify(event);
+    for (const conn of this.connections) {
+      if (conn !== sender && conn.socket.readyState === WebSocket.OPEN) {
         conn.socket.send(payload);
       }
     }

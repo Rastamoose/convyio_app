@@ -63,7 +63,9 @@ async function postJson(
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full items-center justify-center bg-sidebar-dark">
-      <div className="w-96 rounded-lg bg-chat p-8 shadow-2xl">{children}</div>
+      <div className="w-96 animate-fade-in rounded-lg bg-chat p-8 shadow-2xl">
+        {children}
+      </div>
     </div>
   );
 }

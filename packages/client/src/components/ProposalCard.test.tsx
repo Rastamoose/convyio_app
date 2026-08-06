@@ -77,4 +77,12 @@ describe("ProposalCard", () => {
     await user.click(screen.getByRole("button", { name: "Discuss" }));
     expect(onDiscuss).toHaveBeenCalledWith(item);
   });
+
+  it("swallows the second press of a rapid double-click on Approve", async () => {
+    const user = userEvent.setup();
+    render(<ProposalCard item={item} onDiscuss={vi.fn()} />);
+
+    await user.dblClick(screen.getByRole("button", { name: "Approve" }));
+    expect(approveItem).toHaveBeenCalledTimes(1);
+  });
 });

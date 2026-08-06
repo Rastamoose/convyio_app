@@ -3,95 +3,13 @@ import type { Attachment, ChatMessage } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import type { BoardLine } from "../hooks/useBoard";
 import { formatDivider, formatShortTime, formatTimestamp } from "../lib/format";
+import { buildMentionRegex, escapeRegex, renderContent, renderMessageContent } from "../lib/markdown";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { AttachmentLightbox } from "./AttachmentLightbox";
 import { PinIcon, PinnedMessages } from "./PinnedMessages";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
-
-export function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function buildMentionRegex(names: string[]): RegExp | null {
-  if (names.length === 0) return null;
-  const sorted = [...names].sort((a, b) => b.length - a.length);
-  return new RegExp(`@(${sorted.map(escapeRegex).join("|")})(?![\\w-])`, "g");
-}
-
-const TASK_REF_REGEX = /\btask-\d+\b/g;
-
-export function renderContent(
-  content: string,
-  mentionRegex: RegExp | null,
-  pill = true,
-  onRefClick?: (ref: string) => void,
-): React.ReactNode {
-  interface Token {
-    start: number;
-    end: number;
-    node: React.ReactNode;
-  }
-  const tokens: Token[] = [];
-  if (mentionRegex && content.includes("@")) {
-    for (const match of content.matchAll(mentionRegex)) {
-      const index = match.index ?? 0;
-      tokens.push({
-        start: index,
-        end: index + match[0].length,
-        node: (
-          <span
-            key={`m${index}`}
-            className={
-              pill
-                ? "rounded bg-mention-pill px-0.5 font-medium text-mention-text"
-                : "rounded bg-mention-pill font-medium text-mention-text"
-            }
-          >
-            {match[0]}
-          </span>
-        ),
-      });
-    }
-  }
-  for (const match of content.matchAll(TASK_REF_REGEX)) {
-    const index = match.index ?? 0;
-    const ref = match[0];
-    tokens.push({
-      start: index,
-      end: index + ref.length,
-      node: onRefClick ? (
-        <span
-          key={`t${index}`}
-          onClick={() => onRefClick(ref)}
-          className="cursor-pointer rounded bg-input px-1 font-semibold text-blurple"
-        >
-          {ref}
-        </span>
-      ) : (
-        <span
-          key={`t${index}`}
-          className="rounded bg-input px-1 font-semibold text-blurple"
-        >
-          {ref}
-        </span>
-      ),
-    });
-  }
-  if (tokens.length === 0) return content;
-  tokens.sort((a, b) => a.start - b.start);
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  for (const token of tokens) {
-    if (token.start < last) continue; // skip overlapping tokens
-    if (token.start > last) parts.push(content.slice(last, token.start));
-    parts.push(token.node);
-    last = token.end;
-  }
-  if (last < content.length) parts.push(content.slice(last));
-  return parts;
-}
 
 function mentionsName(content: string, name: string | null): boolean {
   if (!name) return false;
@@ -280,9 +198,9 @@ export function MessageList({
               <div className="min-w-0 flex-1">
                 {pinnedIndicator(m)}
                 {m.content && (
-                  <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
-                    {renderContent(m.content, mentionRegex, true, onRefClick)}
-                  </p>
+                  <div className="leading-[1.375rem] break-words whitespace-pre-wrap">
+                    {renderMessageContent(m.content, mentionRegex, onRefClick)}
+                  </div>
                 )}
                 {m.attachments && m.attachments.length > 0 && (
                   <AttachmentGallery
@@ -322,9 +240,9 @@ export function MessageList({
                   />
                 ) : (
                   m.content && (
-                    <p className="leading-[1.375rem] break-words whitespace-pre-wrap">
-                      {renderContent(m.content, mentionRegex, true, onRefClick)}
-                    </p>
+                    <div className="leading-[1.375rem] break-words whitespace-pre-wrap">
+                      {renderMessageContent(m.content, mentionRegex, onRefClick)}
+                    </div>
                   )
                 )}
                 {m.attachments && m.attachments.length > 0 && (

@@ -28,21 +28,30 @@ export function AttachmentLightbox({
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-sidebar-dark/80"
+      className="fixed inset-0 z-50 flex animate-fade-in flex-col items-center justify-center gap-2 bg-sidebar-dark/80"
     >
       <img
         src={url}
         alt={attachment.name}
         className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
       />
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className="text-sm text-muted hover:text-body hover:underline"
-      >
-        Open original
-      </a>
+      <div className="flex items-center gap-4">
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm text-muted transition duration-150 hover:text-body hover:underline"
+        >
+          Open original
+        </a>
+        <a
+          href={url}
+          download={attachment.name}
+          className="text-sm text-muted transition duration-150 hover:text-body hover:underline"
+        >
+          Download
+        </a>
+      </div>
     </div>
   );
 }

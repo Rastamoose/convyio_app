@@ -31,7 +31,8 @@ export function BoardView({
   const [description, setDescription] = useState("");
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [showDenied, setShowDenied] = useState(false);
-  const canSubmit = !!title.trim();
+  const [adding, setAdding] = useState(false);
+  const canSubmit = !!title.trim() && !adding;
 
   const openItem = openItemId
     ? (board.find((i) => i.id === openItemId) ?? null)
@@ -50,10 +51,16 @@ export function BoardView({
 
   const submit = () => {
     if (!canSubmit) return;
-    createBoardItem(title.trim(), description.trim() || undefined);
-    setTitle("");
-    setDescription("");
-    setDescriptionOpen(false);
+    setAdding(true);
+    // The form only resets when the item landed.
+    void createBoardItem(title.trim(), description.trim() || undefined)
+      .then((ok) => {
+        if (!ok) return;
+        setTitle("");
+        setDescription("");
+        setDescriptionOpen(false);
+      })
+      .finally(() => setAdding(false));
   };
 
   const columns: ItemStatus[] = showDenied
@@ -75,7 +82,7 @@ export function BoardView({
               if (e.key === "Enter") submit();
             }}
             aria-label="New board item title"
-            className="w-64 rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
+            className="w-64 rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-blurple"
             placeholder="Add a board item…"
             maxLength={200}
           />
@@ -111,7 +118,7 @@ export function BoardView({
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
             aria-label="New board item description"
-            className="w-full resize-none rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
+            className="w-full resize-none rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-blurple"
             placeholder="Description (optional)"
             maxLength={1000}
           />
@@ -143,7 +150,23 @@ export function BoardView({
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                 {items.length === 0 ? (
-                  <div className="px-1 py-2 text-xs text-faint">empty</div>
+                  <div className="flex items-center gap-1.5 px-1 py-2 text-xs text-faint">
+                    <svg
+                      className="h-3.5 w-3.5 shrink-0"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6l3.5-7z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    Nothing here yet
+                  </div>
                 ) : (
                   items.map((item) => (
                     <BoardCard

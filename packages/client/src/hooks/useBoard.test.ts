@@ -116,6 +116,39 @@ describe("useBoard optimistic mutations", () => {
     );
   });
 
+  it("createItem resolves true and lands the created item on success", async () => {
+    const { result, onError } = await renderBoard(makeItem());
+
+    const created = makeItem({ id: "item-2", ref: "task-2", title: "New" });
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { item: created }));
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.createItem("New");
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.items.some((i) => i.id === "item-2")).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("createItem resolves false and reports the error when the POST fails", async () => {
+    const { result, onError } = await renderBoard(makeItem());
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, { message: "title required" }),
+    );
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.createItem("");
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.items).toHaveLength(1);
+    expect(onError).toHaveBeenCalledWith(
+      "Could not create the item: title required",
+    );
+  });
+
   it("applies the server's item when the PATCH succeeds", async () => {
     const { result, onError } = await renderBoard(makeItem());
 

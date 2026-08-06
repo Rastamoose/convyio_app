@@ -18,13 +18,18 @@ function colorFor(name: string): string {
 export function Avatar({
   name,
   size = 40,
+  grayscale = false,
 }: {
   name: string;
   size?: number;
+  /** Desaturate, e.g. for offline members. */
+  grayscale?: boolean;
 }) {
   return (
     <div
-      className="flex shrink-0 items-center justify-center rounded-full font-semibold text-body select-none"
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-body select-none ${
+        grayscale ? "grayscale" : ""
+      }`}
       style={{
         width: size,
         height: size,

@@ -1,6 +1,6 @@
 import type { BoardItem } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
-import { relativeTime } from "../lib/format";
+import { formatFullDateTime, relativeTime } from "../lib/format";
 import { ActionButton } from "./ActionButton";
 
 function Field({ label, value }: { label: string; value: string }) {
@@ -31,7 +31,10 @@ export function ProposalCard({
         <span className="truncate font-medium text-body">
           {item.createdByName}
         </span>
-        <span className="ml-auto shrink-0 text-faint">
+        <span
+          className="ml-auto shrink-0 text-faint"
+          title={formatFullDateTime(item.createdAt)}
+        >
           {relativeTime(item.createdAt)}
         </span>
       </div>

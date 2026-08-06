@@ -10,7 +10,7 @@ export function UsernameModal({ onJoin }: { onJoin: (name: string) => void }) {
 
   return (
     <div className="flex h-full items-center justify-center bg-sidebar-dark">
-      <div className="w-96 rounded-lg bg-chat p-8 shadow-2xl">
+      <div className="w-96 animate-pop-in rounded-lg bg-chat p-8 shadow-2xl">
         <h1 className="mb-1 text-2xl font-semibold text-body">Join the workspace</h1>
         <p className="mb-6 text-muted">
           One room, humans and agents side by side. Pick a display name.

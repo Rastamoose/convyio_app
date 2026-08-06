@@ -92,7 +92,20 @@ CREATE TABLE IF NOT EXISTS messages (
   attachments  TEXT,
   pinned_at    INTEGER,
   pinned_by    TEXT,
+  edited_at    INTEGER,
+  reply_to_id  TEXT,
   created_at   INTEGER NOT NULL
+);
+
+-- No FK to messages: like messages.author_id, kept loose; deletes remove both
+-- rows in one transaction (MessageStore).
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id  TEXT NOT NULL,
+  emoji       TEXT NOT NULL,
+  actor_id    TEXT NOT NULL,
+  actor_name  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (message_id, emoji, actor_id)
 );
 
 CREATE TABLE IF NOT EXISTS attachments (
@@ -118,6 +131,8 @@ const MIGRATIONS = [
   `ALTER TABLE messages ADD COLUMN attachments TEXT`,
   `ALTER TABLE messages ADD COLUMN pinned_at INTEGER`,
   `ALTER TABLE messages ADD COLUMN pinned_by TEXT`,
+  `ALTER TABLE messages ADD COLUMN edited_at INTEGER`,
+  `ALTER TABLE messages ADD COLUMN reply_to_id TEXT`,
   `ALTER TABLE actors ADD COLUMN google_sub TEXT`,
   `ALTER TABLE actors ADD COLUMN email TEXT`,
   // SQLite cannot ALTER-add a UNIQUE column, so uniqueness of google_sub is a

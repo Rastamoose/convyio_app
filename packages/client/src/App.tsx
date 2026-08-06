@@ -149,25 +149,31 @@ function Workspace() {
     }, 50);
   };
 
-  const handleSend = (content: string, attachmentIds: string[]) => {
+  const handleSend = (content: string, attachmentIds: string[]): boolean => {
     // Attachment-carrying sends are always messages, never slash commands.
     if (attachmentIds.length === 0 && content.startsWith("/")) {
       const command = content.slice(1).split(/\s+/)[0].toLowerCase();
       switch (command) {
         case "clear":
           workspace.clearMessages();
-          return;
+          return true;
         case "interrupt": {
           const match = content.match(/^\/interrupt\s+@(\S+)\s+(.+)$/s);
-          if (match) {
-            const [, target, prompt] = match;
-            workspace.interrupt(target, prompt);
+          if (!match) {
+            workspace.notify("Usage: /interrupt @agent <new prompt>");
+            return false;
           }
-          return;
+          const [, target, prompt] = match;
+          workspace.interrupt(target, prompt);
+          return true;
         }
+        default:
+          workspace.notify(`Unknown command: /${command}`);
+          return false;
       }
     }
     workspace.sendMessage(content, channel, attachmentIds);
+    return true;
   };
 
   return (

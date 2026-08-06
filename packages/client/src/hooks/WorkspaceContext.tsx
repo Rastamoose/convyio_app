@@ -1,16 +1,17 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useRef, type ReactNode } from "react";
 import type {
   Actor,
   Attachment,
   BoardItem,
   BoardItemEvent,
   ChatMessage,
+  ClientEvent,
   Participant,
 } from "@workspace/shared";
 import { isBoardEnvelope } from "@workspace/shared";
 import type { JoinCredentials } from "../ws";
 import { useConnection } from "./useConnection";
-import { useChatMessages } from "./useChatMessages";
+import { useChatMessages, type LocalMessage } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
 import { useApiSession } from "./useApiSession";
 import {
@@ -19,6 +20,8 @@ import {
 } from "./useAttachmentDrafts";
 import { useBoard, type BoardItemEdit, type BoardLine } from "./useBoard";
 import { useToasts, type Toast } from "./useToasts";
+import { useTyping, type Typist } from "./useTyping";
+import { useUnreads } from "./useUnreads";
 
 export interface WorkspaceState {
   self: Participant | null;
@@ -26,18 +29,36 @@ export interface WorkspaceState {
   channels: string[];
   demoChannels: string[];
   connected: boolean;
-  messages: ChatMessage[];
+  messages: LocalMessage[];
   activeRuns: ActiveRun[];
   runDurations: Map<string, number>;
   board: BoardItem[];
   boardLines: BoardLine[];
   toasts: Toast[];
   dismissToast: (id: number) => void;
+  notify: (text: string) => void;
   sendMessage: (
     content: string,
     channel?: string,
     attachmentIds?: string[],
+    replyToId?: string,
   ) => void;
+  /** Re-send a failed optimistic message. */
+  retryMessage: (nonce: string) => void;
+  /** Drop a pending/failed optimistic message the user gave up on. */
+  discardMessage: (nonce: string) => void;
+  editMessage: (messageId: string, content: string) => void;
+  deleteMessage: (messageId: string) => void;
+  reactToMessage: (messageId: string, emoji: string, op: "add" | "remove") => void;
+  /** Throttled outbound typing signal for the given channel. */
+  sendTyping: (channel: string) => void;
+  typistsIn: (channel: string) => Typist[];
+  unreadCount: (channel: string) => number;
+  /** Id of the first unread message as of the last channel switch, or null. */
+  firstUnreadId: (channel: string) => string | null;
+  markRead: (channel: string) => void;
+  /** Fetches an older page of history for the channel; false = no more. */
+  loadOlder: (channel: string) => Promise<boolean>;
   pinMessage: (messageId: string, pinned: boolean) => void;
   attachmentDraftsFor: (channel: string) => AttachmentDraft[];
   addAttachments: (channel: string, files: File[]) => void;
@@ -54,7 +75,8 @@ export interface WorkspaceState {
   startDemo: (channel: string) => void;
   /** Resolves to the created channel's normalized name, or null on failure. */
   createChannel: (name: string) => Promise<string | null>;
-  createBoardItem: (title: string, description?: string) => void;
+  /** Resolves true when the item landed; false = failure (toast already shown). */
+  createBoardItem: (title: string, description?: string) => Promise<boolean>;
   approveItem: (itemId: string) => void;
   denyItem: (itemId: string) => void;
   startItem: (itemId: string) => void;
@@ -101,6 +123,10 @@ export function WorkspaceProvider({
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
+  const unreads = useUnreads(chat.messages);
+  // Frames stashed by nonce so retry() can re-send the exact same content;
+  // cleared once the send resolves (echo) or is discarded.
+  const pendingFramesRef = useRef(new Map<string, ClientEvent>());
 
   const connection = useConnection(credentials, (event) => {
     if (isBoardEnvelope(event)) {
@@ -180,6 +206,7 @@ export function WorkspaceProvider({
     boardLines: board.lines,
     toasts,
     dismissToast,
+    notify: pushToast,
     sendMessage: (content, channel, attachmentIds) =>
       connection.send({
         type: "message",

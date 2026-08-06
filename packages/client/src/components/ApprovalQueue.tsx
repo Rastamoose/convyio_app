@@ -28,19 +28,43 @@ export function ApprovalQueue({
     };
   }, [onClose]);
 
+  // The board hook prepends new items, but sort defensively: newest first.
+  const sorted = [...items].sort((a, b) => b.createdAt - a.createdAt);
+
   return (
     <div
       ref={ref}
-      className="fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg bg-popup p-3 shadow-lg"
+      className="fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg bg-popup p-3 shadow-lg"
     >
       <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
         Awaiting approval — {items.length}
       </h2>
-      <div className="space-y-2">
-        {items.map((item) => (
-          <ProposalCard key={item.id} item={item} onDiscuss={onDiscuss} />
-        ))}
-      </div>
+      {sorted.length === 0 ? (
+        <div className="flex items-center gap-1.5 px-1 py-2 text-xs text-faint">
+          <svg
+            className="h-3.5 w-3.5 shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+            <path
+              d="M8.5 12.5l2.5 2.5 4.5-5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Nothing waiting on you
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((item) => (
+            <ProposalCard key={item.id} item={item} onDiscuss={onDiscuss} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
