@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 // swap in a controllable stub, per-test state via module-level lets.
 let participants: Participant[] = [];
 let board: BoardItem[] = [];
+let unreadsByChannel: Record<string, number> = {};
 const createChannel = vi.fn();
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
@@ -20,6 +21,7 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     setStatus: vi.fn(),
     signOut: null,
     createChannel,
+    unreadCount: (channel: string) => unreadsByChannel[channel] ?? 0,
   }),
 }));
 
@@ -79,6 +81,7 @@ describe("Sidebar", () => {
     vi.restoreAllMocks();
     participants = [];
     board = [];
+    unreadsByChannel = {};
   });
 
   it("groups members into Online/Offline sections with counts", () => {
@@ -170,5 +173,36 @@ describe("Sidebar", () => {
     expect(
       container.parentElement?.querySelector(".animate-pop-in"),
     ).toBeNull();
+  });
+
+  it("renders a channel with unreads in bold white with a count badge", () => {
+    unreadsByChannel = { design: 5 };
+    renderSidebar();
+
+    const designButton = screen.getByRole("tab", { name: /design/ });
+    // Should have white/bold text
+    expect(designButton).toHaveClass("text-body", "font-medium");
+    // Should show the badge with count inside the button
+    expect(designButton.textContent).toContain("5");
+  });
+
+  it("renders a channel with zero unreads without a badge", () => {
+    unreadsByChannel = { design: 0 };
+    renderSidebar();
+
+    const designButton = screen.getByRole("tab", { name: /design/ });
+    // Should have muted text since it's not active and has no unreads
+    expect(designButton).toHaveClass("text-muted");
+    // Should not show any number badge
+    expect(designButton.textContent).not.toContain(/\d/);
+  });
+
+  it("renders a count over 99 as 99+", () => {
+    unreadsByChannel = { design: 150 };
+    renderSidebar();
+
+    const designButton = screen.getByRole("tab", { name: /design/ });
+    // Should show the 99+ badge inside the button
+    expect(designButton.textContent).toContain("99+");
   });
 });

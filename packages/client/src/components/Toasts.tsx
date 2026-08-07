@@ -16,9 +16,11 @@ const KIND_STYLE: Record<ToastKind, { border: string; icon: string; glyph: strin
 function ToastItem({
   toast,
   onDismiss,
+  onAction,
 }: {
   toast: Toast;
   onDismiss: (id: number) => void;
+  onAction?: (toast: Toast) => void;
 }) {
   const [closing, setClosing] = useState(false);
   const timerRef = useRef<number | undefined>(undefined);
@@ -66,6 +68,17 @@ function ToastItem({
         />
       </svg>
       <span className="min-w-0 flex-1 break-words">{toast.text}</span>
+      {toast.action && (
+        <button
+          onClick={() => {
+            onAction?.(toast);
+            setClosing(true);
+          }}
+          className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold hover:underline ${style.icon}`}
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={() => setClosing(true)}
         aria-label="Dismiss notification"
@@ -88,9 +101,11 @@ function ToastItem({
 export function Toasts({
   toasts,
   onDismiss,
+  onAction,
 }: {
   toasts: Toast[];
   onDismiss: (id: number) => void;
+  onAction?: (toast: Toast) => void;
 }) {
   if (toasts.length === 0) return null;
   return (
@@ -100,7 +115,7 @@ export function Toasts({
       className="fixed bottom-4 left-1/2 z-[60] flex w-full max-w-md -translate-x-1/2 flex-col gap-2 px-4"
     >
       {toasts.map((toast) => (
-        <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
+        <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} onAction={onAction} />
       ))}
     </div>
   );

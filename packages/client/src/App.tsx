@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { BoardItem } from "@workspace/shared";
+import type { BoardItem, ChatMessage } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { UsernameModal } from "./components/UsernameModal";
 import { LoginScreen } from "./components/LoginScreen";
@@ -9,6 +9,7 @@ import { FileDropZone } from "./components/FileDropZone";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
+import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
 
@@ -118,6 +119,50 @@ function Workspace() {
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [highlightRef, setHighlightRef] = useState<string | null>(null);
   const highlightTimer = useRef<number | null>(null);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+
+  // Switching channels leaves any in-flight reply behind and marks the
+  // channel we're entering as read (also covers the initial mount).
+  useEffect(() => {
+    setReplyTo(null);
+    workspace.markRead(channel);
+  }, [channel]);
+
+  const cycleChannel = (dir: -1 | 1) => {
+    const { channels } = workspace;
+    if (channels.length === 0) return;
+    const idx = channels.indexOf(channel);
+    setChannel(channels[(idx + dir + channels.length) % channels.length]);
+  };
+
+  const selectFromSwitcher = (target: string) => {
+    setChannel(target);
+    setView("chat");
+    setSwitcherOpen(false);
+  };
+
+  // Single window-level listener for the two global shortcuts, registered
+  // with useCapture so it runs before MessageInput's own keydown handling —
+  // that handler's ArrowUp-to-edit branch has no modifier check, so without
+  // capture+stopPropagation an Alt+ArrowUp while composing would fire both.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault(); // keep the browser's own search bar from opening
+        setSwitcherOpen(true);
+        return;
+      }
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleChannel(e.key === "ArrowUp" ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [workspace.channels, channel]);
 
   const prefillText = (text: string) => setPrefill({ text, nonce: Date.now() });
 
@@ -172,7 +217,8 @@ function Workspace() {
           return false;
       }
     }
-    workspace.sendMessage(content, channel, attachmentIds);
+    workspace.sendMessage(content, channel, attachmentIds, replyTo?.id);
+    setReplyTo(null);
     return true;
   };
 
@@ -190,8 +236,24 @@ function Workspace() {
           <FileDropZone
             onFiles={(files) => workspace.addAttachments(channel, files)}
           >
-            <MessageList channel={channel} onRefClick={handleRefClick} />
-            <MessageInput channel={channel} onSend={handleSend} prefill={prefill} />
+            <MessageList
+              channel={channel}
+              onRefClick={handleRefClick}
+              onReply={setReplyTo}
+              editingId={editingId}
+              onEditingIdChange={setEditingId}
+              onDiscuss={discussItem}
+              onPrefill={prefillText}
+            />
+            <MessageInput
+              channel={channel}
+              onSend={handleSend}
+              prefill={prefill}
+              replyTo={replyTo}
+              onCancelReply={() => setReplyTo(null)}
+              editingId={editingId}
+              onRequestEditLast={setEditingId}
+            />
           </FileDropZone>
         ) : (
           <BoardView
@@ -211,7 +273,23 @@ function Workspace() {
           {workspace.self ? "Reconnecting…" : "Connecting…"}
         </div>
       )}
-      <Toasts toasts={workspace.toasts} onDismiss={workspace.dismissToast} />
+      <Toasts
+        toasts={workspace.toasts}
+        onDismiss={workspace.dismissToast}
+        onAction={(toast) => {
+          if (!toast.action) return;
+          setView("board");
+          setOpenItemId(toast.action.itemId);
+        }}
+      />
+      {switcherOpen && (
+        <QuickSwitcher
+          channels={workspace.channels}
+          unreadCount={workspace.unreadCount}
+          onSelect={selectFromSwitcher}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
     </div>
   );
 }
