@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Participant } from "@workspace/shared";
+import type { ChatMessage, Participant } from "@workspace/shared";
 import { buildMentionRegex, renderContent } from "../lib/markdown";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { useMessageDrafts } from "../hooks/useMessageDrafts";
@@ -16,6 +16,11 @@ interface MentionQuery {
   query: string;
 }
 
+interface EmojiQuery {
+  start: number; // index of the ':' in the draft
+  query: string;
+}
+
 interface SlashCommand {
   name: string;
   description: string;
@@ -23,11 +28,59 @@ interface SlashCommand {
 
 const MAX_LENGTH = 4000;
 const COUNTER_AT = 200;
+const REPLY_PREVIEW_LENGTH = 120;
 
 const COMMANDS: SlashCommand[] = [
   { name: "clear", description: "Clear all messages in the channel" },
   { name: "interrupt", description: "Interrupt an agent and redirect it: /interrupt @agent new prompt" },
 ];
+
+// Small hardcoded set (no emoji-dataset dependency): the grid picker just
+// shows every value; the map also backs `:shortcode:` autocomplete.
+const EMOJI_SHORTCODES: Record<string, string> = {
+  smile: "😀",
+  laughing: "😂",
+  rofl: "🤣",
+  blush: "😊",
+  heart_eyes: "😍",
+  kiss: "😘",
+  wink: "😜",
+  thinking: "🤔",
+  sunglasses: "😎",
+  cry: "😢",
+  sob: "😭",
+  rage: "😡",
+  party: "🥳",
+  sleeping: "😴",
+  mindblown: "🤯",
+  eyeroll: "🙄",
+  innocent: "😇",
+  hugs: "🤗",
+  love: "🥰",
+  smirk: "😏",
+  thumbsup: "👍",
+  thumbsdown: "👎",
+  clap: "👏",
+  raised_hands: "🙌",
+  pray: "🙏",
+  muscle: "💪",
+  fire: "🔥",
+  hundred: "💯",
+  tada: "🎉",
+  heart: "❤️",
+  broken_heart: "💔",
+  star: "⭐",
+  check: "✅",
+  cross: "❌",
+  warning: "⚠️",
+  rocket: "🚀",
+  eyes: "👀",
+  handshake: "🤝",
+  sweat_smile: "😅",
+  facepalm: "🤦",
+  wave: "👋",
+};
+const EMOJI_GRID = Object.values(EMOJI_SHORTCODES);
 
 function findCommandQuery(text: string): string | null {
   if (!text.startsWith("/")) return null;
@@ -47,30 +100,64 @@ function findMentionQuery(text: string, caret: number): MentionQuery | null {
   return { start: at, query };
 }
 
+function findEmojiQuery(text: string, caret: number): EmojiQuery | null {
+  const upToCaret = text.slice(0, caret);
+  const colon = upToCaret.lastIndexOf(":");
+  if (colon === -1) return null;
+  // ':' must be at the start or preceded by whitespace, same rule as '@',
+  // so times ("3:30") and URLs don't get misread as shortcode queries.
+  if (colon > 0 && !/\s/.test(upToCaret[colon - 1])) return null;
+  const query = upToCaret.slice(colon + 1);
+  if (!/^[a-z0-9_+-]*$/i.test(query)) return null;
+  return { start: colon, query };
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 export function MessageInput({
   channel,
   onSend,
   prefill,
+  replyTo,
+  onCancelReply,
+  editingId,
+  onRequestEditLast,
 }: {
   channel: string;
   /** Returns true when the content was consumed (sent or a valid command). */
   onSend: (content: string, attachmentIds: string[]) => boolean;
   prefill?: Prefill | null;
+  /** Message being replied to; App owns this, MessageInput only displays/cancels it. */
+  replyTo: ChatMessage | null;
+  onCancelReply: () => void;
+  /** Id of the message MessageList is currently inline-editing, if any. */
+  editingId: string | null;
+  /** Requests MessageList open its inline editor for the given message id. */
+  onRequestEditLast: (id: string) => void;
 }) {
   const {
     participants,
+    messages,
+    self,
     attachmentDraftsFor,
     addAttachments,
     removeAttachment,
     takeReadyAttachmentIds,
+    sendTyping,
   } = useWorkspace();
   const { draft, setDraft, clearDraft } = useMessageDrafts(channel);
   const [mention, setMention] = useState<MentionQuery | null>(null);
+  const [emojiQuery, setEmojiQuery] = useState<EmojiQuery | null>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const emojiPopupRef = useRef<HTMLDivElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
 
   const attachments = attachmentDraftsFor(channel);
   const uploadsInFlight = attachments.some((a) => a.status === "uploading");
@@ -89,7 +176,34 @@ export function MessageInput({
   useEffect(() => {
     inputRef.current?.focus();
     setMention(null);
+    setEmojiQuery(null);
+    setEmojiPickerOpen(false);
   }, [channel]);
+
+  // A reply target was just picked (from MessageList): bring the caret back.
+  useEffect(() => {
+    if (replyTo) inputRef.current?.focus();
+  }, [replyTo?.id]);
+
+  // Click/Escape outside the emoji grid closes it; it's opened by a button,
+  // not the textarea, so it needs its own dismissal path.
+  useEffect(() => {
+    if (!emojiPickerOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (emojiPopupRef.current?.contains(e.target as Node)) return;
+      if (emojiButtonRef.current?.contains(e.target as Node)) return;
+      setEmojiPickerOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEmojiPickerOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [emojiPickerOpen]);
 
   // Typing anywhere with nothing focused lands the keystroke in the composer.
   useEffect(() => {
@@ -139,9 +253,36 @@ export function MessageInput({
   const commandOpen =
     !mentionOpen && !commandDismissed && commandMatches.length > 0;
 
+  const shortcodeMatches = emojiQuery
+    ? Object.entries(EMOJI_SHORTCODES).filter(([name]) =>
+        name.startsWith(emojiQuery.query.toLowerCase()),
+      )
+    : [];
+  const shortcodeOpen =
+    !mentionOpen && !commandOpen && shortcodeMatches.length > 0;
+
+  // Own most recent message in this channel, skipping optimistic entries
+  // whose id is still a placeholder nonce (nothing real to edit yet).
+  const lastOwnMessageId = useMemo(() => {
+    if (!self) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.pending || m.failed) continue;
+      if (m.authorId !== self.id) continue;
+      if ((m.channel ?? "general") !== channel) continue;
+      return m.id;
+    }
+    return null;
+  }, [messages, self, channel]);
+
   const updateMention = (value: string, caret: number | null) => {
     setMention(findMentionQuery(value, caret ?? value.length));
     setCommandDismissed(false);
+    setHighlighted(0);
+  };
+
+  const updateEmojiQuery = (value: string, caret: number | null) => {
+    setEmojiQuery(findEmojiQuery(value, caret ?? value.length));
     setHighlighted(0);
   };
 
@@ -157,6 +298,23 @@ export function MessageInput({
 
   const pickCommand = (c: SlashCommand) => {
     setDraft(`/${c.name}`);
+    inputRef.current?.focus();
+  };
+
+  const pickEmojiShortcode = (emoji: string) => {
+    if (!emojiQuery) return;
+    const caret = inputRef.current?.selectionStart ?? draft.length;
+    const next = draft.slice(0, emojiQuery.start) + `${emoji} ` + draft.slice(caret);
+    setDraft(next);
+    setEmojiQuery(null);
+    inputRef.current?.focus();
+  };
+
+  const insertEmoji = (emoji: string) => {
+    const start = inputRef.current?.selectionStart ?? draft.length;
+    const end = inputRef.current?.selectionEnd ?? start;
+    setDraft(draft.slice(0, start) + emoji + draft.slice(end));
+    setEmojiPickerOpen(false);
     inputRef.current?.focus();
   };
 
@@ -220,6 +378,45 @@ export function MessageInput({
         setCommandDismissed(true);
         return;
       }
+    } else if (shortcodeOpen) {
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlighted(
+          (h) => (h - 1 + shortcodeMatches.length) % shortcodeMatches.length,
+        );
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlighted((h) => (h + 1) % shortcodeMatches.length);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+        e.preventDefault();
+        pickEmojiShortcode(shortcodeMatches[highlighted][1]);
+        return;
+      }
+      if (e.key === "Escape") {
+        setEmojiQuery(null);
+        return;
+      }
+    }
+    // Reached only when no autocomplete popup is open (each branch above
+    // returns for its own Escape/Enter/arrows).
+    if (e.key === "Escape" && replyTo) {
+      onCancelReply();
+      return;
+    }
+    if (
+      e.key === "ArrowUp" &&
+      !editingId &&
+      !draft &&
+      attachments.length === 0 &&
+      lastOwnMessageId
+    ) {
+      e.preventDefault();
+      onRequestEditLast(lastOwnMessageId);
+      return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -285,6 +482,77 @@ export function MessageInput({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {shortcodeOpen && (
+        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
+          <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+            Emoji
+          </div>
+          <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
+            {shortcodeMatches.map(([name, emoji], i) => (
+              <li key={name}>
+                <button
+                  className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left ${
+                    i === highlighted ? "bg-input" : ""
+                  }`}
+                  onMouseEnter={() => setHighlighted(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickEmojiShortcode(emoji);
+                  }}
+                >
+                  <span className="text-lg">{emoji}</span>
+                  <span className="min-w-0 flex-1 truncate text-body">:{name}:</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {emojiPickerOpen && (
+        <div
+          ref={emojiPopupRef}
+          className="absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg bg-popup p-2 shadow-lg"
+        >
+          {EMOJI_GRID.map((emoji, i) => (
+            <button
+              key={`${emoji}-${i}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                insertEmoji(emoji);
+              }}
+              className="rounded p-1 text-lg hover:bg-input"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+      {replyTo && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg bg-input px-3 py-2">
+          <div className="min-w-0 flex-1 border-l-2 border-blurple pl-2">
+            <div className="text-xs font-semibold text-blurple">
+              Replying to {replyTo.authorName}
+            </div>
+            <div className="truncate text-xs text-muted">
+              {truncate(replyTo.content, REPLY_PREVIEW_LENGTH)}
+            </div>
+          </div>
+          <button
+            onClick={onCancelReply}
+            aria-label="Cancel reply"
+            className="shrink-0 rounded p-1 text-muted hover:text-body"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
         </div>
       )}
       {attachments.length > 0 && (
@@ -400,6 +668,24 @@ export function MessageInput({
             />
           </svg>
         </button>
+        <button
+          ref={emojiButtonRef}
+          onClick={() => setEmojiPickerOpen((open) => !open)}
+          aria-label="Insert emoji"
+          title="Insert emoji"
+          className="mb-2.5 shrink-0 rounded p-0.5 text-muted hover:text-body"
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+            <path
+              d="M8 14s1.5 2 4 2 4-2 4-2"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path d="M9 9h.01M15 9h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
         <div className="relative min-w-0 flex-1">
           <div
             ref={displayRef}
@@ -416,8 +702,12 @@ export function MessageInput({
             aria-label={`Message ${channel}`}
             value={draft}
             onChange={(e) => {
-              setDraft(e.target.value);
-              updateMention(e.target.value, e.target.selectionStart);
+              const value = e.target.value;
+              setDraft(value);
+              updateMention(value, e.target.selectionStart);
+              updateEmojiQuery(value, e.target.selectionStart);
+              setEmojiPickerOpen(false);
+              if (!value.startsWith("/")) sendTyping(channel);
             }}
             onKeyDown={handleKeyDown}
             onPaste={(e) => {
@@ -426,7 +716,10 @@ export function MessageInput({
               e.preventDefault();
               addAttachments(channel, files);
             }}
-            onBlur={() => setMention(null)}
+            onBlur={() => {
+              setMention(null);
+              setEmojiQuery(null);
+            }}
             onScroll={(e) => {
               if (displayRef.current) {
                 displayRef.current.scrollTop = e.currentTarget.scrollTop;

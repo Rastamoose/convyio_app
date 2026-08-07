@@ -131,6 +131,16 @@ export function WorkspaceProvider({
   const connection = useConnection(credentials, (event) => {
     if (isBoardEnvelope(event)) {
       board.applyEnvelope(event);
+      // Surface new agent proposals even when the user is looking elsewhere;
+      // skip the user's own (a human never proposes, but this guards against
+      // ever notifying someone about their own action).
+      if (event.type === "item.proposed" && event.actor.id !== connection.self?.id) {
+        pushToast(
+          `${event.actor.display_name} proposed: ${event.item.title}`,
+          "info",
+          { label: "View", itemId: event.item.id },
+        );
+      }
       return;
     }
     switch (event.type) {
@@ -142,11 +152,20 @@ export function WorkspaceProvider({
         board.startSession();
         break;
       case "message":
-        chat.append(event.message);
+        chat.append(event.message, event.nonce);
+        if (event.nonce) pendingFramesRef.current.delete(event.nonce);
         if (event.message.runId) traces.completeRun(event.message.runId);
         break;
       case "message_updated":
         chat.update(event.message);
+        break;
+      case "message_deleted":
+        chat.remove(event.messageId);
+        break;
+      case "typing":
+        // typing is declared below but this callback only runs once the
+        // provider has finished rendering, so the binding is settled by then.
+        typing.onTyping(event);
         break;
       case "trace_start":
         traces.startRun(event.runId, event.agentName, event.timestamp);
@@ -171,6 +190,10 @@ export function WorkspaceProvider({
     }
   });
 
+  const typing = useTyping(connection.self?.id, (channel) =>
+    connection.send({ type: "typing", channel }),
+  );
+
   const createChannel = async (name: string): Promise<string | null> => {
     const request = api.fetch("/api/channels", {
       method: "POST",
@@ -191,6 +214,36 @@ export function WorkspaceProvider({
     }
   };
 
+  /** Resolves false when there's no more history (an empty page, or the request failed). */
+  const loadOlder = async (channel: string): Promise<boolean> => {
+    const inChannel = chat.messages.filter(
+      (m) => (m.channel ?? "general") === channel,
+    );
+    const oldest = inChannel.reduce(
+      (min, m) => (m.timestamp < min ? m.timestamp : min),
+      Infinity,
+    );
+    const before = Number.isFinite(oldest) ? oldest : Date.now();
+    const request = api.fetch(
+      `/api/messages?channel=${encodeURIComponent(channel)}&before=${before}&limit=50`,
+    );
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not load older messages: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      const data = (await res.json()) as { messages: ChatMessage[] };
+      if (data.messages.length === 0) return false;
+      chat.prepend(data.messages);
+      return true;
+    } catch (err) {
+      pushToast(`Could not load older messages: ${String(err)}`);
+      return false;
+    }
+  };
+
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
@@ -207,14 +260,53 @@ export function WorkspaceProvider({
     toasts,
     dismissToast,
     notify: pushToast,
-    sendMessage: (content, channel, attachmentIds) =>
-      connection.send({
-        type: "message",
-        content,
-        channel,
-        attachmentIds:
-          attachmentIds && attachmentIds.length > 0 ? attachmentIds : undefined,
-      }),
+    sendMessage: (content, channel, attachmentIds, replyToId) => {
+      if (!connection.self) return;
+      chat.sendMessage(
+        {
+          authorId: connection.self.id,
+          authorName: connection.self.name,
+          authorKind: connection.self.kind,
+          content,
+          channel,
+          replyToId,
+        },
+        (nonce) => {
+          const frame: ClientEvent = {
+            type: "message",
+            content,
+            channel,
+            attachmentIds:
+              attachmentIds && attachmentIds.length > 0 ? attachmentIds : undefined,
+            replyToId,
+            nonce,
+          };
+          pendingFramesRef.current.set(nonce, frame);
+          return connection.send(frame);
+        },
+      );
+    },
+    retryMessage: (nonce) => {
+      const frame = pendingFramesRef.current.get(nonce);
+      if (!frame) return;
+      chat.retry(nonce, () => connection.send(frame));
+    },
+    discardMessage: (nonce) => {
+      pendingFramesRef.current.delete(nonce);
+      chat.discard(nonce);
+    },
+    editMessage: (messageId, content) =>
+      connection.send({ type: "message_edit", messageId, content }),
+    deleteMessage: (messageId) =>
+      connection.send({ type: "message_delete", messageId }),
+    reactToMessage: (messageId, emoji, op) =>
+      connection.send({ type: "message_react", messageId, emoji, op }),
+    sendTyping: typing.sendTyping,
+    typistsIn: typing.typistsIn,
+    unreadCount: unreads.unreadCount,
+    firstUnreadId: unreads.firstUnreadId,
+    markRead: unreads.markRead,
+    loadOlder,
     pinMessage: (messageId, pinned) =>
       connection.send({ type: "pin", messageId, pinned }),
     attachmentDraftsFor: attachments.draftsFor,

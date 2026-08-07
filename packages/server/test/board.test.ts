@@ -229,7 +229,8 @@ describe("T10: full-stack approval fan-out", async () => {
     const channels = new Channels(db);
     channels.seed([{ name: "general", isDemo: false }]);
     const attachments = new Attachments(db, fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-")));
-    const handler = createApiHandler(db, service, sessions, channels, attachments, "*");
+    const messages = new MessageStore(db);
+    const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
     const server = http.createServer((req, res) => void handler(req, res));
     const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, attachments, sessions, toolman, {
       serverId: db.serverId,

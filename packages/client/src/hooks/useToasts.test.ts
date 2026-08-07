@@ -28,6 +28,22 @@ describe("useToasts", () => {
     ]);
   });
 
+  it("push records an optional action", () => {
+    const { result } = renderHook(() => useToasts());
+
+    act(() =>
+      result.current.push("agent proposed: fix the header", "info", {
+        label: "View",
+        itemId: "item-1",
+      }),
+    );
+
+    expect(result.current.toasts[0].action).toEqual({
+      label: "View",
+      itemId: "item-1",
+    });
+  });
+
   it("dismiss removes only the targeted toast", () => {
     const { result } = renderHook(() => useToasts());
     act(() => {

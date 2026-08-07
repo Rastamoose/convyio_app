@@ -2,10 +2,17 @@ import { useCallback, useRef, useState } from "react";
 
 export type ToastKind = "error" | "info" | "success";
 
+/** Clickable action a toast can carry, e.g. jump to the board item it's about. */
+export interface ToastAction {
+  label: string;
+  itemId: string;
+}
+
 export interface Toast {
   id: number;
   text: string;
   kind: ToastKind;
+  action?: ToastAction;
 }
 
 /**
@@ -15,7 +22,7 @@ export interface Toast {
  */
 export function useToasts(): {
   toasts: Toast[];
-  push: (text: string, kind?: ToastKind) => void;
+  push: (text: string, kind?: ToastKind, action?: ToastAction) => void;
   dismiss: (id: number) => void;
 } {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -26,10 +33,13 @@ export function useToasts(): {
   }, []);
 
   // Default "error": every pre-existing caller pushes failure notices.
-  const push = useCallback((text: string, kind: ToastKind = "error") => {
-    const id = ++nextIdRef.current;
-    setToasts((prev) => [...prev, { id, text, kind }]);
-  }, []);
+  const push = useCallback(
+    (text: string, kind: ToastKind = "error", action?: ToastAction) => {
+      const id = ++nextIdRef.current;
+      setToasts((prev) => [...prev, { id, text, kind, action }]);
+    },
+    [],
+  );
 
   return { toasts, push, dismiss };
 }

@@ -96,8 +96,16 @@ export function Sidebar({
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
 }) {
-  const { participants, self, channels, board, setStatus, signOut, createChannel } =
-    useWorkspace();
+  const {
+    participants,
+    self,
+    channels,
+    board,
+    setStatus,
+    signOut,
+    createChannel,
+    unreadCount,
+  } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
@@ -225,22 +233,32 @@ export function Sidebar({
           />
         )}
         <div role="tablist" aria-label="Rooms">
-          {channels.map((c) => (
-            <button
-              key={c}
-              role="tab"
-              aria-selected={c === channel}
-              onClick={() => onSelectChannel(c)}
-              className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
-                c === channel
-                  ? "bg-input text-body"
-                  : "text-muted hover:bg-input/70 hover:text-body"
-              }`}
-            >
-              <span className="shrink-0 text-[15px] text-faint">#</span>
-              <span className="min-w-0 truncate text-[15px]">{c}</span>
-            </button>
-          ))}
+          {channels.map((c) => {
+            const unreads = unreadCount(c);
+            return (
+              <button
+                key={c}
+                role="tab"
+                aria-selected={c === channel}
+                onClick={() => onSelectChannel(c)}
+                className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
+                  c === channel
+                    ? "bg-input text-body"
+                    : unreads > 0
+                      ? "text-body hover:bg-input/70"
+                      : "text-muted hover:bg-input/70 hover:text-body"
+                }`}
+              >
+                <span className="shrink-0 text-[15px] text-faint">#</span>
+                <span className="min-w-0 truncate text-[15px]">{c}</span>
+                {unreads > 0 && (
+                  <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-white">
+                    {unreads > 99 ? "99+" : unreads}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </section>
 
