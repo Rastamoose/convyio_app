@@ -29,7 +29,7 @@ export function TopBar({
   );
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b-2 border-body bg-sidebar px-4">
+    <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-divider bg-sidebar px-4">
       <div role="tablist" aria-label="Workspace view" className="flex items-center gap-2.5">
         {tab("chat", "Chat")}
         {tab("board", "Board")}
@@ -47,7 +47,7 @@ export function TopBar({
       {demoChannels.includes(channel) && (
         <button
           onClick={() => startDemo(channel)}
-          className="ml-auto flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border-2 border-body bg-blurple px-3 py-1 text-sm font-semibold text-mention-text shadow-hard-sm transition select-none hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none"
+          className="ml-auto flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-blurple px-3 py-1 text-sm font-semibold text-mention-text transition select-none hover:bg-working"
           title="Play the scripted demo conversation"
         >
           <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

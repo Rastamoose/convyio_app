@@ -145,6 +145,8 @@ const MIGRATIONS = [
   // One account per email address, regardless of how it signed up.
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_email
      ON actors (lower(email)) WHERE email IS NOT NULL`,
+  `ALTER TABLE channels ADD COLUMN archived_at INTEGER`,
+  `ALTER TABLE channels ADD COLUMN pinned_at INTEGER`,
 ];
 
 export class WorkspaceDb {

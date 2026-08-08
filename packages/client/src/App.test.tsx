@@ -127,12 +127,18 @@ describe("App boot decision", () => {
     fetchMock.mockReset();
   });
 
-  it("guest mode (no Google client id) keeps the guest name modal", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { googleClientId: null }));
+  it("no auth method configured shows the contact-support dead end", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { googleClientId: null, emailAuthEnabled: false }),
+    );
 
     render(<App />);
 
-    expect(await screen.findByText("Join the workspace")).toBeInTheDocument();
+    expect(await screen.findByText("Sign-in unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "hello@convyio.com" })).toHaveAttribute(
+      "href",
+      "mailto:hello@convyio.com",
+    );
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/auth/config"));
   });
 
@@ -166,10 +172,12 @@ describe("Workspace composer", () => {
 
   /** Boot straight into the chat view and hand back the composer textarea. */
   const bootWorkspace = async (): Promise<HTMLElement> => {
-    window.sessionStorage.setItem("displayName", "hana");
+    window.localStorage.setItem("authToken", "tok-1");
     fetchMock.mockImplementation((input) => {
       if (String(input).includes("/api/auth/config")) {
-        return Promise.resolve(jsonResponse(200, { googleClientId: null }));
+        return Promise.resolve(
+          jsonResponse(200, { googleClientId: null, emailAuthEnabled: true }),
+        );
       }
       // Board snapshot etc.: stay pending, irrelevant to these tests.
       return new Promise<Response>(() => {});
@@ -300,10 +308,12 @@ describe("Workspace keyboard navigation", () => {
 
   /** Boot straight into the chat view and hand back the composer textarea. */
   const bootWorkspace = async (): Promise<HTMLElement> => {
-    window.sessionStorage.setItem("displayName", "hana");
+    window.localStorage.setItem("authToken", "tok-1");
     fetchMock.mockImplementation((input) => {
       if (String(input).includes("/api/auth/config")) {
-        return Promise.resolve(jsonResponse(200, { googleClientId: null }));
+        return Promise.resolve(
+          jsonResponse(200, { googleClientId: null, emailAuthEnabled: true }),
+        );
       }
       return new Promise<Response>(() => {});
     });

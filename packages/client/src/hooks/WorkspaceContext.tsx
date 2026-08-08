@@ -27,6 +27,8 @@ export interface WorkspaceState {
   self: Participant | null;
   participants: Participant[];
   channels: string[];
+  archivedChannels: string[];
+  pinnedChannels: string[];
   demoChannels: string[];
   connected: boolean;
   messages: LocalMessage[];
@@ -75,6 +77,11 @@ export interface WorkspaceState {
   startDemo: (channel: string) => void;
   /** Resolves to the created channel's normalized name, or null on failure. */
   createChannel: (name: string) => Promise<string | null>;
+  /** Resolves to the channel's new normalized name, or null on failure. */
+  renameChannel: (name: string, newName: string) => Promise<string | null>;
+  archiveChannel: (name: string, archived: boolean) => Promise<boolean>;
+  pinChannel: (name: string, pinned: boolean) => Promise<boolean>;
+  deleteChannel: (name: string) => Promise<boolean>;
   /** Resolves true when the item landed; false = failure (toast already shown). */
   createBoardItem: (title: string, description?: string) => Promise<boolean>;
   approveItem: (itemId: string) => void;
@@ -214,6 +221,57 @@ export function WorkspaceProvider({
     }
   };
 
+  /** Shared PATCH/DELETE caller for the channel actions below: same
+   *  request/error shape as createChannel, only the verb+body differ. */
+  const patchChannel = async (
+    name: string,
+    body: { name?: string; archived?: boolean; pinned?: boolean },
+    verb: string,
+  ): Promise<string | null> => {
+    const request = api.fetch(`/api/channels/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    if (!request) return null;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not ${verb} the channel: ${await api.errorMessage(res)}`);
+        return null;
+      }
+      const data = (await res.json()) as { channel: { name: string } };
+      return data.channel.name;
+    } catch (err) {
+      pushToast(`Could not ${verb} the channel: ${String(err)}`);
+      return null;
+    }
+  };
+
+  const renameChannel = (name: string, newName: string) =>
+    patchChannel(name, { name: newName }, "rename");
+  const archiveChannel = async (name: string, archived: boolean): Promise<boolean> =>
+    (await patchChannel(name, { archived }, archived ? "archive" : "unarchive")) !== null;
+  const pinChannel = async (name: string, pinned: boolean): Promise<boolean> =>
+    (await patchChannel(name, { pinned }, pinned ? "pin" : "unpin")) !== null;
+
+  const deleteChannel = async (name: string): Promise<boolean> => {
+    const request = api.fetch(`/api/channels/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not delete the channel: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      pushToast(`Could not delete the channel: ${String(err)}`);
+      return false;
+    }
+  };
+
   /** Resolves false when there's no more history (an empty page, or the request failed). */
   const loadOlder = async (channel: string): Promise<boolean> => {
     const inChannel = chat.messages.filter(
@@ -250,6 +308,8 @@ export function WorkspaceProvider({
     self: connection.self,
     participants: connection.participants,
     channels: connection.channels,
+    archivedChannels: connection.archivedChannels,
+    pinnedChannels: connection.pinnedChannels,
     demoChannels: connection.demoChannels,
     connected: connection.connected,
     messages: chat.messages,
@@ -321,6 +381,10 @@ export function WorkspaceProvider({
       connection.send({ type: "interrupt", target, content }),
     startDemo: (channel) => connection.send({ type: "demo_start", channel }),
     createChannel,
+    renameChannel,
+    archiveChannel,
+    pinChannel,
+    deleteChannel,
     createBoardItem: board.createItem,
     approveItem: board.approve,
     denyItem: board.deny,

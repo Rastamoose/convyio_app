@@ -7,15 +7,12 @@ export type ActionTone =
   | "primary"
   | "destructive";
 
-const PRESS =
-  "border-2 border-body shadow-hard-sm active:translate-x-px active:translate-y-px active:shadow-none";
-
 const TONE_CLASSES: Record<ActionTone, string> = {
-  approve: `${PRESS} bg-online text-mention-text hover:opacity-90`,
-  deny: `${PRESS} bg-dead text-mention-text hover:opacity-90`,
-  neutral: `${PRESS} bg-popup text-body hover:bg-mention-bg-hover`,
-  primary: `${PRESS} bg-blurple text-mention-text hover:opacity-90`,
-  destructive: "border-2 border-dead bg-transparent text-dead hover:bg-dead/10",
+  approve: "bg-online text-mention-text hover:opacity-90",
+  deny: "bg-dead text-mention-text hover:opacity-90",
+  neutral: "bg-popup text-body hover:bg-mention-bg-hover",
+  primary: "bg-blurple text-mention-text hover:opacity-90",
+  destructive: "border border-dead/50 bg-transparent text-dead hover:bg-dead/10",
 };
 
 /** One button style for board item actions (approve/deny/start/…). */

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { BoardItem, Participant } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { presenceDot, presenceLabel } from "../lib/status";
@@ -6,8 +6,144 @@ import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { ApprovalQueue } from "./ApprovalQueue";
 import { MemberCard } from "./MemberCard";
+import { PinIcon } from "./PinnedMessages";
 
 const SERVER_NAME = "Workspace";
+/** How long a "Delete" click stays armed before a second click is required. */
+const DELETE_CONFIRM_MS = 3000;
+
+function RoomMenuItem({
+  label,
+  onClick,
+  danger,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-input ${danger ? "text-dead" : "text-body"}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Right-click menu for a room row, positioned at the cursor. */
+function RoomContextMenu({
+  x,
+  y,
+  channel,
+  pinned,
+  archived,
+  confirmingDelete,
+  onMarkRead,
+  onTogglePin,
+  onRename,
+  onToggleArchive,
+  onDelete,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  channel: string;
+  pinned: boolean;
+  archived: boolean;
+  confirmingDelete: boolean;
+  onMarkRead: () => void;
+  onTogglePin: () => void;
+  onRename: () => void;
+  onToggleArchive: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: y, left: x });
+  // "general" is the fixed default channel messages fall back to; the server
+  // refuses to rename/archive/delete it, so those actions aren't offered.
+  const isGeneral = channel === "general";
+
+  // Clamp into the viewport once we know the menu's real size (jsdom reports
+  // 0 for offsetWidth/Height, so tests just see the raw cursor position).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setPos({
+      top: Math.min(y, window.innerHeight - el.offsetHeight - 8),
+      left: Math.min(x, window.innerWidth - el.offsetWidth - 8),
+    });
+  }, [x, y]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`Room actions for ${channel}`}
+      style={{ top: pos.top, left: pos.left }}
+      className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
+    >
+      <RoomMenuItem
+        label="Mark as read"
+        onClick={() => {
+          onMarkRead();
+          onClose();
+        }}
+      />
+      <RoomMenuItem
+        label={pinned ? "Unpin" : "Pin channel"}
+        onClick={() => {
+          onTogglePin();
+          onClose();
+        }}
+      />
+      {!isGeneral && (
+        <RoomMenuItem
+          label="Rename"
+          onClick={() => {
+            onRename();
+            onClose();
+          }}
+        />
+      )}
+      {!isGeneral && (
+        <RoomMenuItem
+          label={archived ? "Unarchive" : "Archive"}
+          onClick={() => {
+            onToggleArchive();
+            onClose();
+          }}
+        />
+      )}
+      {!isGeneral && (
+        <RoomMenuItem
+          label={confirmingDelete ? "Confirm delete?" : "Delete"}
+          danger
+          onClick={() => {
+            onDelete();
+            if (confirmingDelete) onClose();
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
 function PresenceDot({ participant }: { participant: Participant }) {
   const { color, pulse } = presenceDot(participant);
@@ -100,11 +236,18 @@ export function Sidebar({
     participants,
     self,
     channels,
+    archivedChannels,
+    pinnedChannels,
     board,
     setStatus,
     signOut,
     createChannel,
+    renameChannel,
+    archiveChannel,
+    pinChannel,
+    deleteChannel,
     unreadCount,
+    markRead,
   } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -115,6 +258,105 @@ export function Sidebar({
   } | null>(null);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [roomDraft, setRoomDraft] = useState("");
+  const [roomsOpen, setRoomsOpen] = useState(true);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    channel: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [renamingChannel, setRenamingChannel] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [confirmDeleteChannel, setConfirmDeleteChannel] = useState<string | null>(null);
+  const deleteTimerRef = useRef<number | null>(null);
+
+  // Pinned rooms bubble to the top; otherwise the server's display order holds.
+  const sortedChannels = [...channels].sort(
+    (a, b) => Number(pinnedChannels.includes(b)) - Number(pinnedChannels.includes(a)),
+  );
+
+  const openRoomMenu = (e: React.MouseEvent, name: string) => {
+    e.preventDefault();
+    setContextMenu({ channel: name, x: e.clientX, y: e.clientY });
+  };
+
+  const startRename = (name: string) => {
+    setRenamingChannel(name);
+    setRenameDraft(name);
+  };
+
+  const submitRename = async () => {
+    const name = renamingChannel;
+    const draft = renameDraft.trim();
+    setRenamingChannel(null);
+    if (!name || !draft || draft === name) return;
+    const renamed = await renameChannel(name, draft);
+    if (renamed && channel === name) onSelectChannel(renamed);
+  };
+
+  const handleDeleteClick = (name: string) => {
+    if (confirmDeleteChannel === name) {
+      if (deleteTimerRef.current != null) window.clearTimeout(deleteTimerRef.current);
+      setConfirmDeleteChannel(null);
+      void deleteChannel(name);
+      return;
+    }
+    if (deleteTimerRef.current != null) window.clearTimeout(deleteTimerRef.current);
+    setConfirmDeleteChannel(name);
+    deleteTimerRef.current = window.setTimeout(
+      () => setConfirmDeleteChannel(null),
+      DELETE_CONFIRM_MS,
+    );
+  };
+
+  const renderRoom = (c: string) => {
+    if (renamingChannel === c) {
+      return (
+        <input
+          key={c}
+          autoFocus
+          aria-label={`Rename ${c}`}
+          value={renameDraft}
+          onChange={(e) => setRenameDraft(e.target.value)}
+          onBlur={() => void submitRename()}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setRenamingChannel(null);
+            if (e.key === "Enter") void submitRename();
+          }}
+          maxLength={32}
+          className="mb-0.5 w-full rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none placeholder:text-faint"
+        />
+      );
+    }
+    const unreads = unreadCount(c);
+    return (
+      <button
+        key={c}
+        role="tab"
+        aria-selected={c === channel}
+        onClick={() => onSelectChannel(c)}
+        onContextMenu={(e) => openRoomMenu(e, c)}
+        className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
+          c === channel
+            ? "bg-input text-body"
+            : unreads > 0
+              ? "text-body hover:bg-input/70"
+              : "text-muted hover:bg-input/70 hover:text-body"
+        }`}
+      >
+        <span className="shrink-0 text-[15px] text-faint">#</span>
+        <span className="min-w-0 truncate text-[15px]">{c}</span>
+        {pinnedChannels.includes(c) && (
+          <PinIcon className="ml-auto h-3 w-3 shrink-0 text-faint" />
+        )}
+        {unreads > 0 && (
+          <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
+            {unreads > 99 ? "99+" : unreads}
+          </span>
+        )}
+      </button>
+    );
+  };
 
   const byName = (a: Participant, b: Participant) => a.name.localeCompare(b.name);
   const online = participants.filter((p) => p.online).sort(byName);
@@ -148,7 +390,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r-2 border-body bg-sidebar">
+    <aside className="flex h-full w-60 flex-col bg-sidebar">
       {/* Workspace header */}
       <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4 select-none">
         <span className="truncate font-semibold text-body">{SERVER_NAME}</span>
@@ -201,9 +443,13 @@ export function Sidebar({
       {/* Rooms */}
       <section className="min-h-0 flex-1 overflow-y-auto border-t border-divider px-2 pt-3">
         <div className="mb-1 flex items-center justify-between px-2">
-          <h2 className="text-[11px] font-bold tracking-wide text-muted uppercase select-none">
+          <button
+            onClick={() => setRoomsOpen((o) => !o)}
+            className="flex cursor-pointer items-center gap-1 text-[11px] font-bold tracking-wide text-muted uppercase select-none hover:text-body"
+          >
+            <span className="w-2.5 shrink-0">{roomsOpen ? "▾" : "▸"}</span>
             Rooms
-          </h2>
+          </button>
           <button
             aria-label="Create a room"
             onClick={() => setCreatingRoom(true)}
@@ -232,34 +478,28 @@ export function Sidebar({
             className="mb-0.5 w-full rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none placeholder:text-faint"
           />
         )}
-        <div role="tablist" aria-label="Rooms">
-          {channels.map((c) => {
-            const unreads = unreadCount(c);
-            return (
-              <button
-                key={c}
-                role="tab"
-                aria-selected={c === channel}
-                onClick={() => onSelectChannel(c)}
-                className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
-                  c === channel
-                    ? "bg-input text-body"
-                    : unreads > 0
-                      ? "text-body hover:bg-input/70"
-                      : "text-muted hover:bg-input/70 hover:text-body"
-                }`}
-              >
-                <span className="shrink-0 text-[15px] text-faint">#</span>
-                <span className="min-w-0 truncate text-[15px]">{c}</span>
-                {unreads > 0 && (
-                  <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
-                    {unreads > 99 ? "99+" : unreads}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {roomsOpen && (
+          <div role="tablist" aria-label="Rooms">
+            {sortedChannels.map(renderRoom)}
+          </div>
+        )}
+
+        {archivedChannels.length > 0 && (
+          <>
+            <button
+              onClick={() => setArchivedOpen((o) => !o)}
+              className="mt-2 mb-1 flex items-center gap-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none hover:text-body"
+            >
+              <span className="w-2.5 shrink-0">{archivedOpen ? "▾" : "▸"}</span>
+              Archived — {archivedChannels.length}
+            </button>
+            {archivedOpen && (
+              <div role="tablist" aria-label="Archived rooms">
+                {archivedChannels.map(renderRoom)}
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       {/* User panel */}
@@ -332,6 +572,29 @@ export function Sidebar({
           onDiscuss={discuss}
           onPrefill={onPrefill}
           onClose={() => setSelected(null)}
+        />
+      )}
+      {contextMenu && (
+        <RoomContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          channel={contextMenu.channel}
+          pinned={pinnedChannels.includes(contextMenu.channel)}
+          archived={archivedChannels.includes(contextMenu.channel)}
+          confirmingDelete={confirmDeleteChannel === contextMenu.channel}
+          onMarkRead={() => markRead(contextMenu.channel)}
+          onTogglePin={() =>
+            void pinChannel(contextMenu.channel, !pinnedChannels.includes(contextMenu.channel))
+          }
+          onRename={() => startRename(contextMenu.channel)}
+          onToggleArchive={() =>
+            void archiveChannel(
+              contextMenu.channel,
+              !archivedChannels.includes(contextMenu.channel),
+            )
+          }
+          onDelete={() => handleDeleteClick(contextMenu.channel)}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </aside>

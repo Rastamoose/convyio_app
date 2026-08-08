@@ -42,10 +42,12 @@ export interface HubOptions {
   serverId: string;
   demoChannels: string[];
   /**
-   * The join gate, set only when auth is enabled. It exists so the Hub never
-   * knows how identities are proven (Google session vs shared agent secret) —
-   * it only learns whether a join stands and as what name. Absent = guest
-   * mode: joins are trusted to self-declare a name (dev/tests/demo).
+   * The join gate. It exists so the Hub never knows how identities are
+   * proven (Google session vs shared agent secret) — it only learns whether
+   * a join stands and as what name. The running server always sets this
+   * (refusing every join when no sign-in method is configured); absent is
+   * only a convenience for tests that build a Hub directly and trust joins
+   * to self-declare a name.
    */
   authorizeJoin?: (join: JoinEvent) => JoinDecision;
 }
@@ -89,6 +91,22 @@ export class Hub {
 
   broadcastChannelCreated(name: string): void {
     this.broadcast({ type: "channel_created", channel: name });
+  }
+
+  broadcastChannelRenamed(oldName: string, newName: string): void {
+    this.broadcast({ type: "channel_renamed", oldName, newName });
+  }
+
+  broadcastChannelArchived(name: string, archived: boolean): void {
+    this.broadcast({ type: "channel_archived", channel: name, archived });
+  }
+
+  broadcastChannelPinned(name: string, pinned: boolean): void {
+    this.broadcast({ type: "channel_pinned", channel: name, pinned });
+  }
+
+  broadcastChannelDeleted(name: string): void {
+    this.broadcast({ type: "channel_deleted", channel: name });
   }
 
   /**
@@ -314,6 +332,8 @@ export class Hub {
       history: this.messages.recentByChannel(this.channels.list(), DEFAULT_HISTORY_LIMIT),
       participants: this.roster.list(),
       channels: this.channels.list(),
+      archivedChannels: this.channels.listArchived(),
+      pinnedChannels: this.channels.pinned(),
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: conn.apiUrl,

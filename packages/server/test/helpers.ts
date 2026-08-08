@@ -23,6 +23,7 @@ export interface Env {
   service: BoardService;
   sessions: Sessions;
   channels: Channels;
+  messages: MessageStore;
   attachments: Attachments;
   uploadsDir: string;
   baseUrl: string;
@@ -60,6 +61,7 @@ export async function createEnv(): Promise<Env> {
     service,
     sessions,
     channels,
+    messages,
     attachments,
     uploadsDir,
     baseUrl,
@@ -154,6 +156,10 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null) : undefined,
   });
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
+  channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
+  channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
+  channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
+  channels.onDeleted = (name) => hub.broadcastChannelDeleted(name);
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
   const clients: WebSocket[] = [];

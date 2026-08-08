@@ -23,6 +23,11 @@ const createBodySchema = z.object({
 });
 
 const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
+const channelPatchBodySchema = z.object({
+  name: z.string().min(1).max(64).optional(),
+  archived: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+});
 
 const googleLoginBodySchema = z.object({ credential: z.string().min(1) });
 // Bounds only; the real username/email/password rules (and their error
@@ -140,6 +145,25 @@ async function route(
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
     return json(res, 201, { channel: { name: channels.create(actor, body.name) } });
+  }
+
+  // PATCH /api/channels/:name — rename and/or archive/pin, one field per call.
+  if (parts[1] === "channels" && parts.length === 3 && method === "PATCH") {
+    const name = decodeURIComponent(parts[2]);
+    const body = channelPatchBodySchema.parse(await readBody(req));
+    let current = name;
+    if (body.name !== undefined) current = channels.rename(actor, current, body.name);
+    if (body.archived !== undefined) channels.setArchived(actor, current, body.archived);
+    if (body.pinned !== undefined) channels.setPinned(actor, current, body.pinned);
+    return json(res, 200, { channel: { name: current } });
+  }
+
+  // DELETE /api/channels/:name — also drops its message history.
+  if (parts[1] === "channels" && parts.length === 3 && method === "DELETE") {
+    const name = decodeURIComponent(parts[2]);
+    messages.clear(name);
+    channels.remove(actor, name);
+    return json(res, 200, { ok: true });
   }
 
   // GET /api/messages?channel=&before=&limit= — an older page of chat

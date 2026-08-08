@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { BoardItem, Participant } from "@workspace/shared";
 import { Sidebar } from "./Sidebar";
@@ -9,19 +9,34 @@ import { Sidebar } from "./Sidebar";
 let participants: Participant[] = [];
 let board: BoardItem[] = [];
 let unreadsByChannel: Record<string, number> = {};
+let channels = ["general", "design"];
+let archivedChannels: string[] = [];
+let pinnedChannels: string[] = [];
 const createChannel = vi.fn();
+const renameChannel = vi.fn();
+const archiveChannel = vi.fn();
+const pinChannel = vi.fn();
+const deleteChannel = vi.fn();
+const markRead = vi.fn();
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     participants,
     self: participants[0] ?? null,
-    channels: ["general", "design"],
+    channels,
+    archivedChannels,
+    pinnedChannels,
     board,
     activeRuns: [],
     messages: [],
     setStatus: vi.fn(),
     signOut: null,
     createChannel,
+    renameChannel,
+    archiveChannel,
+    pinChannel,
+    deleteChannel,
     unreadCount: (channel: string) => unreadsByChannel[channel] ?? 0,
+    markRead,
   }),
 }));
 
@@ -82,6 +97,9 @@ describe("Sidebar", () => {
     participants = [];
     board = [];
     unreadsByChannel = {};
+    channels = ["general", "design"];
+    archivedChannels = [];
+    pinnedChannels = [];
   });
 
   it("groups members into Online/Offline sections with counts", () => {
@@ -204,5 +222,103 @@ describe("Sidebar", () => {
     const designButton = screen.getByRole("tab", { name: /design/ });
     // Should show the 99+ badge inside the button
     expect(designButton.textContent).toContain("99+");
+  });
+
+  it("right-clicking a room opens its context menu; general omits rename/archive/delete", () => {
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /general/ }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("Mark as read")).toBeInTheDocument();
+    expect(within(menu).getByText("Pin channel")).toBeInTheDocument();
+    expect(within(menu).queryByText("Rename")).not.toBeInTheDocument();
+    expect(within(menu).queryByText("Archive")).not.toBeInTheDocument();
+    expect(within(menu).queryByText("Delete")).not.toBeInTheDocument();
+  });
+
+  it("right-clicking a non-default room offers rename, archive, and delete", () => {
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("Rename")).toBeInTheDocument();
+    expect(within(menu).getByText("Archive")).toBeInTheDocument();
+    expect(within(menu).getByText("Delete")).toBeInTheDocument();
+  });
+
+  it("Mark as read calls markRead for that channel and closes the menu", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Mark as read"));
+
+    expect(markRead).toHaveBeenCalledWith("design");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("Pin channel calls pinChannel(name, true); already-pinned rooms offer Unpin", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Pin channel"));
+    expect(pinChannel).toHaveBeenCalledWith("design", true);
+
+    pinnedChannels = ["design"];
+    renderSidebar();
+    fireEvent.contextMenu(screen.getAllByRole("tab", { name: /design/ })[1]);
+    expect(screen.getByText("Unpin")).toBeInTheDocument();
+  });
+
+  it("Delete requires a second confirming click before calling deleteChannel", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Delete"));
+    expect(deleteChannel).not.toHaveBeenCalled();
+    expect(screen.getByText("Confirm delete?")).toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Confirm delete?"));
+    expect(deleteChannel).toHaveBeenCalledWith("design");
+  });
+
+  it("Rename opens an inline input pre-filled with the current name, submits on Enter", async () => {
+    const user = userEvent.setup();
+    renameChannel.mockResolvedValue("renamed-room");
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Rename"));
+
+    const input = screen.getByLabelText("Rename design");
+    expect(input).toHaveValue("design");
+    await user.clear(input);
+    await user.type(input, "renamed-room{Enter}");
+
+    expect(renameChannel).toHaveBeenCalledWith("design", "renamed-room");
+  });
+
+  it("collapsing Rooms hides the room list", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    expect(screen.getByRole("tab", { name: /design/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Rooms/ }));
+    expect(screen.queryByRole("tab", { name: /design/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a collapsed Archived section only when archived rooms exist", async () => {
+    const user = userEvent.setup();
+    archivedChannels = ["old-room"];
+    renderSidebar();
+
+    expect(screen.getByText("Archived — 1")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /old-room/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Archived — 1"));
+    expect(screen.getByRole("tab", { name: /old-room/ })).toBeInTheDocument();
   });
 });

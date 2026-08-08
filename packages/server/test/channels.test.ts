@@ -71,6 +71,111 @@ describe("channel creation over the API", async () => {
   });
 });
 
+describe("channel management over the API", async () => {
+  const env = await createEnv();
+  const human = env.actor("human", "dana");
+  const agent = env.actor("agent", "noodle");
+  after(() => env.close());
+
+  test("rename: 200, messages follow, old name gone", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "old-name" });
+    const res = await env.api("PATCH", "/api/channels/old-name", human.token, {
+      name: "New Name",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.channel.name, "new-name");
+    assert.deepEqual(env.channels.list().includes("old-name"), false);
+    assert.ok(env.channels.exists("new-name"));
+  });
+
+  test("rename to an existing name → 409", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "taken" });
+    await env.api("POST", "/api/channels", human.token, { name: "renaming" });
+    const res = await env.api("PATCH", "/api/channels/renaming", human.token, { name: "taken" });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error, "CHANNEL_EXISTS");
+  });
+
+  test("general cannot be renamed, archived, or deleted", async () => {
+    const rename = await env.api("PATCH", "/api/channels/general", human.token, {
+      name: "renamed",
+    });
+    assert.equal(rename.status, 400);
+    assert.equal(rename.body.error, "CHANNEL_FIXED");
+
+    const archive = await env.api("PATCH", "/api/channels/general", human.token, {
+      archived: true,
+    });
+    assert.equal(archive.status, 400);
+
+    const del = await env.api("DELETE", "/api/channels/general", human.token);
+    assert.equal(del.status, 400);
+    assert.ok(env.channels.exists("general"));
+  });
+
+  test("general can still be pinned", async () => {
+    const res = await env.api("PATCH", "/api/channels/general", human.token, { pinned: true });
+    assert.equal(res.status, 200);
+    assert.deepEqual(env.channels.pinned(), ["general"]);
+  });
+
+  test("archive drops a channel from list() but keeps it in listArchived()", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "stale" });
+    const res = await env.api("PATCH", "/api/channels/stale", human.token, { archived: true });
+    assert.equal(res.status, 200);
+    assert.equal(env.channels.list().includes("stale"), false);
+    assert.ok(env.channels.listArchived().includes("stale"));
+
+    const unarchive = await env.api("PATCH", "/api/channels/stale", human.token, {
+      archived: false,
+    });
+    assert.equal(unarchive.status, 200);
+    assert.ok(env.channels.list().includes("stale"));
+  });
+
+  test("pinned channels sort first in list()", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "unpinned-room" });
+    await env.api("POST", "/api/channels", human.token, { name: "z-room" });
+    await env.api("PATCH", "/api/channels/z-room", human.token, { pinned: true });
+    const list = env.channels.list();
+    assert.ok(list.indexOf("z-room") < list.indexOf("unpinned-room"));
+  });
+
+  test("delete removes the channel and its messages", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "doomed" });
+    env.messages.append({
+      id: "m1",
+      authorId: human.actor.id,
+      authorName: human.actor.displayName,
+      authorKind: "human",
+      content: "bye",
+      timestamp: Date.now(),
+      channel: "doomed",
+    });
+    const res = await env.api("DELETE", "/api/channels/doomed", human.token);
+    assert.equal(res.status, 200);
+    assert.equal(env.channels.exists("doomed"), false);
+    assert.equal(env.messages.list().filter((m) => m.channel === "doomed").length, 0);
+  });
+
+  test("agents cannot rename, archive, pin, or delete", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "agent-blocked" });
+    const rename = await env.api("PATCH", "/api/channels/agent-blocked", agent.token, {
+      name: "hijacked",
+    });
+    assert.equal(rename.status, 403);
+    const del = await env.api("DELETE", "/api/channels/agent-blocked", agent.token);
+    assert.equal(del.status, 403);
+    assert.ok(env.channels.exists("agent-blocked"));
+  });
+
+  test("unknown channel → 404 on rename/archive/pin/delete", async () => {
+    const res = await env.api("PATCH", "/api/channels/ghost", human.token, { archived: true });
+    assert.equal(res.status, 404);
+    assert.equal(res.body.error, "NOT_FOUND");
+  });
+});
+
 describe("channels on the websocket", async () => {
   test("unknown channel is refused and not persisted; creation fans out", async () => {
     const env = await createWsEnv();
@@ -97,6 +202,45 @@ describe("channels on the websocket", async () => {
     human.ws.send(JSON.stringify({ type: "message", content: "hi", channel: "design" }));
     await human.next((e) => e.type === "message" && e.message.channel === "design");
     assert.equal(env.messages.list().length, 1);
+
+    env.close();
+  });
+
+  test("rename, archive, pin, and delete each fan out their frame", async () => {
+    const env = await createWsEnv();
+    const human = await env.connect("dana", "human");
+    await fetch(`${env.baseUrl}/api/channels`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${human.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "design" }),
+    });
+    await human.next((e) => e.type === "channel_created");
+
+    const patch = (body: Record<string, unknown>) =>
+      fetch(`${env.baseUrl}/api/channels/design`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${human.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    await patch({ pinned: true });
+    const pinned = await human.next((e) => e.type === "channel_pinned");
+    assert.deepEqual(pinned, { type: "channel_pinned", channel: "design", pinned: true });
+
+    await patch({ archived: true });
+    const archived = await human.next((e) => e.type === "channel_archived");
+    assert.deepEqual(archived, { type: "channel_archived", channel: "design", archived: true });
+
+    await patch({ name: "designs" });
+    const renamed = await human.next((e) => e.type === "channel_renamed");
+    assert.deepEqual(renamed, { type: "channel_renamed", oldName: "design", newName: "designs" });
+
+    await fetch(`${env.baseUrl}/api/channels/designs`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${human.token}` },
+    });
+    const deleted = await human.next((e) => e.type === "channel_deleted");
+    assert.deepEqual(deleted, { type: "channel_deleted", channel: "designs" });
 
     env.close();
   });

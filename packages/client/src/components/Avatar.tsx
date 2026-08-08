@@ -28,7 +28,7 @@ export function Avatar({
 }) {
   return (
     <div
-      className={`flex shrink-0 items-center justify-center rounded-full border-[1.5px] border-body font-semibold text-body select-none ${
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-body select-none ${
         grayscale ? "grayscale" : ""
       }`}
       style={{

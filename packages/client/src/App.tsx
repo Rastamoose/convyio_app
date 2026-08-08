@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoardItem, ChatMessage } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
-import { UsernameModal } from "./components/UsernameModal";
 import { LoginScreen } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar, type WorkspaceView } from "./components/TopBar";
@@ -14,9 +13,10 @@ import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
 
 /**
- * Boot: ask the server which mode it runs in, then gate accordingly.
- * Guest mode (no Google client id) keeps the old flow: pick a display name,
- * connect. Auth mode requires a stored session token, obtained through the
+ * Boot: ask the server which mode it runs in, then gate accordingly. No auth
+ * method configured is treated as a misconfigured deployment, not guest mode
+ * — it shows a dead-end screen instead of letting anyone in unauthenticated.
+ * Auth mode requires a stored session token, obtained through the
  * LoginScreen; a token the server rejects is cleared and we return to login.
  */
 export default function App() {
@@ -24,9 +24,6 @@ export default function App() {
     googleClientId: string | null;
     emailAuthEnabled: boolean;
   } | null>(null);
-  const [guestName, setGuestName] = useState<string | null>(
-    () => sessionStorage.getItem("displayName"),
-  );
   const [authToken, setAuthToken] = useState<string | null>(
     () => window.localStorage.getItem("authToken") ?? window.sessionStorage.getItem("authToken"),
   );
@@ -64,20 +61,19 @@ export default function App() {
   const authEnabled = authMode.googleClientId !== null || authMode.emailAuthEnabled;
 
   if (!authEnabled) {
-    if (!guestName) {
-      return (
-        <UsernameModal
-          onJoin={(n) => {
-            sessionStorage.setItem("displayName", n);
-            setGuestName(n);
-          }}
-        />
-      );
-    }
     return (
-      <WorkspaceProvider credentials={{ name: guestName }}>
-        <Workspace />
-      </WorkspaceProvider>
+      <div className="flex h-full items-center justify-center bg-chat">
+        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+          <h1 className="mb-2 text-2xl font-semibold text-body">Sign-in unavailable</h1>
+          <p className="text-muted">
+            This workspace isn't configured for sign-in yet. Contact{" "}
+            <a href="mailto:hello@convyio.com" className="font-medium text-blurple hover:underline">
+              hello@convyio.com
+            </a>{" "}
+            for access.
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -276,7 +272,7 @@ function Workspace() {
       {!workspace.connected && (
         <div
           role="status"
-          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full border-2 border-body bg-popup px-3 py-1 text-xs font-semibold text-working shadow-hard"
+          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-popup px-3 py-1 text-xs font-semibold text-working shadow-lg"
         >
           {workspace.self ? "Reconnecting…" : "Connecting…"}
         </div>

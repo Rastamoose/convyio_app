@@ -427,7 +427,7 @@ export function MessageInput({
   return (
     <div className="relative shrink-0 px-4 pb-6">
       {commandOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg border-2 border-body bg-popup shadow-hard">
+        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Commands
           </div>
@@ -458,7 +458,7 @@ export function MessageInput({
         </div>
       )}
       {mentionOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg border-2 border-body bg-popup shadow-hard">
+        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Members
           </div>
@@ -485,7 +485,7 @@ export function MessageInput({
         </div>
       )}
       {shortcodeOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg border-2 border-body bg-popup shadow-hard">
+        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Emoji
           </div>
@@ -513,7 +513,7 @@ export function MessageInput({
       {emojiPickerOpen && (
         <div
           ref={emojiPopupRef}
-          className="absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg border-2 border-body bg-popup p-2 shadow-hard"
+          className="absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg bg-popup p-2 shadow-lg"
         >
           {EMOJI_GRID.map((emoji, i) => (
             <button

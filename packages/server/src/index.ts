@@ -56,6 +56,8 @@ async function main() {
     if (!config.agentToken) {
       console.warn("[auth] AGENT_TOKEN is not set: no agent can join this server");
     }
+  } else {
+    console.warn("[auth] no sign-in method configured: all joins will be refused");
   }
 
   const attachments = new Attachments(db, path.join(config.dataDir, "uploads"));
@@ -88,10 +90,19 @@ async function main() {
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     serverId: db.serverId,
     demoChannels,
-    authorizeJoin: authGate ? createJoinGate(authGate.auth, config.agentToken) : undefined,
+    // Unconfigured is not guest mode here: refuse every join rather than
+    // trust self-declared names (the Hub's own undefined-gate fallback is
+    // for tests that build it directly, never for the running server).
+    authorizeJoin: authGate
+      ? createJoinGate(authGate.auth, config.agentToken)
+      : () => ({ ok: false }),
   });
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
+  channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
+  channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
+  channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
+  channels.onDeleted = (name) => hub.broadcastChannelDeleted(name);
   new DemoOrchestrator(
     hub,
     roster,

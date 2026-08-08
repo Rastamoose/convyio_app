@@ -179,7 +179,7 @@ function HoverRail({
   onPin: () => void;
 }) {
   return (
-    <div className="absolute -top-3 right-4 hidden overflow-hidden rounded border-2 border-body bg-popup shadow-hard-sm group-hover:flex">
+    <div className="absolute -top-3 right-4 hidden overflow-hidden rounded border border-divider bg-popup shadow-sm group-hover:flex">
       <RailButton title="Add reaction" onClick={onReact}>
         <SmileIcon className="h-4 w-4" />
       </RailButton>
@@ -223,7 +223,7 @@ function ReactionEmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => v
   return (
     <div
       ref={ref}
-      className="absolute top-6 right-4 z-30 flex gap-0.5 rounded-lg border-2 border-body bg-popup p-1.5 shadow-hard"
+      className="absolute top-6 right-4 z-30 flex gap-0.5 rounded-lg border border-divider bg-popup p-1.5 shadow-lg"
     >
       <EmojiRow onPick={onPick} />
     </div>
@@ -301,7 +301,7 @@ function MessageContextMenu({
       ref={ref}
       role="menu"
       style={{ top: pos.top, left: pos.left }}
-      className="fixed z-50 w-52 rounded-lg border-2 border-body bg-popup p-1 shadow-hard"
+      className="fixed z-50 w-52 rounded-lg border border-divider bg-popup p-1 shadow-lg"
     >
       <div className="flex gap-0.5 border-b border-divider p-1.5">
         <EmojiRow
@@ -937,7 +937,7 @@ export function MessageList({
       {newSinceScroll > 0 && (
         <button
           onClick={jumpToBottom}
-          className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full border-2 border-body bg-blurple px-3 py-1.5 text-xs font-semibold text-mention-text shadow-hard hover:opacity-90"
+          className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-blurple px-3 py-1.5 text-xs font-semibold text-mention-text shadow-lg hover:opacity-90"
         >
           {newSinceScroll} new message{newSinceScroll === 1 ? "" : "s"} ↓
         </button>

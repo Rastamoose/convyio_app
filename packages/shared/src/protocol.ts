@@ -212,6 +212,10 @@ export interface WelcomeEvent {
   participants: Participant[];
   /** Channels this server exposes, in display order. */
   channels: string[];
+  /** Archived channels, hidden from the main list until unarchived. */
+  archivedChannels: string[];
+  /** Subset of `channels` currently pinned to the top of the list. */
+  pinnedChannels: string[];
   /** Channels that play a scripted demo when demo_start names them. */
   demoChannels: string[];
   /** Bearer token for the HTTP API, bound to this actor identity. */
@@ -296,6 +300,30 @@ export interface ChannelCreatedEvent {
   channel: string;
 }
 
+export interface ChannelRenamedEvent {
+  type: "channel_renamed";
+  oldName: string;
+  newName: string;
+}
+
+/** Archived channels drop out of the active list until unarchived. */
+export interface ChannelArchivedEvent {
+  type: "channel_archived";
+  channel: string;
+  archived: boolean;
+}
+
+export interface ChannelPinnedEvent {
+  type: "channel_pinned";
+  channel: string;
+  pinned: boolean;
+}
+
+export interface ChannelDeletedEvent {
+  type: "channel_deleted";
+  channel: string;
+}
+
 export interface InterruptBroadcast {
   type: "interrupt";
   authorName: string;
@@ -320,6 +348,10 @@ export type ServerEvent =
   | TraceChunkBroadcast
   | ClearBroadcast
   | ChannelCreatedEvent
+  | ChannelRenamedEvent
+  | ChannelArchivedEvent
+  | ChannelPinnedEvent
+  | ChannelDeletedEvent
   | InterruptBroadcast
   | RunEndBroadcast
   | ActionResultEvent

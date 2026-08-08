@@ -23,7 +23,7 @@ export function ProposalCard({
 }) {
   const { approveItem, denyItem } = useWorkspace();
   return (
-    <div className="rounded-lg border-2 border-body bg-input p-3 shadow-hard-sm">
+    <div className="rounded-lg bg-input p-3">
       <div className="mb-2 flex items-baseline gap-2 text-xs">
         <span className="shrink-0 rounded bg-blurple px-1 py-px font-bold text-mention-text">
           {item.ref}

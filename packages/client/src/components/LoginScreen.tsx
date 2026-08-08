@@ -67,7 +67,7 @@ async function postJson(
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full items-center justify-center bg-chat">
-      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
+      <div className="w-96 animate-fade-in rounded-lg bg-sidebar p-8 shadow-2xl">
         {children}
       </div>
     </div>
@@ -312,7 +312,7 @@ function EmailAuthForm({
       <button
         onClick={() => void submit()}
         disabled={!canSubmit}
-        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
       >
         {mode === "login" ? "Sign in" : "Create account"}
       </button>
@@ -409,7 +409,7 @@ function UsernameStep({
       <button
         onClick={() => void submit()}
         disabled={!valid || submitting}
-        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
       >
         Join Workspace
       </button>
