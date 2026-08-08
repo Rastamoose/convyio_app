@@ -1,27 +1,26 @@
 @import "tailwindcss";
 
 @theme {
-  /* Cream/ink light theme, gruvbox-clean personality. Accent lives on the
-     orange/gold side of the palette rather than straight mustard-yellow —
-     nudge --color-blurple/--color-working here to retune the whole app. */
-  --color-sidebar: #e1e5e2;
-  --color-sidebar-dark: #141311;
-  --color-userpanel: #e1e5e2;
-  --color-chat: #eef0ef;
-  --color-chat-hover: #e6e9e6;
+  /* Neutral zinc/ink light theme — techy, not cream. Accent is the one warm
+     note (amber); nudge --color-blurple/--color-working here to retune. */
+  --color-sidebar: #f7f7f6;
+  --color-sidebar-dark: #131313;
+  --color-userpanel: #f7f7f6;
+  --color-chat: #ffffff;
+  --color-chat-hover: #f0f0ef;
   --color-input: #ffffff;
-  --color-body: #171512;
-  --color-muted: #6b6354;
-  --color-faint: #948c78;
-  --color-blurple: #e08a4a;
-  --color-online: #7a9a1f;
-  --color-offline: #948c78;
-  --color-divider: #d7dbd7;
-  --color-mention-accent: #e08a4a;
-  --color-mention-bg: #f3e8c8;
-  --color-mention-bg-hover: #ecdcae;
-  --color-mention-pill: #e08a4a;
-  --color-mention-text: #171512;
+  --color-body: #18181a;
+  --color-muted: #71716e;
+  --color-faint: #a3a29d;
+  --color-blurple: #d97706;
+  --color-online: #4d7c0f;
+  --color-offline: #a3a29d;
+  --color-divider: #e4e4e1;
+  --color-mention-accent: #d97706;
+  --color-mention-bg: #f2f2f0;
+  --color-mention-bg-hover: #e8e8e5;
+  --color-mention-pill: #d97706;
+  --color-mention-text: #18181a;
   --color-popup: #ffffff;
   --color-dead: #c0392b;
   --color-working: #d9a441;
@@ -81,7 +80,7 @@ body {
 /* Thin scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #d9cba0 transparent;
+  scrollbar-color: #d4d4d1 transparent;
 }
 
 /* Same look for WebKit browsers that ignore scrollbar-color (Safari);
@@ -94,11 +93,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d9cba0;
+  background: #d4d4d1;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #c7b689;
+  background: #bfbfbb;
 }
 
 ::selection {

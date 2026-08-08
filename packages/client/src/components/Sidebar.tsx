@@ -24,7 +24,7 @@ function RoomMenuItem({
   return (
     <button
       onClick={onClick}
-      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-input ${danger ? "text-dead" : "text-body"}`}
+      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-mention-bg-hover ${danger ? "text-dead" : "text-body"}`}
     >
       {label}
     </button>

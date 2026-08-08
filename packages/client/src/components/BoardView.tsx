@@ -132,7 +132,7 @@ export function BoardView({
           return (
             <div
               key={status}
-              className={`flex h-full w-72 shrink-0 flex-col rounded-lg bg-sidebar/50 ${
+              className={`flex max-h-full w-72 shrink-0 flex-col self-start rounded-lg bg-sidebar/50 ${
                 proposed ? "border border-dead/30" : ""
               }`}
             >

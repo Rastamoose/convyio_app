@@ -134,6 +134,18 @@ function Workspace() {
     workspace.markRead(channel);
   }, [channel]);
 
+  // The active channel can vanish out from under the viewer (someone else
+  // deletes it); archived channels stay viewable, so only a real delete
+  // needs a fallback.
+  useEffect(() => {
+    if (
+      !workspace.channels.includes(channel) &&
+      !workspace.archivedChannels.includes(channel)
+    ) {
+      setChannel("general");
+    }
+  }, [workspace.channels, workspace.archivedChannels, channel]);
+
   const cycleChannel = (dir: -1 | 1) => {
     const { channels } = workspace;
     if (channels.length === 0) return;

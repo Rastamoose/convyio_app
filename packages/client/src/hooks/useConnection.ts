@@ -35,8 +35,8 @@ export function useConnection(
           setSelf(event.self);
           setParticipants(event.participants);
           setChannels(event.channels);
-          setArchivedChannels(event.archivedChannels);
-          setPinnedChannels(event.pinnedChannels);
+          setArchivedChannels(event.archivedChannels ?? []);
+          setPinnedChannels(event.pinnedChannels ?? []);
           setDemoChannels(event.demoChannels);
           setConnected(true);
           break;
