@@ -66,8 +66,8 @@ async function postJson(
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-full items-center justify-center bg-sidebar-dark">
-      <div className="w-96 animate-fade-in rounded-lg bg-chat p-8 shadow-2xl">
+    <div className="flex h-full items-center justify-center bg-chat">
+      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
         {children}
       </div>
     </div>
@@ -89,7 +89,7 @@ function Field({
       </label>
       <input
         id={id}
-        className="w-full rounded bg-sidebar-dark px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+        className="w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
         {...inputProps}
       />
     </div>
@@ -287,7 +287,7 @@ function EmailAuthForm({
         placeholder="••••••••"
       />
 
-      <div className="mb-4 flex items-center justify-between text-sm">
+      <div className="mb-4 text-sm">
         <label className="flex items-center gap-2 text-muted">
           <input
             type="checkbox"
@@ -301,7 +301,7 @@ function EmailAuthForm({
           <button
             type="button"
             onClick={() => setForgotMsg("Password reset isn't set up yet — ask an admin for help.")}
-            className="font-medium text-blurple hover:underline"
+            className="mt-2 font-medium text-blurple hover:underline"
           >
             Forgot password
           </button>
@@ -312,7 +312,7 @@ function EmailAuthForm({
       <button
         onClick={() => void submit()}
         disabled={!canSubmit}
-        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         {mode === "login" ? "Sign in" : "Create account"}
       </button>
@@ -399,7 +399,7 @@ function UsernameStep({
           setError(null);
         }}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
-        className="mb-2 w-full rounded bg-sidebar-dark px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+        className="mb-2 w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
         placeholder="e.g. harris"
         maxLength={32}
       />
@@ -409,7 +409,7 @@ function UsernameStep({
       <button
         onClick={() => void submit()}
         disabled={!valid || submitting}
-        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         Join Workspace
       </button>
