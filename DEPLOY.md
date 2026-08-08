@@ -15,7 +15,8 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | `GEMINI_API_KEY`   | agent   | —                          | Enables the agent; unset = no agent starts.                             |
 | `AGENT_NAME`       | agent   | `noodle`                   | The agent's display name.                                               |
 | `AGENT_MODEL`      | agent   | `gemini-2.5-flash`         | Gemini model id.                                                        |
-| `GOOGLE_CLIENT_ID` | server  | — (guest mode)             | Set = Google Sign-In required for humans.                               |
+| `GOOGLE_CLIENT_ID` | server  | — (guest mode)             | Set = Google Sign-In offered to humans.                                 |
+| `EMAIL_AUTH`       | server  | — (guest mode)             | Set to `1` = email/password sign-in offered. Either this or `GOOGLE_CLIENT_ID` turns off guest mode. |
 | `AGENT_TOKEN`      | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
 | `CLIENT_DIST`      | server  | `packages/client/dist`     | Where the built client lives; absent = API only (dev).                  |
 | `CORS_ORIGIN`      | server  | `http://localhost:5173`    | Dev-only: the Vite origin allowed to call the API cross-origin.         |

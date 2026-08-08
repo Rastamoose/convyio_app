@@ -110,7 +110,7 @@ describe("Auth", () => {
   const freshAuth = (t: { after: (fn: () => void) => void }, ttl?: { sessionMs: number; signupMs: number }) => {
     const db = new WorkspaceDb(":memory:");
     t.after(() => db.close());
-    return { db, auth: new Auth(db, stubVerifier(DANA), ttl) };
+    return { db, auth: new Auth(db, stubVerifier(DANA), true, ttl) };
   };
 
   test("first login needs a username; completing it creates the actor", async (t) => {
@@ -205,6 +205,86 @@ describe("Auth", () => {
       () => auth.loginWithGoogle("forged"),
       (err: unknown) => err instanceof ApiError && err.status === 401,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auth: email/password signup and login
+// ---------------------------------------------------------------------------
+
+describe("Auth: email/password", () => {
+  const freshEmailAuth = (t: { after: (fn: () => void) => void }, emailAuthEnabled = true) => {
+    const db = new WorkspaceDb(":memory:");
+    t.after(() => db.close());
+    return { db, auth: new Auth(db, null, emailAuthEnabled) };
+  };
+
+  test("signup creates the actor and logs it in; login then finds the same actor", async (t) => {
+    const { db, auth } = freshEmailAuth(t);
+    const signed = auth.signupWithEmail("dana@example.com", "correct-horse", "dana");
+    assert.equal(signed.username, "dana");
+    const actor = db.findActorByEmail("dana@example.com");
+    assert.ok(actor);
+    assert.equal(auth.resolveSession(signed.authToken)?.id, actor.id);
+
+    const again = auth.loginWithEmail("DANA@example.com", "correct-horse");
+    assert.equal(again.username, "dana");
+    assert.equal(auth.resolveSession(again.authToken)?.id, actor.id);
+  });
+
+  test("wrong password, and an unregistered email, both → 401 BAD_CREDENTIALS", (t) => {
+    const { auth } = freshEmailAuth(t);
+    auth.signupWithEmail("dana@example.com", "correct-horse", "dana");
+
+    for (const attempt of [
+      () => auth.loginWithEmail("dana@example.com", "wrong-password"),
+      () => auth.loginWithEmail("nobody@example.com", "correct-horse"),
+    ]) {
+      const err = apiError(attempt);
+      assert.equal(err.status, 401);
+      assert.equal(err.code, "BAD_CREDENTIALS");
+    }
+  });
+
+  test("duplicate email, taken username, weak password, bad email → rejected", (t) => {
+    const { auth } = freshEmailAuth(t);
+    auth.signupWithEmail("dana@example.com", "correct-horse", "dana");
+
+    assert.equal(
+      apiError(() => auth.signupWithEmail("dana@example.com", "another-pass", "dana2")).code,
+      "EMAIL_TAKEN",
+    );
+    assert.equal(
+      apiError(() => auth.signupWithEmail("new@example.com", "another-pass", "dana")).code,
+      "USERNAME_TAKEN",
+    );
+    assert.equal(
+      apiError(() => auth.signupWithEmail("new@example.com", "short", "newname")).code,
+      "WEAK_PASSWORD",
+    );
+    assert.equal(
+      apiError(() => auth.signupWithEmail("not-an-email", "another-pass", "newname")).code,
+      "BAD_EMAIL",
+    );
+  });
+
+  test("email auth disabled → 409 AUTH_DISABLED on both signup and login", (t) => {
+    const { auth } = freshEmailAuth(t, false);
+    assert.equal(
+      apiError(() => auth.signupWithEmail("dana@example.com", "correct-horse", "dana")).status,
+      409,
+    );
+    assert.equal(apiError(() => auth.loginWithEmail("dana@example.com", "correct-horse")).status, 409);
+  });
+
+  test("a Google-only account (no password set) refuses email login → 401", (t) => {
+    const db = new WorkspaceDb(":memory:");
+    t.after(() => db.close());
+    const auth = new Auth(db, stubVerifier(DANA), true);
+    db.createGoogleHuman("dana", "sub-dana", "dana@example.com");
+    const err = apiError(() => auth.loginWithEmail("dana@example.com", "anything"));
+    assert.equal(err.status, 401);
+    assert.equal(err.code, "BAD_CREDENTIALS");
   });
 });
 

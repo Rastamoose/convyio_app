@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS actors (
   display_name  TEXT NOT NULL,
   server_id     TEXT NOT NULL,
   google_sub    TEXT, -- Google account id for signed-in humans; NULL otherwise
-  email         TEXT
+  email         TEXT,
+  password_hash TEXT -- set for email/password accounts; NULL otherwise
 );
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -135,11 +136,15 @@ const MIGRATIONS = [
   `ALTER TABLE messages ADD COLUMN reply_to_id TEXT`,
   `ALTER TABLE actors ADD COLUMN google_sub TEXT`,
   `ALTER TABLE actors ADD COLUMN email TEXT`,
+  `ALTER TABLE actors ADD COLUMN password_hash TEXT`,
   // SQLite cannot ALTER-add a UNIQUE column, so uniqueness of google_sub is a
   // partial index; it must run after the ALTERs above so pre-auth databases
   // have the column first.
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_google_sub
      ON actors (google_sub) WHERE google_sub IS NOT NULL`,
+  // One account per email address, regardless of how it signed up.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_actors_email
+     ON actors (lower(email)) WHERE email IS NOT NULL`,
 ];
 
 export class WorkspaceDb {
@@ -238,6 +243,37 @@ export class WorkspaceDb {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(actor.id, actor.kind, actor.displayName, actor.serverId, googleSub, email);
+    return actor;
+  }
+
+  findActorByEmail(email: string): Actor | null {
+    const row = this.db
+      .prepare(`SELECT * FROM actors WHERE server_id = ? AND lower(email) = lower(?)`)
+      .get(this.serverId, email) as ActorRow | undefined;
+    return row ? toActor(row) : null;
+  }
+
+  getPasswordHash(actorId: string): string | null {
+    const row = this.db
+      .prepare(`SELECT password_hash FROM actors WHERE id = ?`)
+      .get(actorId) as { password_hash: string | null } | undefined;
+    return row?.password_hash ?? null;
+  }
+
+  /** Create the persistent human for a completed email/password signup. */
+  createEmailHuman(displayName: string, email: string, passwordHash: string): Actor {
+    const actor: Actor = {
+      id: randomUUID(),
+      kind: "human",
+      displayName,
+      serverId: this.serverId,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO actors (id, kind, display_name, server_id, email, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(actor.id, actor.kind, actor.displayName, actor.serverId, email, passwordHash);
     return actor;
   }
 

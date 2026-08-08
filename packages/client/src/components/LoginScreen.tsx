@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "../lib/serverUrl";
 
 /**
- * The auth-mode front door: renders the Google Sign-In button, exchanges the
- * returned credential at /api/auth/google, and walks first-timers through
- * picking a username. Hands the finished authToken to `onSignedIn` — storage
- * and connection are App's business.
+ * The auth-mode front door: email/password sign in and sign up, plus the
+ * Google Sign-In button below when Google is configured. Both paths land on
+ * a signupToken for brand-new humans (email signup collects a username
+ * inline; Google signup needs one more step since Google never asked for
+ * one). Hands the finished authToken to `onSignedIn` — storage and
+ * connection are App's business.
  */
 
 // Minimal ambient surface of Google Identity Services (loaded via script
@@ -31,8 +33,10 @@ declare global {
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 
-// Mirrors the server's rule so feedback is live; the server still decides.
+// Mirrors the server's rules so feedback is live; the server still decides.
 const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
 
 function loadGis(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -70,19 +74,53 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
+function Field({
+  id,
+  label,
+  ...inputProps
+}: { id: string; label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div className="mb-4">
+      <label
+        htmlFor={id}
+        className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase"
+      >
+        {label}
+      </label>
+      <input
+        id={id}
+        className="w-full rounded bg-sidebar-dark px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+        {...inputProps}
+      />
+    </div>
+  );
+}
+
+function Divider() {
+  return (
+    <div className="my-6 flex items-center gap-3">
+      <div className="h-px flex-1 bg-divider" />
+      <span className="text-xs font-medium text-faint uppercase">Or</span>
+      <div className="h-px flex-1 bg-divider" />
+    </div>
+  );
+}
+
 export function LoginScreen({
   googleClientId,
+  emailAuthEnabled,
   onSignedIn,
 }: {
-  googleClientId: string;
-  onSignedIn: (authToken: string) => void;
+  googleClientId: string | null;
+  emailAuthEnabled: boolean;
+  onSignedIn: (authToken: string, rememberMe: boolean) => void;
 }) {
   const [signupToken, setSignupToken] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const buttonRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (signupToken) return; // the username step has no Google button
+    if (!googleClientId || signupToken) return;
     let cancelled = false;
     loadGis()
       .then(() => {
@@ -94,25 +132,25 @@ export function LoginScreen({
             try {
               const { status, data } = await postJson("/api/auth/google", { credential });
               if (status !== 200) {
-                setError(data.message ?? `Sign-in failed (${status}).`);
+                setGoogleError(data.message ?? `Sign-in failed (${status}).`);
               } else if (data.status === "ok") {
-                onSignedIn(data.authToken);
+                onSignedIn(data.authToken, true);
               } else {
                 setSignupToken(data.signupToken);
               }
             } catch {
-              setError("Could not reach the server.");
+              setGoogleError("Could not reach the server.");
             }
           },
         });
         gis.accounts.id.renderButton(buttonRef.current, {
-          theme: "filled_black",
+          theme: "outline",
           size: "large",
           width: 320,
         });
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setGoogleError(err.message);
       });
     return () => {
       cancelled = true;
@@ -126,7 +164,7 @@ export function LoginScreen({
         onSignedIn={onSignedIn}
         onExpired={() => {
           setSignupToken(null);
-          setError("That sign-in expired — please sign in again.");
+          setGoogleError("That sign-in expired — please sign in again.");
         }}
       />
     );
@@ -134,28 +172,182 @@ export function LoginScreen({
 
   return (
     <Card>
-      <h1 className="mb-1 text-2xl font-semibold text-body">Sign in</h1>
-      <p className="mb-6 text-muted">
-        One room, humans and agents side by side. Sign in with Google to join.
-      </p>
-      <div ref={buttonRef} className="flex min-h-11 justify-center" />
-      {error && (
+      {emailAuthEnabled ? (
+        <EmailAuthForm onSignedIn={onSignedIn} />
+      ) : (
+        <>
+          <h1 className="mb-1 text-2xl font-semibold text-body">Sign in</h1>
+          <p className="mb-6 text-muted">
+            One room, humans and agents side by side. Sign in with Google to join.
+          </p>
+        </>
+      )}
+      {googleClientId && (
+        <>
+          {emailAuthEnabled && <Divider />}
+          <div ref={buttonRef} className="flex min-h-11 justify-center" />
+        </>
+      )}
+      {googleError && (
         <p role="alert" className="mt-4 text-sm text-dead">
-          {error}
+          {googleError}
         </p>
       )}
     </Card>
   );
 }
 
-/** First sign-in only: bind the one permanent username to the new account. */
+/** The email/password form: toggles between signing in and creating an account. */
+function EmailAuthForm({
+  onSignedIn,
+}: {
+  onSignedIn: (authToken: string, rememberMe: boolean) => void;
+}) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
+  const [forgotMsg, setForgotMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const emailValid = EMAIL_PATTERN.test(email.trim());
+  const passwordValid = password.length >= MIN_PASSWORD_LENGTH;
+  const usernameValid = mode === "login" || USERNAME_PATTERN.test(username.trim());
+  const canSubmit = emailValid && passwordValid && usernameValid && !submitting;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const path = mode === "login" ? "/api/auth/email-login" : "/api/auth/email-signup";
+      const body =
+        mode === "login"
+          ? { email: email.trim(), password }
+          : { email: email.trim(), password, username: username.trim() };
+      const { status, data } = await postJson(path, body);
+      if (status !== 200) {
+        setError(data.message ?? `Could not sign in (${status}).`);
+        return;
+      }
+      onSignedIn(data.authToken, rememberMe);
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <p className="mb-1 text-sm text-muted">Please enter your details</p>
+      <h1 className="mb-6 text-2xl font-semibold text-body">
+        {mode === "login" ? "Welcome back" : "Create your account"}
+      </h1>
+
+      <Field
+        id="email"
+        label="Email address"
+        type="email"
+        autoFocus
+        value={email}
+        onChange={(e) => {
+          setEmail(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && void submit()}
+        placeholder="you@example.com"
+      />
+      {mode === "signup" && (
+        <Field
+          id="username"
+          label="Username"
+          value={username}
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && void submit()}
+          placeholder="e.g. harris"
+          maxLength={32}
+        />
+      )}
+      <Field
+        id="password"
+        label="Password"
+        type="password"
+        value={password}
+        onChange={(e) => {
+          setPassword(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && void submit()}
+        placeholder="••••••••"
+      />
+
+      <div className="mb-4 flex items-center justify-between text-sm">
+        <label className="flex items-center gap-2 text-muted">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="accent-blurple"
+          />
+          Remember for 30 days
+        </label>
+        {mode === "login" && (
+          <button
+            type="button"
+            onClick={() => setForgotMsg("Password reset isn't set up yet — ask an admin for help.")}
+            className="font-medium text-blurple hover:underline"
+          >
+            Forgot password
+          </button>
+        )}
+      </div>
+      {forgotMsg && <p className="mb-4 text-sm text-faint">{forgotMsg}</p>}
+
+      <button
+        onClick={() => void submit()}
+        disabled={!canSubmit}
+        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {mode === "login" ? "Sign in" : "Create account"}
+      </button>
+
+      {error && (
+        <p role="alert" className="mt-4 text-sm text-dead">
+          {error}
+        </p>
+      )}
+
+      <p className="mt-6 text-center text-sm text-muted">
+        {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+        <button
+          type="button"
+          onClick={() => {
+            setMode(mode === "login" ? "signup" : "login");
+            setError(null);
+          }}
+          className="font-medium text-blurple hover:underline"
+        >
+          {mode === "login" ? "Sign up" : "Sign in"}
+        </button>
+      </p>
+    </>
+  );
+}
+
+/** First Google sign-in only: bind the one permanent username to the new account. */
 function UsernameStep({
   signupToken,
   onSignedIn,
   onExpired,
 }: {
   signupToken: string;
-  onSignedIn: (authToken: string) => void;
+  onSignedIn: (authToken: string, rememberMe: boolean) => void;
   onExpired: () => void;
 }) {
   const [name, setName] = useState("");
@@ -178,7 +370,7 @@ function UsernameStep({
         setError(data.message ?? `Could not save the username (${status}).`);
         return;
       }
-      onSignedIn(data.authToken);
+      onSignedIn(data.authToken, true);
     } catch {
       setError("Could not reach the server.");
     } finally {

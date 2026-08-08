@@ -96,11 +96,12 @@ the wire protocol (websocket) and the HTTP board API.
   (fail closed).
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
-- Auth mode is a config switch, not a flag: GOOGLE_CLIENT_ID set = Google
-  sign-in required (the Hub only admits joins its `authorizeJoin` gate
-  resolves — humans by session token, agents by AGENT_TOKEN — and ignores
-  client-supplied human names); unset = the guest flow, byte-for-byte the
-  old behavior.
+- Auth mode is a config switch, not a flag: GOOGLE_CLIENT_ID and/or
+  EMAIL_AUTH set = sign-in required (the Hub only admits joins its
+  `authorizeJoin` gate resolves — humans by session token, agents by
+  AGENT_TOKEN — and ignores client-supplied human names); neither set = the
+  guest flow, byte-for-byte the old behavior. The two sign-in methods share
+  one `Auth`/session layer; either, both, or neither can be on.
 - Every board mutation writes exactly one `board_events` row in the same
   transaction (I5) and fans out exactly one `{channel:"board"}` envelope.
 - Agent-origin board items always carry `scope_paths` (enforced at creation);

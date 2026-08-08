@@ -16,7 +16,7 @@ import { createJoinGate } from "./auth/joinPolicy";
 import { BoardService } from "./board/BoardService";
 import { Toolman } from "./board/Toolman";
 import { Sessions } from "./board/sessions";
-import { createApiHandler, type GoogleSignIn } from "./board/api";
+import { createApiHandler, type AuthGate } from "./board/api";
 import { loadDemoScripts } from "./demo/script";
 import { DemoOrchestrator } from "./demo/DemoOrchestrator";
 
@@ -40,13 +40,19 @@ async function main() {
     ...demoChannels.map((name) => ({ name, isDemo: true })),
   ]);
 
-  let googleSignIn: GoogleSignIn | null = null;
-  if (config.googleClientId) {
-    googleSignIn = {
-      clientId: config.googleClientId,
-      auth: new Auth(db, createGoogleIdTokenVerifier(config.googleClientId)),
+  let authGate: AuthGate | null = null;
+  if (config.googleClientId || config.emailAuthEnabled) {
+    authGate = {
+      googleClientId: config.googleClientId,
+      emailAuthEnabled: config.emailAuthEnabled,
+      auth: new Auth(
+        db,
+        config.googleClientId ? createGoogleIdTokenVerifier(config.googleClientId) : null,
+        config.emailAuthEnabled,
+      ),
     };
-    console.log("[auth] Google sign-in enabled");
+    if (config.googleClientId) console.log("[auth] Google sign-in enabled");
+    if (config.emailAuthEnabled) console.log("[auth] Email sign-in enabled");
     if (!config.agentToken) {
       console.warn("[auth] AGENT_TOKEN is not set: no agent can join this server");
     }
@@ -61,7 +67,7 @@ async function main() {
     channels,
     attachments,
     config.corsOrigin,
-    googleSignIn,
+    authGate,
   );
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -82,9 +88,7 @@ async function main() {
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     serverId: db.serverId,
     demoChannels,
-    authorizeJoin: googleSignIn
-      ? createJoinGate(googleSignIn.auth, config.agentToken)
-      : undefined,
+    authorizeJoin: authGate ? createJoinGate(authGate.auth, config.agentToken) : undefined,
   });
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);

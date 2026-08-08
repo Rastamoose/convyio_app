@@ -20,12 +20,15 @@ import { apiBaseUrl } from "./lib/serverUrl";
  * LoginScreen; a token the server rejects is cleared and we return to login.
  */
 export default function App() {
-  const [authMode, setAuthMode] = useState<{ googleClientId: string | null } | null>(null);
+  const [authMode, setAuthMode] = useState<{
+    googleClientId: string | null;
+    emailAuthEnabled: boolean;
+  } | null>(null);
   const [guestName, setGuestName] = useState<string | null>(
     () => sessionStorage.getItem("displayName"),
   );
   const [authToken, setAuthToken] = useState<string | null>(
-    () => window.localStorage.getItem("authToken"),
+    () => window.localStorage.getItem("authToken") ?? window.sessionStorage.getItem("authToken"),
   );
 
   useEffect(() => {
@@ -34,7 +37,7 @@ export default function App() {
     const load = async () => {
       try {
         const res = await fetch(`${apiBaseUrl()}/api/auth/config`);
-        const data = (await res.json()) as { googleClientId: string | null };
+        const data = (await res.json()) as { googleClientId: string | null; emailAuthEnabled: boolean };
         if (!cancelled) setAuthMode(data);
       } catch {
         // Server not up yet (dev restarts): keep asking, it decides the flow.
@@ -58,7 +61,9 @@ export default function App() {
     );
   }
 
-  if (authMode.googleClientId === null) {
+  const authEnabled = authMode.googleClientId !== null || authMode.emailAuthEnabled;
+
+  if (!authEnabled) {
     if (!guestName) {
       return (
         <UsernameModal
@@ -80,8 +85,9 @@ export default function App() {
     return (
       <LoginScreen
         googleClientId={authMode.googleClientId}
-        onSignedIn={(token) => {
-          window.localStorage.setItem("authToken", token);
+        emailAuthEnabled={authMode.emailAuthEnabled}
+        onSignedIn={(token, rememberMe) => {
+          (rememberMe ? window.localStorage : window.sessionStorage).setItem("authToken", token);
           setAuthToken(token);
         }}
       />
@@ -93,6 +99,7 @@ export default function App() {
       credentials={{ authToken }}
       onAuthRejected={() => {
         window.localStorage.removeItem("authToken");
+        window.sessionStorage.removeItem("authToken");
         setAuthToken(null);
       }}
       onSignOut={() => {
@@ -101,6 +108,7 @@ export default function App() {
           headers: { Authorization: `Bearer ${authToken}` },
         }).finally(() => {
           window.localStorage.removeItem("authToken");
+          window.sessionStorage.removeItem("authToken");
           location.reload();
         });
       }}

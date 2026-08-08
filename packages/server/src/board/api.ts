@@ -25,9 +25,19 @@ const createBodySchema = z.object({
 const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
 
 const googleLoginBodySchema = z.object({ credential: z.string().min(1) });
-// Bounds only; the real username rules (and their error codes) live in Auth.
+// Bounds only; the real username/email/password rules (and their error
+// codes) live in Auth.
 const usernameBodySchema = z.object({
   signupToken: z.string().min(1),
+  username: z.string().max(200),
+});
+const emailLoginBodySchema = z.object({
+  email: z.string().min(1).max(320),
+  password: z.string().min(1).max(200),
+});
+const emailSignupBodySchema = z.object({
+  email: z.string().min(1).max(320),
+  password: z.string().min(1).max(200),
   username: z.string().max(200),
 });
 
@@ -42,9 +52,10 @@ const patchBodySchema = z.object({
 
 const statusValues: ItemStatus[] = ["proposed", "denied", "approved", "in_progress", "blocked", "done"];
 
-/** Present iff Google sign-in is configured; the two halves never part ways. */
-export interface GoogleSignIn {
-  clientId: string;
+/** Present iff Google and/or email sign-in is configured. */
+export interface AuthGate {
+  googleClientId: string | null;
+  emailAuthEnabled: boolean;
   auth: Auth;
 }
 
@@ -56,7 +67,7 @@ export function createApiHandler(
   channels: Channels,
   attachments: Attachments,
   corsOrigin: string,
-  googleSignIn: GoogleSignIn | null = null,
+  authGate: AuthGate | null = null,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -85,7 +96,7 @@ export function createApiHandler(
         json(res, 200, { ok: true });
       } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
-        await routeAuth(req, res, parts, googleSignIn);
+        await routeAuth(req, res, parts, authGate);
       } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
         serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
@@ -225,38 +236,55 @@ async function route(
 }
 
 /**
- * /api/auth/*: the pre-token surface. `config` tells clients which mode the
- * server runs in; the POST routes only exist once Google sign-in is
- * configured, and answer 409 AUTH_DISABLED in guest mode.
+ * /api/auth/*: the pre-token surface. `config` tells clients which modes the
+ * server runs in; the POST routes only exist once at least one of Google or
+ * email sign-in is configured (409 AUTH_DISABLED in guest mode), and each
+ * provider-specific route further answers 409 if that particular provider
+ * isn't enabled — Auth itself owns that check.
  */
 async function routeAuth(
   req: IncomingMessage,
   res: ServerResponse,
   parts: string[], // ["api", "auth", ...]
-  googleSignIn: GoogleSignIn | null,
+  authGate: AuthGate | null,
 ): Promise<void> {
   const method = req.method ?? "GET";
   if (parts.length !== 3) throw new ApiError(404, "NOT_FOUND", "no such route");
 
   if (parts[2] === "config" && method === "GET") {
-    return json(res, 200, { googleClientId: googleSignIn?.clientId ?? null });
+    return json(res, 200, {
+      googleClientId: authGate?.googleClientId ?? null,
+      emailAuthEnabled: authGate?.emailAuthEnabled ?? false,
+    });
   }
   if (method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
-  if (!googleSignIn) {
+  if (!authGate) {
     throw new ApiError(409, "AUTH_DISABLED", "this server runs in guest mode");
   }
 
   switch (parts[2]) {
     case "google": {
       const body = googleLoginBodySchema.parse(await readBody(req));
-      return json(res, 200, await googleSignIn.auth.loginWithGoogle(body.credential));
+      return json(res, 200, await authGate.auth.loginWithGoogle(body.credential));
     }
     case "username": {
       const body = usernameBodySchema.parse(await readBody(req));
-      return json(res, 200, googleSignIn.auth.completeSignup(body.signupToken, body.username));
+      return json(res, 200, authGate.auth.completeSignup(body.signupToken, body.username));
+    }
+    case "email-login": {
+      const body = emailLoginBodySchema.parse(await readBody(req));
+      return json(res, 200, authGate.auth.loginWithEmail(body.email, body.password));
+    }
+    case "email-signup": {
+      const body = emailSignupBodySchema.parse(await readBody(req));
+      return json(
+        res,
+        200,
+        authGate.auth.signupWithEmail(body.email, body.password, body.username),
+      );
     }
     case "logout": {
-      googleSignIn.auth.revoke(bearerToken(req) ?? "");
+      authGate.auth.revoke(bearerToken(req) ?? "");
       return void res.writeHead(204).end();
     }
   }
