@@ -337,7 +337,7 @@ export function Sidebar({
         onClick={() => onSelectChannel(c)}
         onContextMenu={(e) => openRoomMenu(e, c)}
         className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
-          c === channel
+          c === channel || contextMenu?.channel === c
             ? "bg-input text-body"
             : unreads > 0
               ? "text-body hover:bg-input/70"
