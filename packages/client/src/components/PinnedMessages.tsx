@@ -66,7 +66,7 @@ export function PinnedMessages({
         </button>
       </div>
       {open && (
-        <div className="absolute top-full right-3 z-20 mt-1 max-h-[60vh] w-80 overflow-y-auto rounded-lg bg-popup p-3 shadow-lg">
+        <div className="absolute top-full right-3 z-20 mt-1 max-h-[60vh] w-80 overflow-y-auto rounded-lg border-2 border-body bg-popup p-3 shadow-hard">
           <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
             Pinned messages
           </h2>

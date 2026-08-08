@@ -1,31 +1,37 @@
 @import "tailwindcss";
 
 @theme {
-  --color-sidebar: #282828;
-  --color-sidebar-dark: #1d2021;
-  --color-userpanel: #32302f;
-  --color-chat: #3c3836;
-  --color-chat-hover: #403d3a;
-  --color-input: #504945;
-  --color-body: #ebdbb2;
-  --color-muted: #a89984;
-  --color-faint: #928374;
-  --color-blurple: #d79921;
-  --color-online: #b8bb26;
-  --color-offline: #928374;
-  --color-divider: #504945;
-  --color-mention-accent: #d79921;
-  --color-mention-bg: #504945;
-  --color-mention-bg-hover: #665c54;
-  --color-mention-pill: #d79921;
-  --color-mention-text: #282828;
-  --color-popup: #32302f;
-  --color-dead: #fb4934;
-  --color-working: #fabd2f;
-  --color-away: #fe8019;
+  /* Cream/ink/mustard light theme — see convyio.com for the reference personality. */
+  --color-sidebar: #f3e8c8;
+  --color-sidebar-dark: #141311;
+  --color-userpanel: #f3e8c8;
+  --color-chat: #faf3e0;
+  --color-chat-hover: #efe2bd;
+  --color-input: #ffffff;
+  --color-body: #171512;
+  --color-muted: #6b6354;
+  --color-faint: #948c78;
+  --color-blurple: #eca400;
+  --color-online: #7a9a1f;
+  --color-offline: #948c78;
+  --color-divider: #e3d6ab;
+  --color-mention-accent: #eca400;
+  --color-mention-bg: #f3e8c8;
+  --color-mention-bg-hover: #ecdcae;
+  --color-mention-pill: #eca400;
+  --color-mention-text: #171512;
+  --color-popup: #ffffff;
+  --color-dead: #c0392b;
+  --color-working: #f2b705;
+  --color-away: #d9730d;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Hard offset shadows — the neubrutalist signature, always cast in ink. */
+  --shadow-hard-sm: 2px 2px 0 0 var(--color-body);
+  --shadow-hard: 3px 3px 0 0 var(--color-body);
+  --shadow-hard-lg: 5px 5px 0 0 var(--color-body);
+
+  --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+    "Liberation Mono", monospace;
 
   /* Shared enter animations — referenced by name across components. */
   --animate-fade-in: fade-in 150ms ease-out;
@@ -75,10 +81,10 @@ body {
   @apply bg-chat text-body font-sans antialiased;
 }
 
-/* Gruvbox thin scrollbar */
+/* Thin scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #665c54 transparent;
+  scrollbar-color: #d9cba0 transparent;
 }
 
 /* Same look for WebKit browsers that ignore scrollbar-color (Safari);
@@ -91,11 +97,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #665c54;
+  background: #d9cba0;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #7c6f64;
+  background: #c7b689;
 }
 
 ::selection {

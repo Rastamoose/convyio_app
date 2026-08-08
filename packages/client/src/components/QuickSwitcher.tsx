@@ -74,7 +74,7 @@ export function QuickSwitcher({
     <div className="fixed inset-0 z-50 animate-fade-in bg-sidebar-dark/80">
       <div
         ref={ref}
-        className="animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-lg bg-popup shadow-lg"
+        className="animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-lg border-2 border-body bg-popup shadow-hard-lg"
       >
         <input
           ref={inputRef}
@@ -106,7 +106,7 @@ export function QuickSwitcher({
                     <span className="shrink-0 text-[15px] text-faint">#</span>
                     <span className="min-w-0 flex-1 truncate text-[15px]">{c}</span>
                     {unreads > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-white">
+                      <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
                         {unreads > 99 ? "99+" : unreads}
                       </span>
                     )}

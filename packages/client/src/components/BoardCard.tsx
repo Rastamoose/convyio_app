@@ -29,7 +29,7 @@ export function BoardCard({
     <div
       id={`board-item-${item.ref}`}
       onClick={() => onOpen(item.id)}
-      className={`cursor-pointer rounded bg-input p-3 transition duration-150 hover:ring-1 hover:ring-blurple/60 ${
+      className={`cursor-pointer rounded border-2 border-body bg-input p-3 shadow-hard-sm transition duration-150 hover:ring-1 hover:ring-blurple/60 ${
         highlighted ? "bg-blurple/20 ring-1 ring-blurple" : ""
       }`}
     >

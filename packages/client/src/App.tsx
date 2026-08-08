@@ -53,7 +53,7 @@ export default function App() {
 
   if (!authMode) {
     return (
-      <div className="flex h-full items-center justify-center bg-sidebar-dark">
+      <div className="flex h-full items-center justify-center bg-chat">
         <p role="status" className="text-muted">
           Connecting…
         </p>
@@ -276,7 +276,7 @@ function Workspace() {
       {!workspace.connected && (
         <div
           role="status"
-          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-popup px-3 py-1 text-xs font-semibold text-working shadow-lg"
+          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full border-2 border-body bg-popup px-3 py-1 text-xs font-semibold text-working shadow-hard"
         >
           {workspace.self ? "Reconnecting…" : "Connecting…"}
         </div>

@@ -8,9 +8,9 @@ const RESUME_MS = 2500;
 const CLOSE_FALLBACK_MS = 300;
 
 const KIND_STYLE: Record<ToastKind, { border: string; icon: string; glyph: string }> = {
-  error: { border: "border-dead/50", icon: "text-dead", glyph: "M12 8v5m0 3.5h.01" },
-  info: { border: "border-blurple/50", icon: "text-blurple", glyph: "M12 11v5m0-8.5h.01" },
-  success: { border: "border-online/50", icon: "text-online", glyph: "M8.5 12.5l2.5 2.5 4.5-5" },
+  error: { border: "border-dead", icon: "text-dead", glyph: "M12 8v5m0 3.5h.01" },
+  info: { border: "border-blurple", icon: "text-blurple", glyph: "M12 11v5m0-8.5h.01" },
+  success: { border: "border-online", icon: "text-online", glyph: "M8.5 12.5l2.5 2.5 4.5-5" },
 };
 
 function ToastItem({
@@ -48,7 +48,7 @@ function ToastItem({
       onAnimationEnd={() => {
         if (closing) onDismiss(toast.id);
       }}
-      className={`flex items-start gap-2 rounded-lg border bg-popup px-3 py-2 text-sm text-body shadow-lg ${
+      className={`flex items-start gap-2 rounded-lg border-2 bg-popup px-3 py-2 text-sm text-body shadow-hard ${
         style.border
       } ${closing ? "animate-toast-out" : "animate-slide-up-fade"}`}
     >

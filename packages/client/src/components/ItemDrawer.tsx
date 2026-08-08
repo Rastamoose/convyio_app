@@ -261,7 +261,7 @@ export function ItemDrawer({
         onClick={onClose}
         className="fixed top-12 right-0 bottom-0 left-0 z-30 animate-fade-in bg-black/20"
       />
-      <aside className="fixed top-12 right-0 bottom-0 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto border-l border-sidebar-dark bg-sidebar p-4">
+      <aside className="fixed top-12 right-0 bottom-0 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto border-l-2 border-body bg-sidebar p-4">
         <div className="mb-3 flex items-center gap-2">
           <span className="rounded bg-blurple px-1 py-px text-[10px] font-bold text-mention-text">
             {item.ref}
@@ -429,7 +429,7 @@ export function ItemDrawer({
             )}
           </button>
           {ownerOpen && (
-            <div className="absolute top-full left-0 z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg bg-popup p-1 shadow-lg">
+            <div className="absolute top-full left-0 z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border-2 border-body bg-popup p-1 shadow-hard">
               <button
                 onClick={() => assignOwner(null)}
                 className={`block w-full rounded px-2 py-1.5 text-left text-sm text-muted hover:bg-input ${

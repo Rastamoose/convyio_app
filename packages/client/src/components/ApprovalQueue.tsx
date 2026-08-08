@@ -34,7 +34,7 @@ export function ApprovalQueue({
   return (
     <div
       ref={ref}
-      className="fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg bg-popup p-3 shadow-lg"
+      className="fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg border-2 border-body bg-popup p-3 shadow-hard"
     >
       <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
         Awaiting approval — {items.length}

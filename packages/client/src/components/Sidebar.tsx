@@ -49,7 +49,7 @@ function StatusRow({
   const offline = !participant.online;
   return (
     <div
-      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-white/5 ${
+      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-black/5 ${
         offline ? "opacity-40 hover:opacity-100" : ""
       }`}
       onMouseDown={(e) => e.stopPropagation()}
@@ -148,7 +148,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-60 flex-col bg-sidebar">
+    <aside className="flex h-full w-60 flex-col border-r-2 border-body bg-sidebar">
       {/* Workspace header */}
       <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4 select-none">
         <span className="truncate font-semibold text-body">{SERVER_NAME}</span>
@@ -252,7 +252,7 @@ export function Sidebar({
                 <span className="shrink-0 text-[15px] text-faint">#</span>
                 <span className="min-w-0 truncate text-[15px]">{c}</span>
                 {unreads > 0 && (
-                  <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-white">
+                  <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
                     {unreads > 99 ? "99+" : unreads}
                   </span>
                 )}
@@ -309,7 +309,7 @@ export function Sidebar({
             {signOut && (
               <button
                 onClick={signOut}
-                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-white/5 hover:text-body"
+                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-black/5 hover:text-body"
               >
                 Sign out
               </button>

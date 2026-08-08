@@ -1,12 +1,13 @@
+/* Medium-light so near-black avatar text (--color-body) stays readable. */
 const PALETTE = [
-  "#cc241d",
-  "#98971a",
-  "#d79921",
-  "#458588",
-  "#b16286",
-  "#689d6a",
-  "#d65d0e",
-  "#928374",
+  "#eca400",
+  "#e8935f",
+  "#8fb96a",
+  "#6bafa8",
+  "#d98bab",
+  "#c9c15a",
+  "#e0a63e",
+  "#a89a7c",
 ];
 
 function colorFor(name: string): string {
@@ -27,7 +28,7 @@ export function Avatar({
 }) {
   return (
     <div
-      className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-body select-none ${
+      className={`flex shrink-0 items-center justify-center rounded-full border-[1.5px] border-body font-semibold text-body select-none ${
         grayscale ? "grayscale" : ""
       }`}
       style={{

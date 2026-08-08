@@ -89,7 +89,7 @@ export function BoardView({
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="rounded bg-blurple px-3 py-1.5 text-sm font-semibold text-mention-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded border-2 border-body bg-blurple px-3 py-1.5 text-sm font-semibold text-mention-text shadow-hard-sm hover:opacity-90 active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-40"
           >
             Add
           </button>
