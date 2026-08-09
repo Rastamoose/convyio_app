@@ -2,21 +2,49 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { WebSocket } from "ws";
 import type { Actor, BoardEventEnvelope } from "@workspace/shared";
-import { WorkspaceDb } from "../src/db";
+import type { WorkspaceDb } from "../src/db";
 import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
-import type { GoogleIdentity } from "../src/auth/googleIdToken";
 import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
 import { Toolman } from "../src/board/Toolman";
 import { createApiHandler } from "../src/board/api";
 import { Hub } from "../src/hub";
+import { createTestDb } from "./pgSchema";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+
+/** A fake Supabase admin client: getUser(jwt) resolves via a fixed lookup
+ *  table the test controls, so ws-level auth tests never touch the network. */
+export function fakeSupabase(users: Record<string, { id: string; email: string | null }>): SupabaseClient {
+  return {
+    auth: {
+      getUser: async (jwt: string) => {
+        const user = users[jwt];
+        return user ? { data: { user }, error: null } : { data: { user: null }, error: new Error("invalid") };
+      },
+    },
+  } as unknown as SupabaseClient;
+}
+
+/** The real Supabase admin client (service-role key), for Attachments —
+ *  Storage has no useful in-memory fake, so tests exercise the real bucket. */
+export function supabaseAdmin(): SupabaseClient {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY;
+  if (!url || !key) throw new Error("SUPABASE_URL/SUPABASE_SECRET_KEY are not set");
+  return createClient(url, key);
+}
 
 export interface Env {
   db: WorkspaceDb;
@@ -25,10 +53,9 @@ export interface Env {
   channels: Channels;
   messages: MessageStore;
   attachments: Attachments;
-  uploadsDir: string;
   baseUrl: string;
   envelopes: BoardEventEnvelope[];
-  actor(kind: "human" | "agent", name: string): { actor: Actor; token: string };
+  actor(kind: "human" | "agent", name: string): Promise<{ actor: Actor; token: string }>;
   api(
     method: string,
     path: string,
@@ -36,20 +63,19 @@ export interface Env {
     body?: unknown,
     raw?: string,
   ): Promise<{ status: number; body: any }>;
-  close(): void;
+  close(): Promise<void>;
 }
 
-/** In-memory board + HTTP API on an ephemeral port, shared by every suite. */
+/** An isolated Postgres schema + board + HTTP API on an ephemeral port, shared by every suite. */
 export async function createEnv(): Promise<Env> {
-  const db = new WorkspaceDb(":memory:");
+  const { db, drop } = await createTestDb();
   const service = new BoardService(db);
   const sessions = new Sessions();
   const channels = new Channels(db);
-  channels.seed([{ name: "general", isDemo: false }]);
+  await channels.seed([{ name: "general", isDemo: false }]);
   const envelopes: BoardEventEnvelope[] = [];
   service.onEvent = (e) => envelopes.push(e);
-  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-"));
-  const attachments = new Attachments(db, uploadsDir);
+  const attachments = new Attachments(db, supabaseAdmin());
   const messages = new MessageStore(db);
   const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
   const server = http.createServer((req, res) => void handler(req, res));
@@ -63,11 +89,10 @@ export async function createEnv(): Promise<Env> {
     channels,
     messages,
     attachments,
-    uploadsDir,
     baseUrl,
     envelopes,
-    actor(kind, name) {
-      const actor = db.upsertActor(kind, name);
+    async actor(kind, name) {
+      const actor = await db.upsertActor(kind, name);
       return { actor, token: sessions.issue(actor.id) };
     },
     async api(method, urlPath, token, body, raw) {
@@ -81,10 +106,9 @@ export async function createEnv(): Promise<Env> {
       });
       return { status: res.status, body: await res.json() };
     },
-    close() {
+    async close() {
       server.close();
-      db.close();
-      fs.rmSync(uploadsDir, { recursive: true, force: true });
+      await drop();
     },
   };
 }
@@ -120,37 +144,36 @@ export interface WsEnv {
   hub: Hub;
   /** Set when the env was created with auth enabled. */
   auth: Auth | null;
-  uploadsDir: string;
   baseUrl: string;
   connect(name: string, kind: "human" | "agent"): Promise<WsClient>;
   /** Send an arbitrary join frame; resolves on welcome or on socket close. */
   join(frame: Record<string, unknown>): Promise<JoinOutcome>;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export interface WsAuthOptions {
-  /** Stub for the Google verifier seam; tests never hit the network. */
-  verifier: (credential: string) => Promise<GoogleIdentity>;
+  /** Fake Supabase getUser(jwt) lookup table — see fakeSupabase() above. */
+  users: Record<string, { id: string; email: string | null }>;
   agentToken?: string;
 }
 
 /** The full hub + HTTP stack on an ephemeral port, for websocket suites. */
 export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
-  const db = new WorkspaceDb(":memory:");
+  const { db, drop } = await createTestDb();
   const service = new BoardService(db);
   const sessions = new Sessions();
-  const auth = options.auth ? new Auth(db, options.auth.verifier) : null;
+  const auth = options.auth ? new Auth(db, fakeSupabase(options.auth.users)) : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
   const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
   const channels = new Channels(db);
-  channels.seed([{ name: "general", isDemo: false }]);
+  await channels.seed([{ name: "general", isDemo: false }]);
   const messages = new MessageStore(db);
-  const uploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-"));
-  const attachments = new Attachments(db, uploadsDir);
+  const attachments = new Attachments(db, supabaseAdmin());
   const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
   const server = http.createServer((req, res) => void handler(req, res));
-  const hub = new Hub(server, new Roster(db), messages, channels, attachments, sessions, toolman, {
+  const roster = await Roster.create(db);
+  const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     serverId: db.serverId,
     demoChannels: [],
     authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null) : undefined,
@@ -171,7 +194,6 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     attachments,
     hub,
     auth,
-    uploadsDir,
     baseUrl: `http://localhost:${port}`,
     join(frame) {
       return new Promise<JoinOutcome>((resolve) => {
@@ -226,12 +248,11 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, kind })));
       });
     },
-    close() {
+    async close() {
       for (const ws of clients) ws.terminate();
       server.close();
-      db.close();
-      fs.rmSync(uploadsDir, { recursive: true, force: true });
       fs.rmSync(workspaceDir, { recursive: true, force: true });
+      await drop();
     },
   };
 }

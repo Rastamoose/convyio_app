@@ -30,8 +30,8 @@ function upload(
 
 describe("upload HTTP endpoints", async () => {
   const env = await createEnv();
-  const human = env.actor("human", "dana");
-  const other = env.actor("human", "erik");
+  const human = await env.actor("human", "dana");
+  const other = await env.actor("human", "erik");
   after(() => env.close());
 
   test("POST upload → 201 with metadata and the file lands on disk", async () => {

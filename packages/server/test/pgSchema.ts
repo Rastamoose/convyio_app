@@ -33,7 +33,7 @@ export async function createTestDb(): Promise<{ db: WorkspaceDb; drop: () => Pro
   }
   await migrator.end();
 
-  const db = await WorkspaceDb.create(url, schema);
+  const db = await WorkspaceDb.create(url, schema, 1);
 
   return {
     db,

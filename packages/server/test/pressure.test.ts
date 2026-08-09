@@ -11,8 +11,8 @@ import { createTestDb } from "./pgSchema";
 
 describe("pressure: HTTP edges", async () => {
   const env = await createEnv();
-  const human = env.actor("human", "dana");
-  const agent = env.actor("agent", "noodle");
+  const human = await env.actor("human", "dana");
+  const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
   test("malformed JSON body → 400", async () => {

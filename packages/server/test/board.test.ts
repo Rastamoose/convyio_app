@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import type { Actor, BoardItem } from "@workspace/shared";
-import { WorkspaceDb } from "../src/db";
 import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
@@ -17,12 +13,13 @@ import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
 import { Hub } from "../src/hub";
-import { createEnv, createWsEnv, PROPOSAL } from "./helpers";
+import { createEnv, createWsEnv, PROPOSAL, supabaseAdmin } from "./helpers";
+import { createTestDb } from "./pgSchema";
 
 describe("board invariants", async () => {
   const env = await createEnv();
-  const human = env.actor("human", "dana");
-  const agent = env.actor("agent", "noodle");
+  const human = await env.actor("human", "dana");
+  const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
   test("T1: agent calls approve → 403 AGENT_CANNOT_APPROVE", async () => {
@@ -67,7 +64,7 @@ describe("board invariants", async () => {
     assert.equal(authz.allow, true);
   });
 
-  test("T4: mutating action with no board ref → NO_BOARD_REF", () => {
+  test("T4: mutating action with no board ref → NO_BOARD_REF", async () => {
     const authz = await authorizeMutation(agent.actor, null, { name: "write_file" }, env.service);
     assert.equal(authz.allow, false);
     assert.equal(!authz.allow && authz.code, "NO_BOARD_REF");
@@ -114,12 +111,12 @@ describe("board invariants", async () => {
     assert.equal(!authz.allow && authz.code, "ITEM_DELETED");
   });
 
-  test("T7: read-only tool with no board ref → allowed", () => {
+  test("T7: read-only tool with no board ref → allowed", async () => {
     const authz = await authorizeMutation(agent.actor, null, { name: "read_file" }, env.service);
     assert.equal(authz.allow, true);
   });
 
-  test("T8: unregistered tool is treated as mutating (fail closed)", () => {
+  test("T8: unregistered tool is treated as mutating (fail closed)", async () => {
     assert.equal(isMutating("brand_new_tool"), true);
     const authz = await authorizeMutation(agent.actor, null, { name: "brand_new_tool" }, env.service);
     assert.equal(authz.allow, false);
@@ -221,18 +218,18 @@ describe("board invariants", async () => {
 
 describe("T10: full-stack approval fan-out", async () => {
   test("approval reaches all clients within 1s and unblocks agent work", async () => {
-    const db = new WorkspaceDb(":memory:");
+    const { db, drop } = await createTestDb();
     const service = new BoardService(db);
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
     const channels = new Channels(db);
-    channels.seed([{ name: "general", isDemo: false }]);
-    const attachments = new Attachments(db, fs.mkdtempSync(path.join(os.tmpdir(), "uploads-test-")));
+    await channels.seed([{ name: "general", isDemo: false }]);
+    const attachments = new Attachments(db, supabaseAdmin());
     const messages = new MessageStore(db);
     const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, new Roster(db), new MessageStore(db), channels, attachments, sessions, toolman, {
+    const hub = new Hub(server, await Roster.create(db), messages, channels, attachments, sessions, toolman, {
       serverId: db.serverId,
       demoChannels: [],
     });
@@ -269,62 +266,66 @@ describe("T10: full-stack approval fan-out", async () => {
         ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, kind })));
       });
 
-    const agent = await connect("noodle", "agent");
-    const humanA = await connect("dana", "human");
-    const humanB = await connect("harris", "human");
+    try {
+      const agent = await connect("noodle", "agent");
+      const humanA = await connect("dana", "human");
+      const humanB = await connect("harris", "human");
 
-    const proposeRes = await fetch(`${baseUrl}/api/board/items`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${agent.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(PROPOSAL),
-    });
-    const proposed = (await proposeRes.json()).item as BoardItem;
-
-    // The proposal itself fans out.
-    await humanA.next((e) => e.type === "item.proposed" && e.item.id === proposed.id);
-
-    // Mutating work is refused while proposed.
-    agent.ws.send(JSON.stringify({
-      type: "action_request",
-      requestId: "r1",
-      boardItemRef: proposed.ref,
-      action: { kind: "write_file", path: "out.md", content: "x" },
-    }));
-    const denied = await agent.next((e) => e.type === "action_result" && e.requestId === "r1");
-    assert.equal(denied.ok, false);
-    assert.equal(denied.code, "ITEM_NOT_WORKABLE");
-
-    // Human approves over HTTP; every ws client sees item.approved within 1s.
-    const approvedAt = Date.now();
-    const [agentSaw, aSaw, bSaw] = await Promise.all([
-      agent.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
-      humanA.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
-      humanB.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
-      fetch(`${baseUrl}/api/board/items/${proposed.id}/approve`, {
+      const proposeRes = await fetch(`${baseUrl}/api/board/items`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${humanA.token}` },
-      }),
-    ]);
-    assert.ok(Date.now() - approvedAt < 1000);
-    assert.equal(agentSaw.item.status, "approved");
-    assert.equal(aSaw.item.status, "approved");
-    assert.equal(bSaw.item.status, "approved");
+        headers: { Authorization: `Bearer ${agent.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(PROPOSAL),
+      });
+      const proposed = (await proposeRes.json()).item as BoardItem;
 
-    // Agent resumes with no further human action: the same mutation now runs.
-    agent.ws.send(JSON.stringify({
-      type: "action_request",
-      requestId: "r2",
-      boardItemRef: proposed.ref,
-      action: { kind: "write_file", path: "out.md", content: "x" },
-    }));
-    const allowed = await agent.next((e) => e.type === "action_result" && e.requestId === "r2");
-    assert.equal(allowed.ok, true);
+      // The proposal itself fans out.
+      await humanA.next((e) => e.type === "item.proposed" && e.item.id === proposed.id);
 
-    agent.ws.close();
-    humanA.ws.close();
-    humanB.ws.close();
-    server.close();
-    db.close();
+      // Mutating work is refused while proposed.
+      agent.ws.send(JSON.stringify({
+        type: "action_request",
+        requestId: "r1",
+        boardItemRef: proposed.ref,
+        action: { kind: "write_file", path: "out.md", content: "x" },
+      }));
+      const denied = await agent.next((e) => e.type === "action_result" && e.requestId === "r1");
+      assert.equal(denied.ok, false);
+      assert.equal(denied.code, "ITEM_NOT_WORKABLE");
+
+      // Human approves over HTTP; every ws client sees item.approved within 1s.
+      const approvedAt = Date.now();
+      const [agentSaw, aSaw, bSaw] = await Promise.all([
+        agent.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
+        humanA.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
+        humanB.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
+        fetch(`${baseUrl}/api/board/items/${proposed.id}/approve`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${humanA.token}` },
+        }),
+      ]);
+      assert.ok(Date.now() - approvedAt < 1000);
+      assert.equal(agentSaw.item.status, "approved");
+      assert.equal(aSaw.item.status, "approved");
+      assert.equal(bSaw.item.status, "approved");
+
+      // Agent resumes with no further human action: the same mutation now runs.
+      agent.ws.send(JSON.stringify({
+        type: "action_request",
+        requestId: "r2",
+        boardItemRef: proposed.ref,
+        action: { kind: "write_file", path: "out.md", content: "x" },
+      }));
+      const allowed = await agent.next((e) => e.type === "action_result" && e.requestId === "r2");
+      assert.equal(allowed.ok, true);
+
+      agent.ws.close();
+      humanA.ws.close();
+      humanB.ws.close();
+    } finally {
+      server.close();
+      await db.close();
+      await drop();
+    }
   });
 });
 

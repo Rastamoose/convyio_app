@@ -6,8 +6,8 @@ import { createTestDb } from "./pgSchema";
 
 describe("channel creation over the API", async () => {
   const env = await createEnv();
-  const human = env.actor("human", "dana");
-  const agent = env.actor("agent", "noodle");
+  const human = await env.actor("human", "dana");
+  const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
   test("human create → 201 and the channel is listed after general", async () => {
@@ -77,8 +77,8 @@ describe("channel creation over the API", async () => {
 
 describe("channel management over the API", async () => {
   const env = await createEnv();
-  const human = env.actor("human", "dana");
-  const agent = env.actor("agent", "noodle");
+  const human = await env.actor("human", "dana");
+  const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
   test("rename: 200, messages follow, old name gone", async () => {

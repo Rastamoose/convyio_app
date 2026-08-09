@@ -1,23 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { Auth } from "../src/auth/Auth";
 import { ApiError } from "../src/board/BoardService";
 import { createTestDb } from "./pgSchema";
 import type { WorkspaceDb } from "../src/db";
-
-/** A fake Supabase admin client: getUser(jwt) resolves via a fixed lookup
- *  table the test controls, so these tests never touch the network. */
-function fakeSupabase(users: Record<string, { id: string; email: string | null }>): SupabaseClient {
-  return {
-    auth: {
-      getUser: async (jwt: string) => {
-        const user = users[jwt];
-        return user ? { data: { user }, error: null } : { data: { user: null }, error: new Error("invalid") };
-      },
-    },
-  } as unknown as SupabaseClient;
-}
+import { createWsEnv, fakeSupabase } from "./helpers";
 
 describe("Auth", () => {
   let db: WorkspaceDb;
@@ -67,5 +54,72 @@ describe("Auth", () => {
     await auth.claimUsername("tok-5", "Erin");
     const actor = await auth.resolveSession("tok-5");
     assert.equal(actor?.displayName, "Erin");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Websocket join gating (auth-enabled hub; guest mode is covered by the
+// untouched existing suites)
+// ---------------------------------------------------------------------------
+
+describe("ws join gating with auth enabled", async () => {
+  const env = await createWsEnv({
+    auth: { users: { "tok-dana": { id: "user-dana", email: "dana@example.com" } }, agentToken: "secret123" },
+  });
+  after(() => env.close());
+
+  const signIn = async (): Promise<string> => {
+    const session = await env.auth!.session("tok-dana");
+    if (session.status === "ok") return "tok-dana";
+    await env.auth!.claimUsername("tok-dana", "dana");
+    return "tok-dana";
+  };
+
+  test("humans without a token, or with a dead one, are refused and closed", async () => {
+    const bare = await env.join({ type: "join", name: "mallory", kind: "human" });
+    assert.equal(bare.welcome, null);
+    assert.equal(bare.error, "unauthenticated");
+    assert.equal(bare.closed, true);
+
+    const dead = await env.join({ type: "join", kind: "human", authToken: "not-a-session" });
+    assert.equal(dead.welcome, null);
+    assert.equal(dead.error, "unauthenticated");
+  });
+
+  test("a live session joins as its own username, whatever the frame claims", async () => {
+    const authToken = await signIn();
+    const outcome = await env.join({
+      type: "join",
+      kind: "human",
+      name: "impostor",
+      authToken,
+    });
+    assert.ok(outcome.welcome, "expected a welcome");
+    assert.equal(outcome.welcome.self.name, "dana");
+    assert.equal(outcome.welcome.self.id, (await env.db.getActor("user-dana"))!.id);
+  });
+
+  test("agents need the exact shared secret", async () => {
+    const missing = await env.join({ type: "join", name: "noodle", kind: "agent" });
+    assert.equal(missing.welcome, null);
+    assert.equal(missing.error, "unauthenticated");
+
+    const wrong = await env.join({
+      type: "join",
+      name: "noodle",
+      kind: "agent",
+      authToken: "secret124",
+    });
+    assert.equal(wrong.welcome, null);
+
+    const right = await env.join({
+      type: "join",
+      name: "noodle",
+      kind: "agent",
+      authToken: "secret123",
+    });
+    assert.ok(right.welcome, "expected a welcome");
+    assert.equal(right.welcome.self.name, "noodle");
+    assert.equal(right.welcome.self.kind, "agent");
   });
 });
