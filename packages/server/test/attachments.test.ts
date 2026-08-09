@@ -218,6 +218,6 @@ describe("attachments on the websocket", async () => {
     await erik.next((e) => e.type === "error" && e.error.includes(ghostId));
     assert.equal((await messages.list()).length, countBefore);
 
-    env.close();
+    await env.close();
   });
 });

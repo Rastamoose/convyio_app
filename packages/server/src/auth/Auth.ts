@@ -5,7 +5,7 @@ import type { WorkspaceDb } from "../db";
 
 // 1-32 chars of letters/digits/spaces/-/_; applied after trim, so a name
 // can never be only whitespace.
-const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
+export const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
 export type SessionResult = { status: "ok"; username: string } | { status: "needs_username" };
 

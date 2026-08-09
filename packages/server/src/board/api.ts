@@ -1,9 +1,10 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { Actor, ItemStatus } from "@workspace/shared";
+import type { Actor, AgentProvider, ItemStatus } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { Sessions } from "./sessions";
+import type { AgentInvites } from "../auth/AgentInvites";
 import type { Auth } from "../auth/Auth";
 import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
@@ -32,6 +33,11 @@ const channelPatchBodySchema = z.object({
 // Bounds only; the real username rules (and their error codes) live in Auth.
 const usernameBodySchema = z.object({ username: z.string().max(200) });
 
+const createAgentBodySchema = z.object({
+  name: z.string().min(1).max(32),
+  provider: z.enum(["claude", "codex"] as const),
+});
+
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
 const patchBodySchema = z.object({
@@ -59,6 +65,8 @@ export function createApiHandler(
   attachments: Attachments,
   corsOrigin: string,
   authGate: AuthGate | null = null,
+  agentInvites: AgentInvites | null = null,
+  onRevokeAgent: ((actorId: string) => void) | null = null,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -92,7 +100,7 @@ export function createApiHandler(
         await serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
         const actor = await authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, service, db, messages, channels, attachments);
+        await route(req, res, parts, url, actor, service, db, messages, channels, attachments, agentInvites, onRevokeAgent);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -119,12 +127,39 @@ async function route(
   messages: MessageStore,
   channels: Channels,
   attachments: Attachments,
+  agentInvites: AgentInvites | null,
+  onRevokeAgent: ((actorId: string) => void) | null,
 ): Promise<void> {
   const method = req.method ?? "GET";
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
     return json(res, 200, { actors: await db.listActors() });
+  }
+
+  // GET /api/agents — user-created agents that are still invited.
+  if (parts[1] === "agents" && parts.length === 2 && method === "GET") {
+    if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+    return json(res, 200, { agents: await agentInvites.list() });
+  }
+
+  // POST /api/agents — create a new user-created agent invite (humans only).
+  if (parts[1] === "agents" && parts.length === 2 && method === "POST") {
+    if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can add agents");
+    const body = createAgentBodySchema.parse(await readBody(req));
+    const { invite, token } = await agentInvites.create(body.name, body.provider, actor);
+    return json(res, 201, { ...invite, token });
+  }
+
+  // DELETE /api/agents/:id — revoke an agent invite (humans only).
+  if (parts[1] === "agents" && parts.length === 3 && method === "DELETE") {
+    if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove agents");
+    const revoked = await agentInvites.revoke(parts[2]);
+    if (!revoked) throw new ApiError(404, "NOT_FOUND", "no such agent invite");
+    if (onRevokeAgent) onRevokeAgent(revoked.actorId);
+    return json(res, 200, { ok: true });
   }
 
   // POST /api/channels — any signed-in human can add a channel.

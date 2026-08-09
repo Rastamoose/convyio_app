@@ -43,6 +43,11 @@ export class Sessions {
     }
   }
 
+  /** Clear every issued session, e.g. between tests that share one env. */
+  clear(): void {
+    this.tokens.clear();
+  }
+
   /** Drop expired sessions so the map cannot grow without bound. */
   private sweep(): void {
     const now = Date.now();

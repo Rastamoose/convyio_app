@@ -4,6 +4,7 @@ import { useWorkspace } from "../hooks/WorkspaceContext";
 import { presenceDot, presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
+import { AddAgentModal } from "./AddAgentModal";
 import { ApprovalQueue } from "./ApprovalQueue";
 import { MemberCard } from "./MemberCard";
 import { PinIcon } from "./PinnedMessages";
@@ -265,6 +266,7 @@ export function Sidebar({
     x: number;
     y: number;
   } | null>(null);
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [renamingChannel, setRenamingChannel] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDeleteChannel, setConfirmDeleteChannel] = useState<string | null>(null);
@@ -438,6 +440,17 @@ export function Sidebar({
             ))}
           </>
         )}
+        {self?.kind === "human" && (
+          <button
+            onClick={() => setAddAgentOpen(true)}
+            className="mt-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-divider px-2 py-2 text-left text-sm font-medium text-muted hover:border-body hover:text-body select-none"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-dark text-lg font-bold text-muted">
+              +
+            </span>
+            Add agent
+          </button>
+        )}
       </section>
 
       {/* Rooms */}
@@ -597,6 +610,7 @@ export function Sidebar({
           onClose={() => setContextMenu(null)}
         />
       )}
+      <AddAgentModal open={addAgentOpen} onClose={() => setAddAgentOpen(false)} />
     </aside>
   );
 }

@@ -35,10 +35,18 @@ export class WorkspaceDb {
    * tests point every query at an isolated, throwaway schema instead of
    * `public` (see test/pgSchema.ts) without touching production data.
    */
-  static async create(connectionString: string, searchPath = "public", max?: number): Promise<WorkspaceDb> {
+  /** Wrap an existing postgres.js client (used by tests to share one
+   *  connection between schema setup, migrations, and the WorkspaceDb). */
+  static async adopt(sql: Sql): Promise<WorkspaceDb> {
+    const serverId = await ensureServer(sql);
+    return new WorkspaceDb(sql, serverId);
+  }
+
+  static async create(connectionString: string, searchPath = "public", max?: number, idleTimeout?: number): Promise<WorkspaceDb> {
     const sql = postgres(connectionString, {
       connection: { search_path: searchPath },
       max,
+      idle_timeout: idleTimeout,
       // int8/bigint (created_at, board_events.id, the *.seq columns) parses
       // as a string in postgres.js by default, to avoid precision loss
       // above 2^53. Every bigint column here is a millisecond epoch or a

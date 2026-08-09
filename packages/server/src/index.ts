@@ -12,6 +12,7 @@ import { Attachments } from "./chat/Attachments";
 import { Channels } from "./chat/Channels";
 import { MessageStore } from "./chat/MessageStore";
 import { Auth } from "./auth/Auth";
+import { AgentInvites } from "./auth/AgentInvites";
 import { createJoinGate } from "./auth/joinPolicy";
 import { BoardService } from "./board/BoardService";
 import { Toolman } from "./board/Toolman";
@@ -58,6 +59,8 @@ async function main() {
   }
 
   const attachments = new Attachments(db, supabase);
+  const agentInvites = new AgentInvites(db);
+  const agentRevoker: { close?: (actorId: string) => void } = {};
   const handleApi = createApiHandler(
     db,
     service,
@@ -67,6 +70,8 @@ async function main() {
     attachments,
     config.corsOrigin,
     authGate,
+    agentInvites,
+    (actorId) => agentRevoker.close?.(actorId),
   );
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -83,7 +88,7 @@ async function main() {
     res.end(JSON.stringify({ error: "NOT_FOUND" }));
   });
 
-  const roster = await Roster.create(db);
+  const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     serverId: db.serverId,
     demoChannels,
@@ -91,9 +96,10 @@ async function main() {
     // trust self-declared names (the Hub's own undefined-gate fallback is
     // for tests that build it directly, never for the running server).
     authorizeJoin: authGate
-      ? createJoinGate(authGate.auth, config.agentToken)
+      ? createJoinGate(authGate.auth, config.agentToken, agentInvites)
       : async () => ({ ok: false }),
   });
+  agentRevoker.close = (actorId) => hub.closeAgentConnection(actorId);
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);

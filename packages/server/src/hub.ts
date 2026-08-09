@@ -33,6 +33,10 @@ interface Connection {
   participant: Participant | null;
   /** Where this client can reach the HTTP API — the origin it connected to. */
   apiUrl: string;
+  /** Serializes incoming socket messages so a single connection's handlers
+   *  never interleave — this preserves server-side ordering for tests and
+   *  clients that send rapid, causally-related frames. */
+  queue: Promise<void>;
 }
 
 /** Verdict from the join gate: whether a join stands, and as what name. */
@@ -157,10 +161,10 @@ export class Hub {
   }
 
   private onConnection(socket: WebSocket, request: IncomingMessage): void {
-    const conn: Connection = { socket, participant: null, apiUrl: apiUrlFor(request) };
+    const conn: Connection = { socket, participant: null, apiUrl: apiUrlFor(request), queue: Promise.resolve() };
     this.connections.add(conn);
 
-    socket.on("message", async (raw) => {
+    socket.on("message", (raw) => {
       let event: ClientEvent;
       try {
         event = clientEventSchema.parse(JSON.parse(raw.toString()));
@@ -169,7 +173,9 @@ export class Hub {
         this.send(conn, { type: "error", error: "malformed event" });
         return;
       }
-      await this.dispatch(conn, event);
+      conn.queue = conn.queue
+        .then(() => this.dispatch(conn, event))
+        .catch((err) => console.warn("[hub] message handler error:", err instanceof Error ? err.message : err));
     });
 
     socket.on("close", () => this.onDisconnect(conn));
@@ -539,6 +545,31 @@ export class Hub {
     if (conn.socket.readyState === WebSocket.OPEN) {
       conn.socket.send(JSON.stringify(event));
     }
+  }
+
+  /** Disconnect a user-created agent and remove it from the live roster. */
+  closeAgentConnection(actorId: string): void {
+    for (const conn of this.connections) {
+      if (conn.participant?.id === actorId) {
+        this.send(conn, { type: "error", error: "agent removed" });
+        conn.socket.close();
+      }
+    }
+    this.roster.removeAgent(actorId);
+    this.sessions.revokeFor(actorId);
+    this.broadcastPresence();
+  }
+
+  /** Close the WebSocket server and sever every active connection. */
+  async close(): Promise<void> {
+    // Let in-flight message handlers finish before we yank the sockets, so
+    // queued dispatches don't trip over a closed DB connection.
+    await Promise.all([...this.connections].map((conn) => conn.queue.catch(() => {})));
+    for (const conn of this.connections) conn.socket.terminate();
+    this.connections.clear();
+    return new Promise((resolve, reject) => {
+      this.wss.close((err) => (err ? reject(err) : resolve()));
+    });
   }
 }
 

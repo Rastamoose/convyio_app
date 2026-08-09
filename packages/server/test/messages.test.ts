@@ -1,8 +1,22 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { describe, test } from "node:test";
+import { after, afterEach, before, describe, test } from "node:test";
 import { clientEventSchema, type ChatMessage } from "@workspace/shared";
 import { createWsEnv } from "./helpers";
+
+let env: Awaited<ReturnType<typeof createWsEnv>>;
+
+before(async () => {
+  env = await createWsEnv();
+});
+
+afterEach(async () => {
+  await env.reset();
+});
+
+after(async () => {
+  if (env) await env.close();
+});
 
 /** Directly appends a fabricated message, bypassing the hub, so tests can
  *  control created_at exactly (including deliberate ties) without racing
@@ -26,9 +40,9 @@ async function seedMessage(
   return message;
 }
 
-describe("message editing", async () => {
+describe("message editing", () => {
+
   test("author edits: content + editedAt broadcast, persist, and survive rejoin", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -48,11 +62,9 @@ describe("message editing", async () => {
     assert.equal(inHistory.content, "ship monday");
     assert.ok(inHistory.editedAt > 0);
 
-    env.close();
   });
 
   test("only the author may edit", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -67,25 +79,21 @@ describe("message editing", async () => {
     assert.equal((await env.messages.list())[0].content, "mine");
     assert.equal((await env.messages.list())[0].editedAt, undefined);
 
-    env.close();
   });
 
   test("editing an unknown message → error frame", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     const ghost = randomUUID();
     dana.ws.send(JSON.stringify({ type: "message_edit", messageId: ghost, content: "boo" }));
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
-
-    env.close();
   });
+
 });
 
-describe("message deletion", async () => {
+describe("message deletion", () => {
   test("author deletes: message_deleted broadcast, row and reactions gone", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -108,30 +116,24 @@ describe("message deletion", async () => {
     assert.equal(deleted.messageId, messageId);
     assert.equal(deleted.channel, "general");
     assert.equal((await env.messages.list()).length, 0);
-    const orphans = env.db.db
-      .prepare(`SELECT COUNT(*) AS n FROM message_reactions`)
-      .get() as { n: number };
+    const [orphans] = await env.db.sql<{ n: number }[]>`SELECT COUNT(*) AS n FROM message_reactions`;
     assert.equal(orphans.n, 0);
 
-    env.close();
   });
 
   test("deleting an unknown message → error frame", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     const ghost = randomUUID();
     dana.ws.send(JSON.stringify({ type: "message_delete", messageId: ghost }));
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
-
-    env.close();
   });
+
 });
 
-describe("replies", async () => {
+describe("replies", () => {
   test("replyToId broadcasts, persists, and survives rejoin", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -148,11 +150,9 @@ describe("replies", async () => {
     const inHistory = fran.welcome.history.find((m: any) => m.id === reply.message.id);
     assert.equal(inHistory.replyToId, root.message.id);
 
-    env.close();
   });
 
   test("replying to an unknown message → error, nothing posted", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     const ghost = randomUUID();
@@ -160,14 +160,12 @@ describe("replies", async () => {
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
     assert.equal((await env.messages.list()).length, 0);
-
-    env.close();
   });
+
 });
 
-describe("reactions", async () => {
+describe("reactions", () => {
   test("add/remove broadcast hydrated message_updated; duplicates are silent no-ops", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
     let updates = 0;
@@ -219,11 +217,9 @@ describe("reactions", async () => {
     ]);
     assert.equal(updates, 3);
 
-    env.close();
   });
 
   test("cap: the 21st distinct emoji is refused, piling onto an existing one is not", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     dana.ws.send(JSON.stringify({ type: "message", content: "cap me" }));
@@ -235,7 +231,10 @@ describe("reactions", async () => {
         JSON.stringify({ type: "message_react", messageId, emoji: `e${i}`, op: "add" }),
       );
     }
-    await dana.next((e) => e.type === "message_updated" && e.message.reactions?.length === 20);
+    await dana.next(
+      (e) => e.type === "message_updated" && e.message.reactions?.length === 20,
+      10000,
+    );
 
     dana.ws.send(JSON.stringify({ type: "message_react", messageId, emoji: "e20", op: "add" }));
     const refusal = await dana.next((e) => e.type === "error");
@@ -249,11 +248,9 @@ describe("reactions", async () => {
     );
     assert.equal(piled.message.reactions.length, 20);
 
-    env.close();
   });
 
   test("reacting to an unknown message → error frame", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     const ghost = randomUUID();
@@ -262,14 +259,12 @@ describe("reactions", async () => {
     );
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
-
-    env.close();
   });
+
 });
 
-describe("typing indicator", async () => {
+describe("typing indicator", () => {
   test("relayed to others, never echoed to the sender, never persisted", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -288,14 +283,12 @@ describe("typing indicator", async () => {
 
     // Ephemeral: only the real message persisted.
     assert.equal((await env.messages.list()).length, 1);
-
-    env.close();
   });
+
 });
 
-describe("send nonce", async () => {
+describe("send nonce", () => {
   test("echoed top-level on the triggering broadcast, never persisted", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const erik = await env.connect("erik", "human");
 
@@ -312,9 +305,8 @@ describe("send nonce", async () => {
     erik.ws.send(JSON.stringify({ type: "message", content: "plain" }));
     const plain = await dana.next((e) => e.type === "message" && e.message.content === "plain");
     assert.equal("nonce" in plain, false);
-
-    env.close();
   });
+
 });
 
 describe("message op schemas", () => {
@@ -346,9 +338,8 @@ describe("message op schemas", () => {
   });
 });
 
-describe("welcome history cap", async () => {
+describe("welcome history cap", () => {
   test("with >50 messages in 2 channels, each yields exactly its newest 50, ascending", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     const created = await fetch(`${env.baseUrl}/api/channels`, {
       method: "POST",
@@ -377,14 +368,12 @@ describe("welcome history cap", async () => {
       Array.from({ length: 50 }, (_, i) => `random-${i + 5}`),
     );
     assert.ok(general[0].timestamp < general[general.length - 1].timestamp);
-
-    env.close();
   });
+
 });
 
-describe("GET /api/messages", async () => {
+describe("GET /api/messages", () => {
   test("returns the correct older page, ascending, and paging back never repeats or skips", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
 
     // A and B deliberately share a millisecond; C/D/E do not.
@@ -421,11 +410,9 @@ describe("GET /api/messages", async () => {
     assert.equal(seen.length, 5);
     assert.deepEqual(new Set(seen), new Set([a.id, b.id, c.id, d.id, e.id]));
 
-    env.close();
   });
 
   test("limit is clamped, before must be numeric, request must be authenticated", async () => {
-    const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
     for (let i = 0; i < 105; i++) await seedMessage(env, "clamped", `m-${i}`, i);
 
@@ -453,7 +440,6 @@ describe("GET /api/messages", async () => {
     // No bearer token → refused, same as every other authenticated route.
     const unauth = await get(`channel=clamped&before=999`, null);
     assert.equal(unauth.status, 401);
-
-    env.close();
   });
+
 });

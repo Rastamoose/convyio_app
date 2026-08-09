@@ -22,3 +22,8 @@ Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/
 - Agent presence semantics: green=working, orange=idle, red=blocked on a human, grey=offline. Agent restart recovery: pending proposal work is persisted (`data/agents/<name>/pending-work.json`) and swept against the board snapshot on rejoin.
 - The client composes per-domain hooks under a `WorkspaceContext`; components take workspace data/actions from context and navigation callbacks as props. Board ops are optimistic with rollback; failures surface as toasts.
 - Scripted demos: JSON scripts in `packages/server/assets/demo/scripts/` (schema in `src/demo/script.ts`), played by `DemoOrchestrator` through the real hub/board pipeline. There is no client-side demo fallback — demos need a running server and agent. Seed fixtures live in `assets/demo/seed/`.
+
+## Notes from this session
+- The workspace store has migrated from SQLite (`data/board.db`) to Supabase-managed Postgres. Schema lives in `supabase/migrations/` and `packages/server/src/db.ts` uses `postgres.js`.
+- Auth is now Supabase Auth (Google OAuth / email/password); the server verifies Supabase JWTs instead of maintaining `auth_sessions`.
+- `SUPABASE_DB_URL` in `.env` points to the Supavisor session pooler (`*.pooler.supabase.com:5432`). Running many server test files concurrently can hit `EMAXPOOLSREACHED` or `CONNECTION_ENDED` errors from the pooler. Use a local Postgres or the Supabase transaction pooler (port 6543) for heavy test runs if possible.

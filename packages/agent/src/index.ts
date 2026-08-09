@@ -41,12 +41,19 @@ function createBrain(): Brain {
   if (AGENT_PROVIDER === "claude") {
     return new ClaudeBrain(AGENT_MODEL, CLAUDE_WORKDIR);
   }
-  return new GeminiBrain(GEMINI_API_KEY!, AGENT_MODEL);
+  if (AGENT_PROVIDER === "gemini") {
+    return new GeminiBrain(GEMINI_API_KEY!, AGENT_MODEL);
+  }
+  throw new Error("codex provider is not yet supported");
 }
 
 async function main() {
   if (AGENT_PROVIDER === "gemini" && !GEMINI_API_KEY) {
     console.error("[agent] Missing GEMINI_API_KEY. Set it in the environment and restart.");
+    process.exit(1);
+  }
+  if (AGENT_PROVIDER === "codex") {
+    console.error("[agent] Codex provider is not yet supported.");
     process.exit(1);
   }
 

@@ -69,7 +69,6 @@ describe("channel creation over the API", async () => {
         (err: any) => err.status === 409 && err.code === "CHANNEL_LIMIT",
       );
     } finally {
-      await db.close();
       await drop();
     }
   });
@@ -134,7 +133,7 @@ describe("channel management over the API", async () => {
       archived: false,
     });
     assert.equal(unarchive.status, 200);
-    assert.ok(await env.channels.list().includes("stale"));
+    assert.ok((await env.channels.list()).includes("stale"));
   });
 
   test("pinned channels sort first in list()", async () => {
@@ -207,7 +206,7 @@ describe("channels on the websocket", async () => {
     await human.next((e) => e.type === "message" && e.message.channel === "design");
     assert.equal((await env.messages.list()).length, 1);
 
-    env.close();
+    await env.close();
   });
 
   test("rename, archive, pin, and delete each fan out their frame", async () => {
@@ -246,6 +245,6 @@ describe("channels on the websocket", async () => {
     const deleted = await human.next((e) => e.type === "channel_deleted");
     assert.deepEqual(deleted, { type: "channel_deleted", channel: "designs" });
 
-    env.close();
+    await env.close();
   });
 });

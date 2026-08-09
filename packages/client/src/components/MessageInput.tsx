@@ -639,7 +639,7 @@ export function MessageInput({
           ))}
         </div>
       )}
-      <div className="relative flex items-end gap-3 rounded-lg bg-input px-4">
+      <div className="relative flex items-end gap-3 rounded-lg bg-composer px-4">
         <input
           ref={fileRef}
           type="file"

@@ -164,11 +164,13 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["proposed"]);
     return this.mutate(actor, "item.approved", async (sql) => {
-      await sql`
+      const [updated] = await sql<{ id: string }[]>`
         UPDATE board_items SET status = 'approved', approved_by = ${actor.id}, approved_at = ${Date.now()}
-        WHERE id = ${item.id}
+        WHERE id = ${item.id} AND status = 'proposed'
+        RETURNING id
       `;
-      return item.id;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 
@@ -180,8 +182,11 @@ export class BoardService {
       actor,
       "item.denied",
       async (sql) => {
-        await sql`UPDATE board_items SET status = 'denied' WHERE id = ${item.id}`;
-        return item.id;
+        const [updated] = await sql<{ id: string }[]>`
+          UPDATE board_items SET status = 'denied' WHERE id = ${item.id} AND status = 'proposed' RETURNING id
+        `;
+        if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+        return updated.id;
       },
       reason ? { reason } : {},
     );
@@ -191,11 +196,14 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["approved"]);
     return this.mutate(actor, "item.started", async (sql) => {
-      await sql`
+      const [updated] = await sql<{ id: string }[]>`
         UPDATE board_items SET status = 'in_progress', started_at = ${Date.now()},
-          owner = COALESCE(owner, ${actor.id}) WHERE id = ${item.id}
+          owner = COALESCE(owner, ${actor.id})
+        WHERE id = ${item.id} AND status = 'approved'
+        RETURNING id
       `;
-      return item.id;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 
@@ -203,8 +211,13 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["in_progress", "blocked"]);
     return this.mutate(actor, "item.completed", async (sql) => {
-      await sql`UPDATE board_items SET status = 'done', completed_at = ${Date.now()} WHERE id = ${item.id}`;
-      return item.id;
+      const [updated] = await sql<{ id: string }[]>`
+        UPDATE board_items SET status = 'done', completed_at = ${Date.now()}
+        WHERE id = ${item.id} AND (status = 'in_progress' OR status = 'blocked')
+        RETURNING id
+      `;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 
@@ -215,8 +228,13 @@ export class BoardService {
       actor,
       "item.blocked",
       async (sql) => {
-        await sql`UPDATE board_items SET status = 'blocked' WHERE id = ${item.id}`;
-        return item.id;
+        const [updated] = await sql<{ id: string }[]>`
+          UPDATE board_items SET status = 'blocked'
+          WHERE id = ${item.id} AND status = 'in_progress'
+          RETURNING id
+        `;
+        if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+        return updated.id;
       },
       { reason },
     );
@@ -226,8 +244,13 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["blocked"]);
     return this.mutate(actor, "item.unblocked", async (sql) => {
-      await sql`UPDATE board_items SET status = 'in_progress' WHERE id = ${item.id}`;
-      return item.id;
+      const [updated] = await sql<{ id: string }[]>`
+        UPDATE board_items SET status = 'in_progress'
+        WHERE id = ${item.id} AND status = 'blocked'
+        RETURNING id
+      `;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 
@@ -291,8 +314,13 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     if (item.deletedAt) throw new ApiError(409, "ALREADY_DELETED", `${item.ref} is already deleted`);
     return this.mutate(actor, "item.deleted", async (sql) => {
-      await sql`UPDATE board_items SET deleted_at = ${Date.now()} WHERE id = ${item.id}`;
-      return item.id;
+      const [updated] = await sql<{ id: string }[]>`
+        UPDATE board_items SET deleted_at = ${Date.now()}
+        WHERE id = ${item.id} AND deleted_at IS NULL
+        RETURNING id
+      `;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 
@@ -301,8 +329,13 @@ export class BoardService {
     const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["done"]);
     return this.mutate(actor, "item.reopened", async (sql) => {
-      await sql`UPDATE board_items SET status = 'approved', completed_at = NULL WHERE id = ${item.id}`;
-      return item.id;
+      const [updated] = await sql<{ id: string }[]>`
+        UPDATE board_items SET status = 'approved', completed_at = NULL
+        WHERE id = ${item.id} AND status = 'done'
+        RETURNING id
+      `;
+      if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "item was already changed");
+      return updated.id;
     });
   }
 

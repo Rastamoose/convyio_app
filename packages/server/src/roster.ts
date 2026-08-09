@@ -1,4 +1,5 @@
 import type { Participant, ParticipantKind } from "@workspace/shared";
+import type { AgentInvites } from "./auth/AgentInvites";
 import type { WorkspaceDb } from "./db";
 
 /**
@@ -9,17 +10,31 @@ import type { WorkspaceDb } from "./db";
 export class Roster {
   private known = new Map<string, Participant>();
 
-  private constructor(private db: WorkspaceDb) {}
+  private constructor(
+    private db: WorkspaceDb,
+    private agentInvites: AgentInvites,
+  ) {}
 
   /**
    * Async factory: agents are permanent members of the server, not
    * ephemeral connections, so every agent actor must be loaded into the
    * roster before the server accepts connections (grey/offline until its
    * process connects). Humans stay presence-only by design.
+   *
+   * User-created agents whose invites have been revoked are not loaded, so
+   * they disappear from the roster after revocation (their actor rows stay
+   * in the database for attribution).
    */
-  static async create(db: WorkspaceDb): Promise<Roster> {
-    const roster = new Roster(db);
+  /** Drop every in-memory participant. Tests that share one env call this
+   *  after truncating the DB so the next test starts with an empty room. */
+  clear(): void {
+    this.known.clear();
+  }
+
+  static async create(db: WorkspaceDb, agentInvites: AgentInvites): Promise<Roster> {
+    const roster = new Roster(db, agentInvites);
     for (const actor of await db.listActors("agent")) {
+      if (await agentInvites.isRevoked(actor.id)) continue;
       roster.known.set(rosterKey("agent", actor.displayName), {
         id: actor.id,
         name: actor.displayName,
@@ -82,6 +97,13 @@ export class Roster {
   removeHuman(id: string): void {
     for (const [key, p] of this.known) {
       if (p.id === id && p.kind === "human") this.known.delete(key);
+    }
+  }
+
+  /** Remove a revoked user-created agent from the live roster. */
+  removeAgent(id: string): void {
+    for (const [key, p] of this.known) {
+      if (p.id === id && p.kind === "agent") this.known.delete(key);
     }
   }
 }

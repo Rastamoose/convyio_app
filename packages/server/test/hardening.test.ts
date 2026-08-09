@@ -209,7 +209,6 @@ describe("message store", () => {
       const listed = await store.list();
       assert.deepEqual(listed, [first, second]);
     } finally {
-      await db.close();
       await drop();
     }
   });
@@ -226,7 +225,6 @@ describe("message store", () => {
       await store.clear();
       assert.equal((await store.list()).length, 0);
     } finally {
-      await db.close();
       await drop();
     }
   });

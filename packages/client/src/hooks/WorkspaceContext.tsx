@@ -1,6 +1,8 @@
-import { createContext, useContext, useRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   Actor,
+  AgentInvite,
+  AgentProvider,
   Attachment,
   BoardItem,
   BoardItemEvent,
@@ -10,6 +12,7 @@ import type {
 } from "@workspace/shared";
 import { isBoardEnvelope } from "@workspace/shared";
 import type { JoinCredentials } from "../ws";
+import { wsUrl } from "../lib/serverUrl";
 import { useConnection } from "./useConnection";
 import { useChatMessages, type LocalMessage } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
@@ -93,6 +96,15 @@ export interface WorkspaceState {
   editItem: (itemId: string, fields: BoardItemEdit) => void;
   fetchActors: () => Promise<Actor[]>;
   fetchItemEvents: (itemId: string) => Promise<BoardItemEvent[]>;
+  /** User-created agent invites currently on the server. */
+  agentInvites: AgentInvite[];
+  /** Create a user-added agent and return the server token + a shell command. */
+  createAgent: (
+    name: string,
+    provider: AgentProvider,
+  ) => Promise<(AgentInvite & { token: string; command: string }) | null>;
+  /** Revoke a user-added agent. */
+  revokeAgent: (id: string) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -196,6 +208,25 @@ export function WorkspaceProvider({
         break;
     }
   });
+
+  const [agentInvites, setAgentInvites] = useState<AgentInvite[]>([]);
+
+  useEffect(() => {
+    if (!connection.self) return;
+    const load = async () => {
+      const request = api.fetch("/api/agents");
+      if (!request) return;
+      try {
+        const res = await request;
+        if (!res.ok) return;
+        const data = (await res.json()) as { agents: AgentInvite[] };
+        setAgentInvites(data.agents);
+      } catch (err) {
+        console.warn("[workspace] failed to load agent invites:", err);
+      }
+    };
+    void load();
+  }, [connection.self]);
 
   const typing = useTyping(connection.self?.id, (channel) =>
     connection.send({ type: "typing", channel }),
@@ -302,6 +333,50 @@ export function WorkspaceProvider({
     }
   };
 
+  const createAgent = async (
+    name: string,
+    provider: AgentProvider,
+  ): Promise<(AgentInvite & { token: string; command: string }) | null> => {
+    const request = api.fetch("/api/agents", {
+      method: "POST",
+      body: JSON.stringify({ name, provider }),
+    });
+    if (!request) return null;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not add the agent: ${await api.errorMessage(res)}`);
+        return null;
+      }
+      const data = (await res.json()) as AgentInvite & { token: string };
+      setAgentInvites((prev) => [data, ...prev]);
+      const command = `AGENT_PROVIDER=${data.provider} AGENT_NAME=${data.name} AGENT_TOKEN=${data.token} WS_URL=${wsUrl()} npm run dev -w @workspace/agent`;
+      return { ...data, command };
+    } catch (err) {
+      pushToast(`Could not add the agent: ${String(err)}`);
+      return null;
+    }
+  };
+
+  const revokeAgent = async (id: string): Promise<boolean> => {
+    const request = api.fetch(`/api/agents/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not remove the agent: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      setAgentInvites((prev) => prev.filter((a) => a.id !== id));
+      return true;
+    } catch (err) {
+      pushToast(`Could not remove the agent: ${String(err)}`);
+      return false;
+    }
+  };
+
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
@@ -395,6 +470,9 @@ export function WorkspaceProvider({
     editItem: board.editItem,
     fetchActors: board.fetchActors,
     fetchItemEvents: board.fetchItemEvents,
+    agentInvites,
+    createAgent,
+    revokeAgent,
   };
 
   return (

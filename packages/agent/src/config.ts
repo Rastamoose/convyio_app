@@ -16,8 +16,12 @@ export const WS_URL = process.env.WS_URL ?? "ws://localhost:3001";
 export const AGENT_TOKEN = process.env.AGENT_TOKEN;
 
 /** Which LLM backend the agent runs against. */
-export const AGENT_PROVIDER: "gemini" | "claude" =
-  process.env.AGENT_PROVIDER === "claude" ? "claude" : "gemini";
+export const AGENT_PROVIDER: "gemini" | "claude" | "codex" =
+  process.env.AGENT_PROVIDER === "claude"
+    ? "claude"
+    : process.env.AGENT_PROVIDER === "codex"
+      ? "codex"
+      : "gemini";
 
 /** No default on purpose: a missing key must fail loudly at startup (index.ts). Gemini provider only. */
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;

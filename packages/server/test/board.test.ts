@@ -11,6 +11,7 @@ import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
+import { AgentInvites } from "../src/auth/AgentInvites";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
 import { Hub } from "../src/hub";
 import { createEnv, createWsEnv, PROPOSAL, supabaseAdmin } from "./helpers";
@@ -124,32 +125,36 @@ describe("board invariants", async () => {
   });
 
   test("T9: each transition writes exactly one event row; rollback writes none", async () => {
-    const countEvents = (itemId: string) =>
-      (env.db.db
-        .prepare(`SELECT count(*) AS c FROM board_events WHERE item_id = ?`)
-        .get(itemId) as { c: number }).c;
+    const countEvents = async (itemId: string) => {
+      const rows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events WHERE item_id = ${itemId}`;
+      return rows[0].c;
+    };
 
     const item = await env.service.create(agent.actor, PROPOSAL);
-    assert.equal(countEvents(item.id), 1);
+    assert.equal(await countEvents(item.id), 1);
     await env.service.approve(human.actor, item.id);
-    assert.equal(countEvents(item.id), 2);
+    assert.equal(await countEvents(item.id), 2);
     await env.service.start(agent.actor, item.id);
-    assert.equal(countEvents(item.id), 3);
+    assert.equal(await countEvents(item.id), 3);
     await env.service.block(agent.actor, item.id, "awaiting input");
-    assert.equal(countEvents(item.id), 4);
+    assert.equal(await countEvents(item.id), 4);
     await env.service.unblock(agent.actor, item.id);
-    assert.equal(countEvents(item.id), 5);
+    assert.equal(await countEvents(item.id), 5);
     await env.service.complete(agent.actor, item.id);
-    assert.equal(countEvents(item.id), 6);
+    assert.equal(await countEvents(item.id), 6);
 
     // Rolled-back transaction: creating with an actor that violates the
     // actors FK aborts mid-transaction; neither item nor event may remain.
-    const itemsBefore = (env.db.db.prepare(`SELECT count(*) AS c FROM board_items`).get() as { c: number }).c;
-    const eventsBefore = (env.db.db.prepare(`SELECT count(*) AS c FROM board_events`).get() as { c: number }).c;
+    const itemsBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
+    const eventsBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
+    const itemsBefore = itemsBeforeRows[0].c;
+    const eventsBefore = eventsBeforeRows[0].c;
     const ghost: Actor = { id: randomUUID(), kind: "human", displayName: "ghost", serverId: env.db.serverId };
-    await assert.rejects(() => env.service.create(ghost, { title: "never lands" }));
-    assert.equal((env.db.db.prepare(`SELECT count(*) AS c FROM board_items`).get() as { c: number }).c, itemsBefore);
-    assert.equal((env.db.db.prepare(`SELECT count(*) AS c FROM board_events`).get() as { c: number }).c, eventsBefore);
+    await assert.rejects(env.service.create(ghost, { title: "never lands" }));
+    const itemsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
+    const eventsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
+    assert.equal(itemsAfterRows[0].c, itemsBefore);
+    assert.equal(eventsAfterRows[0].c, eventsBefore);
   });
 
   test("T11: concurrent creation produces unique sequential refs", async () => {
@@ -227,9 +232,10 @@ describe("T10: full-stack approval fan-out", async () => {
     await channels.seed([{ name: "general", isDemo: false }]);
     const attachments = new Attachments(db, supabaseAdmin());
     const messages = new MessageStore(db);
-    const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
+    const agentInvites = new AgentInvites(db);
+    const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, null);
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, await Roster.create(db), messages, channels, attachments, sessions, toolman, {
+    const hub = new Hub(server, await Roster.create(db, agentInvites), messages, channels, attachments, sessions, toolman, {
       serverId: db.serverId,
       demoChannels: [],
     });
@@ -323,7 +329,6 @@ describe("T10: full-stack approval fan-out", async () => {
       humanB.ws.close();
     } finally {
       server.close();
-      await db.close();
       await drop();
     }
   });
@@ -346,6 +351,6 @@ describe("welcome.apiUrl derivation", async () => {
       ws.on("open", () => ws.send(JSON.stringify({ type: "join", name: "dana", kind: "human" })));
     });
     assert.equal(welcome.apiUrl, "https://chat.example.com");
-    env.close();
+    await env.close();
   });
 });

@@ -13,6 +13,7 @@ import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
+import { AgentInvites } from "../src/auth/AgentInvites";
 import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
@@ -77,7 +78,8 @@ export async function createEnv(): Promise<Env> {
   service.onEvent = (e) => envelopes.push(e);
   const attachments = new Attachments(db, supabaseAdmin());
   const messages = new MessageStore(db);
-  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
+  const agentInvites = new AgentInvites(db);
+  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, null);
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
@@ -107,7 +109,8 @@ export async function createEnv(): Promise<Env> {
       return { status: res.status, body: await res.json() };
     },
     async close() {
-      server.close();
+      await new Promise<void>((r) => server.close(r));
+      server.closeAllConnections?.();
       await drop();
     },
   };
@@ -138,16 +141,24 @@ export interface JoinOutcome {
 
 export interface WsEnv {
   db: WorkspaceDb;
+  service: BoardService;
+  sessions: Sessions;
   messages: MessageStore;
   channels: Channels;
   attachments: Attachments;
   hub: Hub;
+  agentInvites: AgentInvites;
   /** Set when the env was created with auth enabled. */
   auth: Auth | null;
   baseUrl: string;
   connect(name: string, kind: "human" | "agent"): Promise<WsClient>;
   /** Send an arbitrary join frame; resolves on welcome or on socket close. */
   join(frame: Record<string, unknown>): Promise<JoinOutcome>;
+  /** Terminate all connected sockets without closing the server. */
+  closeClients(): void;
+  /** Truncate workspace data and clear in-memory state so the next test
+   *  can reuse this env without leaking from the previous one. */
+  reset(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -170,13 +181,14 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   await channels.seed([{ name: "general", isDemo: false }]);
   const messages = new MessageStore(db);
   const attachments = new Attachments(db, supabaseAdmin());
-  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*");
+  const agentInvites = new AgentInvites(db);
+  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, (actorId) => hub.closeAgentConnection(actorId));
   const server = http.createServer((req, res) => void handler(req, res));
-  const roster = await Roster.create(db);
+  const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
     serverId: db.serverId,
     demoChannels: [],
-    authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null) : undefined,
+    authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites) : undefined,
   });
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
@@ -189,10 +201,13 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
 
   return {
     db,
+    service,
+    sessions,
     messages,
     channels,
     attachments,
     hub,
+    agentInvites,
     auth,
     baseUrl: `http://localhost:${port}`,
     join(frame) {
@@ -248,9 +263,31 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, kind })));
       });
     },
+    closeClients() {
+      for (const ws of clients) ws.terminate();
+      clients.length = 0;
+    },
+    async reset() {
+      this.closeClients();
+      // Truncate all mutable tables, keep the server_id meta row.
+      await db.sql`
+        TRUNCATE TABLE actors, board_items, board_events, ref_counters,
+          channels, messages, message_reactions, attachments, agent_invites
+        RESTART IDENTITY CASCADE
+      `;
+      await db.sql`
+        INSERT INTO ref_counters (server_id, n) VALUES (${db.serverId}, 0)
+        ON CONFLICT (server_id) DO UPDATE SET n = 0
+      `;
+      await channels.seed([{ name: "general", isDemo: false }]);
+      sessions.clear();
+      roster.clear();
+    },
     async close() {
       for (const ws of clients) ws.terminate();
-      server.close();
+      await hub.close();
+      await new Promise<void>((r) => server.close(r));
+      server.closeAllConnections?.();
       fs.rmSync(workspaceDir, { recursive: true, force: true });
       await drop();
     },

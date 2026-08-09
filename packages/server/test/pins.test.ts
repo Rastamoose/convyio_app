@@ -35,7 +35,7 @@ describe("message pinning", async () => {
     assert.equal(unpinned.message.pinnedBy, undefined);
     assert.equal((await env.messages.list())[0].pinnedAt, undefined);
 
-    env.close();
+    await env.close();
   });
 
   test("agents cannot pin: mutations outside the toolman are refused", async () => {
@@ -53,7 +53,7 @@ describe("message pinning", async () => {
     assert.equal(refusal.error, "human-only event");
     assert.equal((await env.messages.list())[0].pinnedAt, undefined);
 
-    env.close();
+    await env.close();
   });
 
   test("pinning an unknown message → error frame", async () => {
@@ -65,6 +65,6 @@ describe("message pinning", async () => {
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
 
-    env.close();
+    await env.close();
   });
 });

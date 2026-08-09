@@ -175,7 +175,6 @@ describe("pressure: toolman sandbox", async () => {
   const agent = await db.upsertActor("agent", "noodle");
   const item = await service.create(human, { title: "sandbox work" });
   after(async () => {
-    await db.close();
     await drop();
     await fs.rm(root, { recursive: true, force: true });
   });

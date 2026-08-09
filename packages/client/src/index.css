@@ -1,8 +1,14 @@
 @import "tailwindcss";
 
 @theme {
-  /* Neutral zinc/ink light theme — techy, not cream. Accent is the one warm
-     note (amber); nudge --color-blurple/--color-working here to retune. */
+  /* Neutral zinc/ink light theme — settled palette so future tweaks stay
+     consistent. Accent is the one warm note (amber).
+
+     Surfaces:  sidebar/userpanel #f7f7f6 | chat #ffffff | chat-hover #f0f0ef
+               input/popup #ffffff | composer/highlight #f2f2f0
+     Ink:       body #18181a | muted #71716e | faint #a3a29d
+     Accents:   blurple #d97706 | mention-bg #f2f2f0 | mention-bg-hover #e8e8e5
+     Status:    online #4d7c0f | working #d9a441 | away #d9730d | dead #c0392b */
   --color-sidebar: #f7f7f6;
   --color-sidebar-dark: #131313;
   --color-userpanel: #f7f7f6;
@@ -22,6 +28,7 @@
   --color-mention-pill: #d97706;
   --color-mention-text: #18181a;
   --color-popup: #ffffff;
+  --color-composer: #f2f2f0;
   --color-dead: #c0392b;
   --color-working: #d9a441;
   --color-away: #d9730d;
