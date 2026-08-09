@@ -98,7 +98,7 @@ the wire protocol (websocket) and the HTTP board API.
 
 - The board is a permission boundary. No agent write path may bypass
   `Toolman.execute`; tools not known to be read-only are treated as mutating
-  (fail closed). Exception, tracked above: `ClaudeBrain`'s native Claude Code
+  (fail closed). Exception, tracked below: `ClaudeBrain`'s native Claude Code
   tools (`AGENT_PROVIDER=claude`) currently bypass this — accepted MVP debt,
   not the general rule.
 - Actor identity is never taken from a request body: the ws `join` upserts
