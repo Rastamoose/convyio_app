@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, describe, test } from "node:test";
-import { WorkspaceDb } from "../src/db";
 import { Channels } from "../src/chat/Channels";
 import { createEnv, createWsEnv } from "./helpers";
+import { createTestDb } from "./pgSchema";
 
 describe("channel creation over the API", async () => {
   const env = await createEnv();
@@ -14,7 +14,7 @@ describe("channel creation over the API", async () => {
     const res = await env.api("POST", "/api/channels", human.token, { name: "design" });
     assert.equal(res.status, 201);
     assert.deepEqual(res.body.channel, { name: "design" });
-    assert.deepEqual(env.channels.list(), ["general", "design"]);
+    assert.deepEqual(await env.channels.list(), ["general", "design"]);
   });
 
   test("duplicate name → 409, case-insensitively", async () => {
@@ -27,7 +27,7 @@ describe("channel creation over the API", async () => {
     const res = await env.api("POST", "/api/channels", agent.token, { name: "agents-only" });
     assert.equal(res.status, 403);
     assert.equal(res.body.error, "FORBIDDEN");
-    assert.equal(env.channels.exists("agents-only"), false);
+    assert.equal(await env.channels.exists("agents-only"), false);
   });
 
   test("empty and whitespace-only names → 400", async () => {
@@ -42,7 +42,7 @@ describe("channel creation over the API", async () => {
     const res = await env.api("POST", "/api/channels", human.token, { name: "  Bug Reports " });
     assert.equal(res.status, 201);
     assert.equal(res.body.channel.name, "bug-reports");
-    assert.ok(env.channels.exists("bug-reports"));
+    assert.ok(await env.channels.exists("bug-reports"));
   });
 
   test("illegal characters → 400", async () => {
@@ -57,17 +57,21 @@ describe("channel creation over the API", async () => {
     assert.equal(res.body.error, "BAD_CHANNEL_NAME");
   });
 
-  test("the 101st channel → 409 CHANNEL_LIMIT", () => {
-    const db = new WorkspaceDb(":memory:");
-    const channels = new Channels(db);
-    channels.seed([{ name: "general", isDemo: false }]);
-    const creator = db.upsertActor("human", "dana");
-    for (let i = 1; i < 100; i++) channels.create(creator, `room-${i}`);
-    assert.throws(
-      () => channels.create(creator, "one-too-many"),
-      (err: any) => err.status === 409 && err.code === "CHANNEL_LIMIT",
-    );
-    db.close();
+  test("the 101st channel → 409 CHANNEL_LIMIT", async () => {
+    const { db, drop } = await createTestDb();
+    try {
+      const channels = new Channels(db);
+      await channels.seed([{ name: "general", isDemo: false }]);
+      const creator = await db.upsertActor("human", "dana");
+      for (let i = 1; i < 100; i++) await channels.create(creator, `room-${i}`);
+      await assert.rejects(
+        channels.create(creator, "one-too-many"),
+        (err: any) => err.status === 409 && err.code === "CHANNEL_LIMIT",
+      );
+    } finally {
+      await db.close();
+      await drop();
+    }
   });
 });
 
@@ -84,8 +88,8 @@ describe("channel management over the API", async () => {
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.channel.name, "new-name");
-    assert.deepEqual(env.channels.list().includes("old-name"), false);
-    assert.ok(env.channels.exists("new-name"));
+    assert.deepEqual((await env.channels.list()).includes("old-name"), false);
+    assert.ok(await env.channels.exists("new-name"));
   });
 
   test("rename to an existing name → 409", async () => {
@@ -110,34 +114,34 @@ describe("channel management over the API", async () => {
 
     const del = await env.api("DELETE", "/api/channels/general", human.token);
     assert.equal(del.status, 400);
-    assert.ok(env.channels.exists("general"));
+    assert.ok(await env.channels.exists("general"));
   });
 
   test("general can still be pinned", async () => {
     const res = await env.api("PATCH", "/api/channels/general", human.token, { pinned: true });
     assert.equal(res.status, 200);
-    assert.deepEqual(env.channels.pinned(), ["general"]);
+    assert.deepEqual(await env.channels.pinned(), ["general"]);
   });
 
   test("archive drops a channel from list() but keeps it in listArchived()", async () => {
     await env.api("POST", "/api/channels", human.token, { name: "stale" });
     const res = await env.api("PATCH", "/api/channels/stale", human.token, { archived: true });
     assert.equal(res.status, 200);
-    assert.equal(env.channels.list().includes("stale"), false);
-    assert.ok(env.channels.listArchived().includes("stale"));
+    assert.equal((await env.channels.list()).includes("stale"), false);
+    assert.ok((await env.channels.listArchived()).includes("stale"));
 
     const unarchive = await env.api("PATCH", "/api/channels/stale", human.token, {
       archived: false,
     });
     assert.equal(unarchive.status, 200);
-    assert.ok(env.channels.list().includes("stale"));
+    assert.ok(await env.channels.list().includes("stale"));
   });
 
   test("pinned channels sort first in list()", async () => {
     await env.api("POST", "/api/channels", human.token, { name: "unpinned-room" });
     await env.api("POST", "/api/channels", human.token, { name: "z-room" });
     await env.api("PATCH", "/api/channels/z-room", human.token, { pinned: true });
-    const list = env.channels.list();
+    const list = await env.channels.list();
     assert.ok(list.indexOf("z-room") < list.indexOf("unpinned-room"));
   });
 
@@ -154,8 +158,8 @@ describe("channel management over the API", async () => {
     });
     const res = await env.api("DELETE", "/api/channels/doomed", human.token);
     assert.equal(res.status, 200);
-    assert.equal(env.channels.exists("doomed"), false);
-    assert.equal(env.messages.list().filter((m) => m.channel === "doomed").length, 0);
+    assert.equal(await env.channels.exists("doomed"), false);
+    assert.equal((await env.messages.list()).filter((m) => m.channel === "doomed").length, 0);
   });
 
   test("agents cannot rename, archive, pin, or delete", async () => {
@@ -166,7 +170,7 @@ describe("channel management over the API", async () => {
     assert.equal(rename.status, 403);
     const del = await env.api("DELETE", "/api/channels/agent-blocked", agent.token);
     assert.equal(del.status, 403);
-    assert.ok(env.channels.exists("agent-blocked"));
+    assert.ok(await env.channels.exists("agent-blocked"));
   });
 
   test("unknown channel → 404 on rename/archive/pin/delete", async () => {
@@ -186,7 +190,7 @@ describe("channels on the websocket", async () => {
     human.ws.send(JSON.stringify({ type: "message", content: "hello?", channel: "ghost" }));
     const refusal = await human.next((e) => e.type === "error");
     assert.equal(refusal.error, "unknown channel: ghost");
-    assert.equal(env.messages.list().length, 0);
+    assert.equal((await env.messages.list()).length, 0);
 
     // Creation over HTTP fans out a channel_created frame to ws clients.
     const res = await fetch(`${env.baseUrl}/api/channels`, {
@@ -201,7 +205,7 @@ describe("channels on the websocket", async () => {
     // Messages to the new channel now land.
     human.ws.send(JSON.stringify({ type: "message", content: "hi", channel: "design" }));
     await human.next((e) => e.type === "message" && e.message.channel === "design");
-    assert.equal(env.messages.list().length, 1);
+    assert.equal((await env.messages.list()).length, 1);
 
     env.close();
   });
