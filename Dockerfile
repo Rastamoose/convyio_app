@@ -26,6 +26,5 @@ COPY --from=build /app/packages/server ./packages/server
 COPY --from=build /app/packages/agent ./packages/agent
 COPY --from=build /app/packages/client/dist ./packages/client/dist
 COPY scripts/start.sh scripts/start.sh
-VOLUME /data
 EXPOSE 3001
 CMD ["./scripts/start.sh"]
