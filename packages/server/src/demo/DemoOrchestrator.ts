@@ -79,20 +79,20 @@ export class DemoOrchestrator {
     console.log(`[demo] starting scripted demo in #${channel}`);
 
     try {
-      this.hub.clearChannel(channel);
-      this.cleanupDemoItems(script.personas[0]);
+      await this.hub.clearChannel(channel);
+      await this.cleanupDemoItems(script.personas[0]);
       if (script.seedDir) await this.seedWorkspace(script.seedDir);
 
       const agentName = this.roster.onlineAgentName();
       if (!agentName) {
-        this.post(script.personas[0], "(demo aborted: no agent is online — start the agent process first)", channel);
+        await this.post(script.personas[0], "(demo aborted: no agent is online — start the agent process first)", channel);
         return;
       }
 
       for (const step of script.steps) {
         await delay(STEP_DELAY_MS);
         if (gen !== this.generation) return;
-        this.post(step.author, step.say.replaceAll("{agent}", agentName), channel);
+        await this.post(step.author, step.say.replaceAll("{agent}", agentName), channel);
         if (step.await === "agent_reply") {
           await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
           if (gen !== this.generation) return;
@@ -114,10 +114,10 @@ export class DemoOrchestrator {
   }
 
   /** Post a message as a scripted persona through the normal pipeline. */
-  private post(persona: string, content: string, channel: string): void {
-    const participant = this.roster.join("human", persona);
+  private async post(persona: string, content: string, channel: string): Promise<void> {
+    const participant = await this.roster.join("human", persona);
     this.hub.broadcastPresence();
-    this.hub.postMessage(participant, content, channel);
+    await this.hub.postMessage(participant, content, channel);
   }
 
   private removePersonas(personas: string[]): void {
@@ -142,12 +142,12 @@ export class DemoOrchestrator {
   private async approveProposal(author: string, channel: string): Promise<void> {
     const ref =
       this.lastProposalRef ?? (await this.waitForProposal(AGENT_TIMEOUT_MS));
-    const actor = this.db.upsertActor("human", author);
-    const item = this.service.find(this.db.serverId, ref);
+    const actor = await this.db.upsertActor("human", author);
+    const item = await this.service.find(this.db.serverId, ref);
     if (!item || item.status !== "proposed") {
       throw new Error(`demo proposal ${ref} is not approvable`);
     }
-    this.service.approve(actor, ref);
+    await this.service.approve(actor, ref);
     console.log(`[demo] ${author} approved ${ref}`);
     await this.waitForAgentReply(channel, WORK_TIMEOUT_MS);
   }
@@ -156,13 +156,13 @@ export class DemoOrchestrator {
    * Best-effort board hygiene: soft-delete leftovers from previous demo runs
    * so restarting the demo does not pile up stale proposals.
    */
-  private cleanupDemoItems(asPersona: string): void {
+  private async cleanupDemoItems(asPersona: string): Promise<void> {
     if (this.demoRefs.size === 0) return;
-    const actor = this.db.upsertActor("human", asPersona);
+    const actor = await this.db.upsertActor("human", asPersona);
     for (const ref of this.demoRefs) {
       try {
-        const item = this.service.find(this.db.serverId, ref);
-        if (item && item.deletedAt == null) this.service.softDelete(actor, ref);
+        const item = await this.service.find(this.db.serverId, ref);
+        if (item && item.deletedAt == null) await this.service.softDelete(actor, ref);
       } catch (err) {
         console.warn(`[demo] cleanup of ${ref} failed:`, err instanceof Error ? err.message : err);
       }
