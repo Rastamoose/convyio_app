@@ -58,7 +58,7 @@ describe("board invariants", async () => {
     assert.equal(item.status, "approved");
     assert.equal(item.approvedBy, human.actor.id);
     assert.ok(item.approvedAt);
-    const authz = authorizeMutation(
+    const authz = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "notes.md" },
@@ -68,7 +68,7 @@ describe("board invariants", async () => {
   });
 
   test("T4: mutating action with no board ref → NO_BOARD_REF", () => {
-    const authz = authorizeMutation(agent.actor, null, { name: "write_file" }, env.service);
+    const authz = await authorizeMutation(agent.actor, null, { name: "write_file" }, env.service);
     assert.equal(authz.allow, false);
     assert.equal(!authz.allow && authz.code, "NO_BOARD_REF");
   });
@@ -86,7 +86,7 @@ describe("board invariants", async () => {
       },
     ]) {
       const item = await setup();
-      const authz = authorizeMutation(
+      const authz = await authorizeMutation(
         agent.actor,
         item.ref,
         { name: "write_file", path: "out.md" },
@@ -104,7 +104,7 @@ describe("board invariants", async () => {
     await env.service.softDelete(human.actor, item.id);
     assert.equal(env.envelopes.length, 1);
     assert.equal(env.envelopes[0].type, "item.deleted");
-    const authz = authorizeMutation(
+    const authz = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "out.md" },
@@ -115,13 +115,13 @@ describe("board invariants", async () => {
   });
 
   test("T7: read-only tool with no board ref → allowed", () => {
-    const authz = authorizeMutation(agent.actor, null, { name: "read_file" }, env.service);
+    const authz = await authorizeMutation(agent.actor, null, { name: "read_file" }, env.service);
     assert.equal(authz.allow, true);
   });
 
   test("T8: unregistered tool is treated as mutating (fail closed)", () => {
     assert.equal(isMutating("brand_new_tool"), true);
-    const authz = authorizeMutation(agent.actor, null, { name: "brand_new_tool" }, env.service);
+    const authz = await authorizeMutation(agent.actor, null, { name: "brand_new_tool" }, env.service);
     assert.equal(authz.allow, false);
     assert.equal(!authz.allow && authz.code, "NO_BOARD_REF");
   });

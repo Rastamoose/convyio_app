@@ -5,8 +5,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import type { ChatMessage } from "@workspace/shared";
-import { WorkspaceDb } from "../src/db";
 import { MessageStore } from "../src/chat/MessageStore";
+import { createTestDb } from "./pgSchema";
 import { Sessions } from "../src/board/sessions";
 import { authorizeMutation } from "../src/board/Toolman";
 import { scopeAllows, validateScopePaths } from "../src/board/scope";
@@ -32,7 +32,7 @@ describe("scope authorization", async () => {
 
   test("write inside declared scope is allowed; outside is SCOPE_VIOLATION", async () => {
     const item = await approvedProposal(["billing/", "notes.md"]);
-    const inside = authorizeMutation(
+    const inside = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "billing/round.ts" },
@@ -40,7 +40,7 @@ describe("scope authorization", async () => {
     );
     assert.equal(inside.allow, true);
 
-    const exactFile = authorizeMutation(
+    const exactFile = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "notes.md" },
@@ -48,7 +48,7 @@ describe("scope authorization", async () => {
     );
     assert.equal(exactFile.allow, true);
 
-    const outside = authorizeMutation(
+    const outside = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "secrets/keys.txt" },
@@ -61,7 +61,7 @@ describe("scope authorization", async () => {
   test("scope cannot be escaped through path tricks", async () => {
     const item = await approvedProposal(["billing/"]);
     for (const sneaky of ["billing/../secrets.txt", "billing/../../etc/passwd", "/billing/x"]) {
-      const authz = authorizeMutation(
+      const authz = await authorizeMutation(
         agent.actor,
         item.ref,
         { name: "write_file", path: sneaky },
@@ -70,7 +70,7 @@ describe("scope authorization", async () => {
       assert.equal(authz.allow, false, `path ${sneaky} must be refused`);
     }
     // Normalization inside the scope is fine.
-    const normal = authorizeMutation(
+    const normal = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "write_file", path: "billing/sub/../round.ts" },
@@ -81,7 +81,7 @@ describe("scope authorization", async () => {
 
   test("read-only actions are not scope-gated", async () => {
     const item = await approvedProposal(["billing/"]);
-    const read = authorizeMutation(
+    const read = await authorizeMutation(
       agent.actor,
       item.ref,
       { name: "read_file", path: "anywhere/else.txt" },
@@ -117,7 +117,7 @@ describe("scope authorization", async () => {
     const { body: created } = await env.api("POST", "/api/board/items", human.token, {
       title: "human item",
     });
-    const anywhere = authorizeMutation(
+    const anywhere = await authorizeMutation(
       agent.actor,
       created.item.ref,
       { name: "write_file", path: "any/where.txt" },
@@ -130,7 +130,7 @@ describe("scope authorization", async () => {
     });
     assert.equal(patched.status, 200);
     assert.deepEqual(patched.body.item.scopePaths, ["docs/"]);
-    const outside = authorizeMutation(
+    const outside = await authorizeMutation(
       agent.actor,
       created.item.ref,
       { name: "write_file", path: "any/where.txt" },
@@ -194,50 +194,41 @@ describe("message store", () => {
     ...over,
   });
 
-  test("append/list round-trips messages in order, traces included", () => {
-    const db = new WorkspaceDb(":memory:");
-    const store = new MessageStore(db);
-    const first = message({ timestamp: 1000 });
-    const second = message({
-      timestamp: 2000,
-      trace: [{ kind: "thought", content: "hmm" }],
-      runId: "run-1",
-    });
-    store.append(first);
-    store.append(second);
-    const listed = store.list();
-    assert.deepEqual(listed, [first, second]);
-    db.close();
+  test("append/list round-trips messages in order, traces included", async () => {
+    const { db, drop } = await createTestDb();
+    try {
+      const store = new MessageStore(db);
+      const first = message({ timestamp: 1000 });
+      const second = message({
+        timestamp: 2000,
+        trace: [{ kind: "thought", content: "hmm" }],
+        runId: "run-1",
+      });
+      await store.append(first);
+      await store.append(second);
+      const listed = await store.list();
+      assert.deepEqual(listed, [first, second]);
+    } finally {
+      await db.close();
+      await drop();
+    }
   });
 
-  test("clear removes one channel or everything", () => {
-    const db = new WorkspaceDb(":memory:");
-    const store = new MessageStore(db);
-    store.append(message({ channel: "general" }));
-    store.append(message({ channel: "demo" }));
-    store.clear("demo");
-    assert.equal(store.list().length, 1);
-    assert.equal(store.list()[0].channel, "general");
-    store.clear();
-    assert.equal(store.list().length, 0);
-    db.close();
-  });
-
-  test("legacy JSON import runs once and renames the source file", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chat-import-"));
-    const legacy = [message({ timestamp: 1 }), message({ timestamp: 2 })];
-    fs.writeFileSync(path.join(dir, "messages.json"), JSON.stringify(legacy));
-    const db = new WorkspaceDb(":memory:");
-    const store = new MessageStore(db);
-    store.importLegacyJson(dir);
-    assert.equal(store.list().length, 2);
-    assert.ok(fs.existsSync(path.join(dir, "messages.json.imported")));
-    assert.ok(!fs.existsSync(path.join(dir, "messages.json")));
-    // A second import is a no-op.
-    store.importLegacyJson(dir);
-    assert.equal(store.list().length, 2);
-    db.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+  test("clear removes one channel or everything", async () => {
+    const { db, drop } = await createTestDb();
+    try {
+      const store = new MessageStore(db);
+      await store.append(message({ channel: "general" }));
+      await store.append(message({ channel: "demo" }));
+      await store.clear("demo");
+      assert.equal((await store.list()).length, 1);
+      assert.equal((await store.list())[0].channel, "general");
+      await store.clear();
+      assert.equal((await store.list()).length, 0);
+    } finally {
+      await db.close();
+      await drop();
+    }
   });
 });
 

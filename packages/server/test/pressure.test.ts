@@ -4,10 +4,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import type { Actor } from "@workspace/shared";
-import { WorkspaceDb } from "../src/db";
 import { BoardService } from "../src/board/BoardService";
 import { Toolman } from "../src/board/Toolman";
 import { createEnv, PROPOSAL } from "./helpers";
+import { createTestDb } from "./pgSchema";
 
 describe("pressure: HTTP edges", async () => {
   const env = await createEnv();
@@ -44,8 +44,8 @@ describe("pressure: HTTP edges", async () => {
   test("invalid status filter → 400; explicit denied filter returns denied", async () => {
     const bad = await env.api("GET", "/api/board/items?status=sprint", human.token);
     assert.equal(bad.status, 400);
-    const item = env.service.create(agent.actor, PROPOSAL);
-    env.service.deny(human.actor, item.id);
+    const item = await env.service.create(agent.actor, PROPOSAL);
+    await env.service.deny(human.actor, item.id);
     const denied = await env.api("GET", "/api/board/items?status=denied", human.token);
     assert.equal(denied.status, 200);
     assert.ok(denied.body.items.some((i: any) => i.id === item.id));
@@ -107,7 +107,7 @@ describe("pressure: HTTP edges", async () => {
       env.api("POST", `/api/board/items/${created.item.id}/deny`, human.token),
     ]);
     assert.deepEqual([a.status, b.status].sort(), [200, 409]);
-    const item = env.service.find(env.db.serverId, created.item.id)!;
+    const item = (await env.service.find(env.db.serverId, created.item.id))!;
     assert.ok(["approved", "denied"].includes(item.status));
   });
 
@@ -166,16 +166,17 @@ describe("pressure: HTTP edges", async () => {
 });
 
 describe("pressure: toolman sandbox", async () => {
-  const db = new WorkspaceDb(":memory:");
+  const { db, drop } = await createTestDb();
   const service = new BoardService(db);
   const root = path.join("/tmp", `toolman-pressure-${randomUUID()}`);
   const toolman = new Toolman(service, root);
   await toolman.init();
-  const human = db.upsertActor("human", "dana");
-  const agent = db.upsertActor("agent", "noodle");
-  const item = service.create(human, { title: "sandbox work" });
+  const human = await db.upsertActor("human", "dana");
+  const agent = await db.upsertActor("agent", "noodle");
+  const item = await service.create(human, { title: "sandbox work" });
   after(async () => {
-    db.close();
+    await db.close();
+    await drop();
     await fs.rm(root, { recursive: true, force: true });
   });
 

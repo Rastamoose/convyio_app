@@ -33,12 +33,12 @@ export function isMutating(toolName: string): boolean {
  * unit-tested without touching disk. Humans are not gated by the board;
  * agent mutations require a workable item whose scope covers the target path.
  */
-export function authorizeMutation(
+export async function authorizeMutation(
   actor: Actor,
   boardItemRef: string | null,
   action: { name: string; path?: string },
   board: BoardService,
-): AuthzResult {
+): Promise<AuthzResult> {
   const mutating = isMutating(action.name);
   if (actor.kind === "human" || !mutating) {
     return { allow: true, item: undefined as never };
@@ -50,7 +50,7 @@ export function authorizeMutation(
       message: "mutating actions require a board_item_ref for an approved board item",
     };
   }
-  const item = board.findAnywhere(boardItemRef);
+  const item = await board.findAnywhere(boardItemRef);
   if (!item) {
     return { allow: false, code: "ITEM_NOT_FOUND", message: `no board item ${boardItemRef}` };
   }
@@ -108,7 +108,7 @@ export class Toolman {
     action: ToolmanAction,
     boardItemRef: string | null,
   ): Promise<ToolmanResult> {
-    const authz = authorizeMutation(
+    const authz = await authorizeMutation(
       actor,
       boardItemRef,
       { name: action.kind, path: "path" in action ? action.path : undefined },
