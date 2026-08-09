@@ -49,7 +49,7 @@ export interface HubOptions {
    * only a convenience for tests that build a Hub directly and trust joins
    * to self-declare a name.
    */
-  authorizeJoin?: (join: JoinEvent) => JoinDecision;
+  authorizeJoin?: (join: JoinEvent) => Promise<JoinDecision>;
 }
 
 /**
@@ -114,7 +114,7 @@ export class Hub {
    * extras.id lets a caller pre-allocate the message id — needed to bind
    * attachments to the message before it is posted.
    */
-  postMessage(
+  async postMessage(
     author: Participant,
     content: string,
     channel: string,
@@ -127,7 +127,7 @@ export class Hub {
       /** Echoed top-level on the resulting broadcast; never part of the message. */
       nonce?: string;
     } = {},
-  ): void {
+  ): Promise<void> {
     const { id = randomUUID(), nonce, ...rest } = extras;
     const message: ChatMessage = {
       id,
@@ -139,7 +139,7 @@ export class Hub {
       channel,
       ...rest,
     };
-    this.messages.append(message);
+    await this.messages.append(message);
     this.broadcast(
       nonce === undefined ? { type: "message", message } : { type: "message", message, nonce },
     );
@@ -147,8 +147,8 @@ export class Hub {
   }
 
   /** Clear one channel's messages (or all) and tell clients. */
-  clearChannel(channel?: string): void {
-    this.messages.clear(channel);
+  async clearChannel(channel?: string): Promise<void> {
+    await this.messages.clear(channel);
     this.broadcast(channel ? { type: "clear", channel } : { type: "clear" });
   }
 
@@ -198,7 +198,7 @@ export class Hub {
 
   private async dispatch(conn: Connection, event: ClientEvent): Promise<void> {
     if (event.type === "join") {
-      this.handleJoin(conn, event);
+      await this.handleJoin(conn, event);
       return;
     }
     const participant = conn.participant;
@@ -209,12 +209,12 @@ export class Hub {
     switch (event.type) {
       case "message": {
         const channel = event.channel ?? "general";
-        if (!this.channels.exists(channel)) {
+        if (!(await this.channels.exists(channel))) {
           this.send(conn, { type: "error", error: `unknown channel: ${channel}` });
           break;
         }
         // Replies point at real messages only; clients resolve them from history.
-        if (event.replyToId && !this.messages.get(event.replyToId)) {
+        if (event.replyToId && !(await this.messages.get(event.replyToId))) {
           this.send(conn, { type: "error", error: `unknown message: ${event.replyToId}` });
           break;
         }
@@ -224,14 +224,14 @@ export class Hub {
         let attachments: Attachment[] | undefined;
         if (event.attachmentIds?.length) {
           try {
-            attachments = this.attachments.bind(messageId, event.attachmentIds, participant.id);
+            attachments = await this.attachments.bind(messageId, event.attachmentIds, participant.id);
           } catch (err) {
             if (!(err instanceof ApiError)) throw err;
             this.send(conn, { type: "error", error: err.message });
             break;
           }
         }
-        this.postMessage(participant, event.content, channel, {
+        await this.postMessage(participant, event.content, channel, {
           id: messageId,
           attachments,
           replyToId: event.replyToId,
@@ -243,19 +243,19 @@ export class Hub {
         this.onDemoStart?.(event.channel);
         break;
       case "clear":
-        this.clearChannel();
+        await this.clearChannel();
         break;
       case "pin":
-        this.handlePin(conn, event);
+        await this.handlePin(conn, event);
         break;
       case "message_edit":
-        this.handleMessageEdit(conn, event);
+        await this.handleMessageEdit(conn, event);
         break;
       case "message_delete":
-        this.handleMessageDelete(conn, event);
+        await this.handleMessageDelete(conn, event);
         break;
       case "message_react":
-        this.handleMessageReact(conn, event);
+        await this.handleMessageReact(conn, event);
         break;
       case "typing":
         // Ephemeral relay: nothing persists, and the sender knows they type.
@@ -268,26 +268,26 @@ export class Hub {
         });
         break;
       case "interrupt":
-        this.handleInterrupt(conn, event.target, event.content);
+        await this.handleInterrupt(conn, event.target, event.content);
         break;
       case "status_set":
         participant.status = event.status;
         this.broadcastPresence();
         break;
       case "status_update":
-        this.agentOnly(conn, () => this.handleStatusUpdate(participant, event));
+        await this.agentOnly(conn, () => this.handleStatusUpdate(participant, event));
         break;
       case "trace_start":
-        this.agentOnly(conn, () => this.handleTraceStart(participant, event.runId));
+        await this.agentOnly(conn, () => this.handleTraceStart(participant, event.runId));
         break;
       case "trace_chunk":
-        this.agentOnly(conn, () => this.handleTraceChunk(event.runId, event.chunk));
+        await this.agentOnly(conn, () => this.handleTraceChunk(event.runId, event.chunk));
         break;
       case "summary":
-        this.agentOnly(conn, () => this.handleSummary(participant, event));
+        await this.agentOnly(conn, () => this.handleSummary(participant, event));
         break;
       case "run_end":
-        this.agentOnly(conn, () => this.handleRunEnd(event));
+        await this.agentOnly(conn, () => this.handleRunEnd(event));
         break;
       case "action_request":
         await this.handleActionRequest(conn, event);
@@ -295,11 +295,11 @@ export class Hub {
     }
   }
 
-  private handleJoin(conn: Connection, join: JoinEvent): void {
+  private async handleJoin(conn: Connection, join: JoinEvent): Promise<void> {
     // In guest mode the schema guarantees a name (joins carry name or
     // authToken; a token-only join can stand only where a gate resolves it).
     const decision: JoinDecision = this.options.authorizeJoin
-      ? this.options.authorizeJoin(join)
+      ? await this.options.authorizeJoin(join)
       : join.name !== undefined
         ? { ok: true, name: join.name }
         : { ok: false };
@@ -309,7 +309,7 @@ export class Hub {
       return;
     }
     const { kind } = join;
-    const participant = this.roster.join(kind, decision.name);
+    const participant = await this.roster.join(kind, decision.name);
 
     // Agents are singletons: a new connection for the same agent identity
     // displaces any previous one so duplicates can never double-reply.
@@ -326,14 +326,20 @@ export class Hub {
     // Bounded per channel (not "last N overall"): clients filter history by
     // channel client-side, so a flat cap would leave quiet channels empty.
     // Older messages page in via GET /api/messages.
+    const channelList = await this.channels.list();
+    const [history, archivedChannels, pinnedChannels] = await Promise.all([
+      this.messages.recentByChannel(channelList, DEFAULT_HISTORY_LIMIT),
+      this.channels.listArchived(),
+      this.channels.pinned(),
+    ]);
     this.send(conn, {
       type: "welcome",
       self: participant,
-      history: this.messages.recentByChannel(this.channels.list(), DEFAULT_HISTORY_LIMIT),
+      history,
       participants: this.roster.list(),
-      channels: this.channels.list(),
-      archivedChannels: this.channels.listArchived(),
-      pinnedChannels: this.channels.pinned(),
+      channels: channelList,
+      archivedChannels,
+      pinnedChannels,
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: conn.apiUrl,
@@ -342,13 +348,13 @@ export class Hub {
   }
 
   /** Pinning is a human act: agents mutate the world only through the toolman. */
-  private handlePin(conn: Connection, event: PinEvent): void {
+  private async handlePin(conn: Connection, event: PinEvent): Promise<void> {
     const participant = conn.participant!;
     if (participant.kind !== "human") {
       this.send(conn, { type: "error", error: "human-only event" });
       return;
     }
-    const message = this.messages.setPinned(
+    const message = await this.messages.setPinned(
       event.messageId,
       event.pinned ? participant.name : null,
     );
@@ -361,8 +367,8 @@ export class Hub {
 
   /** Resolve a message the connection's participant authored, or send the
    *  refusal. Identity comes from the connection, never the frame. */
-  private authoredMessage(conn: Connection, messageId: string): ChatMessage | null {
-    const message = this.messages.get(messageId);
+  private async authoredMessage(conn: Connection, messageId: string): Promise<ChatMessage | null> {
+    const message = await this.messages.get(messageId);
     if (!message) {
       this.send(conn, { type: "error", error: `unknown message: ${messageId}` });
       return null;
@@ -374,16 +380,16 @@ export class Hub {
     return message;
   }
 
-  private handleMessageEdit(conn: Connection, event: MessageEditEvent): void {
-    if (!this.authoredMessage(conn, event.messageId)) return;
-    const message = this.messages.edit(event.messageId, event.content)!;
+  private async handleMessageEdit(conn: Connection, event: MessageEditEvent): Promise<void> {
+    if (!(await this.authoredMessage(conn, event.messageId))) return;
+    const message = (await this.messages.edit(event.messageId, event.content))!;
     this.broadcast({ type: "message_updated", message });
   }
 
-  private handleMessageDelete(conn: Connection, event: MessageDeleteEvent): void {
-    const message = this.authoredMessage(conn, event.messageId);
+  private async handleMessageDelete(conn: Connection, event: MessageDeleteEvent): Promise<void> {
+    const message = await this.authoredMessage(conn, event.messageId);
     if (!message) return;
-    this.messages.delete(event.messageId);
+    await this.messages.delete(event.messageId);
     this.broadcast({
       type: "message_deleted",
       messageId: event.messageId,
@@ -392,15 +398,15 @@ export class Hub {
   }
 
   /** Reactions are idempotent; only an actual change is worth a broadcast. */
-  private handleMessageReact(conn: Connection, event: MessageReactEvent): void {
+  private async handleMessageReact(conn: Connection, event: MessageReactEvent): Promise<void> {
     const participant = conn.participant!;
-    if (!this.messages.get(event.messageId)) {
+    if (!(await this.messages.get(event.messageId))) {
       this.send(conn, { type: "error", error: `unknown message: ${event.messageId}` });
       return;
     }
     let changed: boolean;
     if (event.op === "add") {
-      const outcome = this.messages.addReaction(event.messageId, event.emoji, {
+      const outcome = await this.messages.addReaction(event.messageId, event.emoji, {
         id: participant.id,
         name: participant.name,
       });
@@ -410,13 +416,13 @@ export class Hub {
       }
       changed = outcome === "added";
     } else {
-      changed = this.messages.removeReaction(event.messageId, event.emoji, participant.id);
+      changed = await this.messages.removeReaction(event.messageId, event.emoji, participant.id);
     }
     if (!changed) return;
-    this.broadcast({ type: "message_updated", message: this.messages.get(event.messageId)! });
+    this.broadcast({ type: "message_updated", message: (await this.messages.get(event.messageId))! });
   }
 
-  private handleInterrupt(conn: Connection, target: string, content: string): void {
+  private async handleInterrupt(conn: Connection, target: string, content: string): Promise<void> {
     const participant = conn.participant!;
     const targetParticipant = this.roster.get("agent", target);
     if (!targetParticipant) {
@@ -424,7 +430,7 @@ export class Hub {
       return;
     }
 
-    this.postMessage(participant, `/interrupt @${target} ${content}`, "general");
+    await this.postMessage(participant, `/interrupt @${target} ${content}`, "general");
     const targetConn = [...this.connections].find(
       (c) => c.participant?.id === targetParticipant.id,
     );
@@ -488,10 +494,10 @@ export class Hub {
     this.broadcast({ type: "trace_chunk", runId, chunk });
   }
 
-  private handleSummary(participant: Participant, event: SummaryEvent): void {
+  private async handleSummary(participant: Participant, event: SummaryEvent): Promise<void> {
     const trace = this.traceBuffers.get(event.runId) ?? [];
     this.traceBuffers.delete(event.runId);
-    this.postMessage(participant, event.content, event.channel ?? "general", {
+    await this.postMessage(participant, event.content, event.channel ?? "general", {
       trace: trace.length > 0 ? trace : undefined,
       runId: event.runId,
     });
@@ -502,12 +508,12 @@ export class Hub {
     this.broadcast({ type: "run_end", runId: event.runId, reason: event.reason });
   }
 
-  private agentOnly(conn: Connection, handle: () => void): void {
+  private async agentOnly(conn: Connection, handle: () => void | Promise<void>): Promise<void> {
     if (conn.participant?.kind !== "agent") {
       this.send(conn, { type: "error", error: "agent-only event" });
       return;
     }
-    handle();
+    await handle();
   }
 
   private broadcast(event: ServerEvent): void {
