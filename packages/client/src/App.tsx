@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import type { BoardItem, ChatMessage } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { LoginScreen } from "./components/LoginScreen";
@@ -11,21 +12,31 @@ import { BoardView } from "./components/BoardView";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
+import { supabase } from "./lib/supabase";
+
+const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
 /**
  * Boot: ask the server which mode it runs in, then gate accordingly. No auth
  * method configured is treated as a misconfigured deployment, not guest mode
  * — it shows a dead-end screen instead of letting anyone in unauthenticated.
- * Auth mode requires a stored session token, obtained through the
- * LoginScreen; a token the server rejects is cleared and we return to login.
+ * Auth mode tracks the Supabase session directly (supabase-js persists and
+ * refreshes it in localStorage on its own, no app-managed token storage
+ * needed); a brand-new Supabase user who has not yet picked a username sees
+ * UsernameStep before the workspace, for either sign-in provider alike.
  */
 export default function App() {
   const [authMode, setAuthMode] = useState<{
-    googleClientId: string | null;
+    googleAuthEnabled: boolean;
     emailAuthEnabled: boolean;
   } | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(
-    () => window.localStorage.getItem("authToken") ?? window.sessionStorage.getItem("authToken"),
+  // undefined = still resolving the initial session; null = signed out.
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  // "unknown" = still checking whether this session has a bound actor yet —
+  // see the race note above for why WorkspaceProvider must never render
+  // until this resolves to "ok".
+  const [usernameStatus, setUsernameStatus] = useState<"unknown" | "ok" | "needs_username">(
+    "unknown",
   );
 
   useEffect(() => {
@@ -34,7 +45,7 @@ export default function App() {
     const load = async () => {
       try {
         const res = await fetch(`${apiBaseUrl()}/api/auth/config`);
-        const data = (await res.json()) as { googleClientId: string | null; emailAuthEnabled: boolean };
+        const data = (await res.json()) as { googleAuthEnabled: boolean; emailAuthEnabled: boolean };
         if (!cancelled) setAuthMode(data);
       } catch {
         // Server not up yet (dev restarts): keep asking, it decides the flow.
@@ -48,7 +59,34 @@ export default function App() {
     };
   }, []);
 
-  if (!authMode) {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setUsernameStatus("unknown");
+      return;
+    }
+    setUsernameStatus("unknown");
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`${apiBaseUrl()}/api/auth/session`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const data = (await res.json()) as { status: "ok" | "needs_username" };
+      if (!cancelled) setUsernameStatus(data.status);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.access_token]);
+
+  if (!authMode || session === undefined) {
     return (
       <div className="flex h-full items-center justify-center bg-chat">
         <p role="status" className="text-muted">
@@ -58,7 +96,7 @@ export default function App() {
     );
   }
 
-  const authEnabled = authMode.googleClientId !== null || authMode.emailAuthEnabled;
+  const authEnabled = authMode.googleAuthEnabled || authMode.emailAuthEnabled;
 
   if (!authEnabled) {
     return (
@@ -77,40 +115,112 @@ export default function App() {
     );
   }
 
-  if (!authToken) {
+  if (!session) {
     return (
       <LoginScreen
-        googleClientId={authMode.googleClientId}
+        googleAuthEnabled={authMode.googleAuthEnabled}
         emailAuthEnabled={authMode.emailAuthEnabled}
-        onSignedIn={(token, rememberMe) => {
-          (rememberMe ? window.localStorage : window.sessionStorage).setItem("authToken", token);
-          setAuthToken(token);
-        }}
       />
+    );
+  }
+
+  if (usernameStatus === "unknown") {
+    return (
+      <div className="flex h-full items-center justify-center bg-chat">
+        <p role="status" className="text-muted">
+          Connecting…
+        </p>
+      </div>
+    );
+  }
+
+  if (usernameStatus === "needs_username") {
+    return (
+      <UsernameStep accessToken={session.access_token} onDone={() => setUsernameStatus("ok")} />
     );
   }
 
   return (
     <WorkspaceProvider
-      credentials={{ authToken }}
-      onAuthRejected={() => {
-        window.localStorage.removeItem("authToken");
-        window.sessionStorage.removeItem("authToken");
-        setAuthToken(null);
-      }}
-      onSignOut={() => {
-        void fetch(`${apiBaseUrl()}/api/auth/logout`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${authToken}` },
-        }).finally(() => {
-          window.localStorage.removeItem("authToken");
-          window.sessionStorage.removeItem("authToken");
-          location.reload();
-        });
-      }}
+      credentials={{ authToken: session.access_token }}
+      onAuthRejected={() => void supabase.auth.signOut()}
+      onSignOut={() => void supabase.auth.signOut()}
     >
       <Workspace />
     </WorkspaceProvider>
+  );
+}
+
+/** First sign-in only (either provider): bind the one permanent username to
+ *  the new Supabase account. */
+function UsernameStep({ accessToken, onDone }: { accessToken: string; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const trimmed = name.trim();
+  const valid = USERNAME_PATTERN.test(trimmed);
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl()}/api/auth/username`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ username: trimmed }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { message?: string };
+      if (!res.ok) {
+        setError(data.message ?? `Could not save the username (${res.status}).`);
+        return;
+      }
+      onDone();
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full items-center justify-center bg-chat">
+      <div className="w-96 animate-fade-in rounded-lg bg-sidebar p-8 shadow-2xl">
+        <h1 className="mb-1 text-2xl font-semibold text-body">Pick a username</h1>
+        <p className="mb-6 text-muted">
+          This is who you are here, permanently — choose well.
+        </p>
+        <label
+          htmlFor="username"
+          className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase"
+        >
+          Username
+        </label>
+        <input
+          id="username"
+          autoFocus
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => e.key === "Enter" && void submit()}
+          className="mb-2 w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+          placeholder="e.g. harris"
+          maxLength={32}
+        />
+        <p role={error ? "alert" : undefined} className={`mb-4 text-sm ${error ? "text-dead" : "text-faint"}`}>
+          {error ?? "1-32 characters: letters, digits, spaces, - and _"}
+        </p>
+        <button
+          onClick={() => void submit()}
+          disabled={!valid || submitting}
+          className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Join Workspace
+        </button>
+      </div>
+    </div>
   );
 }
 

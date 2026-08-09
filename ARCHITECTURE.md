@@ -14,14 +14,15 @@ the wire protocol (websocket) and the HTTP board API.
   types for server→client frames.
 
 ### packages/server
-- `WorkspaceDb` (`db.ts`) — owns the SQLite file: schema, migrations,
-  transactions, actors, per-server ref allocation.
+- `WorkspaceDb` (`db.ts`) — owns the Supabase Postgres connection: queries,
+  transactions, actors, per-server ref allocation. Schema/migrations live in
+  `supabase/migrations/`, applied via the Supabase CLI, not in this file.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
 - `Channels` (`chat/`) — the set of chat channels: seeds defaults, validates
   names, records new ones.  → WorkspaceDb
-- `Attachments` (`chat/`) — owns uploaded files: stores bytes on disk
-  (`data/uploads/<id>`), records metadata, binds them to messages, serves
-  them back.  → WorkspaceDb
+- `Attachments` (`chat/`) — owns uploaded files: stores bytes in the
+  Supabase Storage `attachments` bucket, records metadata, binds them to
+  messages, serves them back.  → WorkspaceDb
 - `Roster` — participant identity + live presence.  → WorkspaceDb
 - `Hub` — routes websocket frames; the single message-posting path.
   → Roster, MessageStore, Channels, Attachments, Sessions, Toolman
@@ -31,15 +32,16 @@ the wire protocol (websocket) and the HTTP board API.
   mechanics. `authorizeMutation` is the pure policy decision.  → BoardService
 - `scope.ts` — scope-path semantics: normalize, match, validate.
 - `Sessions` — bearer tokens with TTL and revocation.
-- `Auth` (`auth/`) — owns login identity: exchanges verified Google
-  credentials for workspace actors and persistent 30-day sessions
-  (auth_sessions), so the hub and the API never know Google exists.
-  → WorkspaceDb
-- `googleIdToken.ts` (`auth/`) — verifies a Google ID token and nothing
-  else; the JWKS fetcher is injectable so tests never touch the network.
+- `Auth` (`auth/`) — bridges a verified Supabase session to a workspace
+  actor: re-verifies the caller's Supabase access token on every call (via
+  a Supabase admin client) and maps it onto an `actors` row, creating one
+  the first time a user picks a username. Google OAuth and email/password
+  are both entirely Supabase Auth's problem — this class never sees a
+  password or a Google credential, only the resulting JWT.  → WorkspaceDb
 - `joinPolicy.ts` (`auth/`) — the auth-mode join gate: resolves a join frame
-  to an allowed participant name (human session token or agent shared
-  secret), so the Hub never knows how identities are proven.  → Auth
+  to an allowed participant name (a verified Supabase session or the
+  agent's shared secret), so the Hub never knows how identities are proven.
+  → Auth
 - `api.ts` — HTTP routes for board items, actors, channel creation, file
   uploads, login (`/api/auth/*`), and the unauthenticated `/api/health`
   liveness probe.  → BoardService, Sessions, Auth, WorkspaceDb, Channels,
@@ -58,9 +60,9 @@ the wire protocol (websocket) and the HTTP board API.
 - `lib/serverUrl.ts` — the single place server base URLs (ws + http) are
   derived: VITE_WS_URL override, then dev localhost, then the page's own
   origin (production is single-origin).
-- `components/LoginScreen` — the auth-mode front door: Google Sign-In button
-  (GIS script), credential exchange, first-time username pick. App only
-  receives the finished authToken.
+- `components/LoginScreen` — the auth-mode front door: starts a Supabase
+  sign-in (Google OAuth redirect or email/password) and does not manage
+  tokens itself. The first-time username pick lives in `App.tsx`.
 - `hooks/useConnection` — socket lifecycle + everything the welcome frame
   carries (self, participants, channels, connected).
 - `hooks/useApiSession` — the bearer-token fetch path, bound from the welcome
@@ -103,12 +105,13 @@ the wire protocol (websocket) and the HTTP board API.
   not the general rule.
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
-- Auth mode is a config switch, not a flag: GOOGLE_CLIENT_ID and/or
+- Auth mode is a config switch, not a flag: GOOGLE_AUTH_ENABLED and/or
   EMAIL_AUTH set = sign-in required (the Hub only admits joins its
-  `authorizeJoin` gate resolves — humans by session token, agents by
+  `authorizeJoin` gate resolves — humans by a verified Supabase session, agents by
   AGENT_TOKEN — and ignores client-supplied human names); neither set = the
-  guest flow, byte-for-byte the old behavior. The two sign-in methods share
-  one `Auth`/session layer; either, both, or neither can be on.
+  server refuses every join and the client shows a "contact support" dead end.
+  The two sign-in methods share one Supabase Auth-backed `Auth` layer; either,
+  both, or neither can be on.
 - Every board mutation writes exactly one `board_events` row in the same
   transaction (I5) and fans out exactly one `{channel:"board"}` envelope.
 - Agent-origin board items always carry `scope_paths` (enforced at creation);
@@ -117,8 +120,9 @@ the wire protocol (websocket) and the HTTP board API.
 - Toolman file actions are confined to `data/workspace/`.
 - The Hub knows nothing about demos; `DemoOrchestrator` attaches through the
   Hub's three hooks and feeds inputs through the same paths humans use.
-- `messages.author_id` has no FK to `actors`: history imported from the
-  legacy JSON store may predate actor rows.
+- `messages.author_id` has no FK to `actors`: kept loose so a message and
+  its reactions can be deleted together without a cascade depending on the
+  author row still existing.
 
 ## Decisions a reader would not predict
 
@@ -180,3 +184,12 @@ the wire protocol (websocket) and the HTTP board API.
   board path, they're the path of least resistance. Follow-up: route
   `ClaudeBrain`'s `canUseTool` callback through the same board-approval
   flow `board_propose`/`write_file` already use.
+- 2026-08-09 — Persistence, auth, and file storage moved from
+  `node:sqlite`/hand-rolled Google ID-token verification+scrypt/local disk
+  to Supabase (Postgres, Auth, Storage) — a clean cutover, no data
+  migration, since there was no production data yet. Consequence: every
+  store method that used to be a synchronous `DatabaseSync` call is now
+  `async` (a Postgres round-trip); `actors.id` for a Supabase-authenticated
+  human is the Supabase Auth user id (`auth.users.id`), not an
+  app-generated uuid; agent actors are unaffected (they never went through
+  Supabase Auth). See `docs/superpowers/plans/2026-08-09-supabase-migration.md`.
