@@ -12,9 +12,9 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | ------------------ | ------- | -------------------------- | ----------------------------------------------------------------------- |
 | `PORT`             | server  | `3001`                     | HTTP + websocket port.                                                  |
 | `DATA_DIR`         | server  | `./data` (`/data` in image)| Everything persistent: `board.db`, `workspace/`, `uploads/`, `agents/`. |
-| `GEMINI_API_KEY`   | agent   | —                          | Enables the agent; unset = no agent starts.                             |
+| `GEMINI_API_KEY`   | agent   | —                          | Enables the agent when `AGENT_PROVIDER=gemini` (the default); unset = no agent starts under that provider. Not needed for `AGENT_PROVIDER=claude`. |
 | `AGENT_NAME`       | agent   | `noodle`                   | The agent's display name.                                               |
-| `AGENT_MODEL`      | agent   | `gemini-2.5-flash`         | Gemini model id.                                                        |
+| `AGENT_MODEL`      | agent   | `gemini-2.5-flash`         | Model id — Gemini model for the gemini provider, `claude-sonnet-5` default for the claude provider. |
 | `AGENT_PROVIDER`   | agent   | `gemini`                   | `gemini` or `claude`. `claude` needs no API key but does need a `claude login` session — see below. |
 | `CLAUDE_WORKDIR`   | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
 | `GOOGLE_CLIENT_ID` | server  | — (sign-in unavailable)    | Set = Google Sign-In offered to humans.                                 |

@@ -7,7 +7,7 @@ Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/
 - Typecheck: `npm run typecheck` (all packages) or `npx tsc --noEmit -p packages/<name>`
 - Tests: `npm test` (all packages) — server suite holds invariants T1-T12 + pressure + hardening; client uses vitest, the rest node:test
 - Client build: `npm run build -w @workspace/client`
-- Env overrides: `PORT`, `CORS_ORIGIN`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `EMAIL_AUTH`, `AGENT_TOKEN`, `CLIENT_DIST` (server), `WS_URL`, `AGENT_TOKEN` (agent), `VITE_WS_URL` (client). Useful when something else holds 3001.
+- Env overrides: `PORT`, `CORS_ORIGIN`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `EMAIL_AUTH`, `AGENT_TOKEN`, `CLIENT_DIST` (server), `WS_URL`, `AGENT_TOKEN`, `AGENT_PROVIDER`, `CLAUDE_WORKDIR` (agent), `VITE_WS_URL` (client). Useful when something else holds 3001.
 - One `.env` at the repo root (see `.env.example`) feeds `npm run dev` for all three processes: server/agent `config.ts` load it explicitly via `dotenv.config({ path: <repo root>/.env })` (npm workspaces run scripts with cwd = the package dir, so a bare `dotenv.config()` misses it), and `packages/client/vite.config.ts` sets `envDir` to the repo root so `VITE_*` vars resolve the same way. Docker Compose doesn't need any of this — it injects `.env` as real container env vars.
 - Deploy: `DEPLOY.md` — one origin in production (server serves the built client), Dockerfile/compose at root.
 

@@ -28,12 +28,14 @@ export const AGENT_MODEL =
 /**
  * cwd Claude Code's native tools (Bash, Write, Edit, ...) operate in.
  * Mirrors the server's Toolman sandbox root (packages/server/src/index.ts's
- * `path.join(config.dataDir, "workspace")`), not this process's own
- * DATA_DIR (which is this agent's private memory/pending-work store).
- * Both assume process.cwd() is the repo root, same as DATA_DIR below.
+ * `path.join(config.dataDir, "workspace")`, server DATA_DIR defaulting to
+ * `<repo root>/data`) — not this process's own DATA_DIR below (this agent's
+ * private memory/pending-work store). Resolved against __dirname, not
+ * process.cwd(), for the same reason CHARTER_PATH is: npm workspaces run
+ * this script with cwd = packages/agent, not the repo root.
  */
 export const CLAUDE_WORKDIR =
-  process.env.CLAUDE_WORKDIR ?? path.resolve(process.cwd(), "data", "workspace");
+  process.env.CLAUDE_WORKDIR ?? path.resolve(__dirname, "../../../data/workspace");
 
 export const CHARTER_PATH = process.env.CHARTER_PATH ?? path.resolve(__dirname, "../charter.md");
 export const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "data", "agents", AGENT_NAME);

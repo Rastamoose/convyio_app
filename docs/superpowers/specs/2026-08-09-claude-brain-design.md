@@ -69,6 +69,13 @@ import these types from `brain.ts` instead of `geminiBrain.ts`.
   both processes. Confirmed by reading `packages/server/src/index.ts:31`
   and `packages/server/src/config.ts:15` this session — not guessed.
 
+  **Correction (post-merge review, 2026-08-09):** that `process.cwd()` claim was wrong
+  for this process specifically — npm workspaces run `packages/agent`'s own script
+  with cwd = `packages/agent`, not the repo root (the same reason `CHARTER_PATH`
+  resolves against `__dirname` instead). The implemented default was corrected to
+  `path.resolve(__dirname, "../../../data/workspace")`, matching `CHARTER_PATH`'s
+  approach.
+
 `index.ts`'s startup guard only requires `GEMINI_API_KEY` when
 `AGENT_PROVIDER === "gemini"`. For `"claude"`, no key is required or read —
 auth is entirely the pre-authenticated `claude` CLI's job (see §3).

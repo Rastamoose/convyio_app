@@ -53,6 +53,9 @@ async function main() {
   const systemPrompt = await loadCharter();
   const socket = new AgentSocket(WS_URL);
   const boardClient = new BoardClient(socket);
+  if (AGENT_PROVIDER === "claude") {
+    await fs.mkdir(CLAUDE_WORKDIR, { recursive: true });
+  }
   const brain = createBrain();
   const memory = await Memory.load(DATA_DIR);
   const pendingWork = await PendingWork.load(DATA_DIR);

@@ -7,7 +7,6 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import {
-  MAX_TOOL_ROUNDS,
   buildPromptText,
   type Brain,
   type BrainCallbacks,
@@ -16,6 +15,12 @@ import {
   type ToolDeclaration,
   type ToolExecutor,
 } from "./brain";
+
+// Claude counts total agent turns (including every native-tool call), not
+// tool-call rounds like MAX_TOOL_ROUNDS does for Gemini — a materially
+// different unit, so this needs its own, more generous cap rather than
+// reusing that constant.
+export const CLAUDE_MAX_TURNS = 40;
 
 export class ClaudeBrain implements Brain {
   private query = claudeQuery;
@@ -48,7 +53,7 @@ export class ClaudeBrain implements Brain {
       systemPrompt: input.system,
       abortController,
       includePartialMessages: true,
-      maxTurns: MAX_TOOL_ROUNDS,
+      maxTurns: CLAUDE_MAX_TURNS,
       // ponytail: always-allow stub. Native Claude Code tools (Bash, Write,
       // Edit, ...) run ungated for MVP — board-approval routing for them is
       // deferred debt, see ARCHITECTURE.md's 2026-08-09 decision log entry.
@@ -65,6 +70,7 @@ export class ClaudeBrain implements Brain {
         if (event.type === "content_block_delta") {
           if (event.delta.type === "text_delta") {
             callbacks.onText(event.delta.text);
+            finalText += event.delta.text;
           } else if (event.delta.type === "thinking_delta") {
             callbacks.onThought(event.delta.thinking);
           }
@@ -72,6 +78,10 @@ export class ClaudeBrain implements Brain {
       } else if (message.type === "result") {
         if (message.subtype === "success") {
           finalText = message.result;
+        } else if (finalText.trim()) {
+          // Real output already streamed (e.g. hit error_max_turns after
+          // useful work) — surface what we have instead of discarding it.
+          break;
         } else {
           throw new Error(
             `claude agent sdk error (${message.subtype}): ${message.errors.join("; ") || "no details"}`,

@@ -167,8 +167,16 @@ the wire protocol (websocket) and the HTTP board API.
   Edit, ...) enabled ungated, alongside the existing board tools. This
   bypasses the invariant below ("no agent write paths bypass Toolman") for
   the claude provider specifically — accepted as MVP debt. Consequence: with
-  `AGENT_PROVIDER=claude`, the board is not a complete permission boundary; a
-  human board approval is not required for Claude to write files or run
-  shell commands. Follow-up: route `ClaudeBrain`'s `canUseTool` callback
-  through the same board-approval flow `board_propose`/`write_file` already
-  use.
+  `AGENT_PROVIDER=claude`, the board is not a complete permission boundary.
+  The blast radius is wider than "files and shell commands within the
+  workspace": `CLAUDE_WORKDIR` is a starting cwd, not a sandbox — native
+  Bash/Write/Edit take absolute paths, reaching `.env`, `data/board.db`,
+  and process environment variables (`AGENT_TOKEN`, any API keys) like any
+  other process on the host. Separately, `packages/agent/charter.md` names
+  board tools bare and claims the toolman "refuses anything else, you
+  cannot bypass it" — false under this provider, and nothing steers the
+  model toward the MCP-routed board tools over its own native ones, so in
+  practice native tools aren't just an ungated alternative alongside the
+  board path, they're the path of least resistance. Follow-up: route
+  `ClaudeBrain`'s `canUseTool` callback through the same board-approval
+  flow `board_propose`/`write_file` already use.

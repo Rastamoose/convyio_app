@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeBrain } from "../src/claudeBrain";
+import { ClaudeBrain, CLAUDE_MAX_TURNS } from "../src/claudeBrain";
 import type { BrainCallbacks } from "../src/brain";
 import type { ToolDeclaration, ToolExecutor } from "../src/brain";
 
@@ -145,12 +145,24 @@ describe("ClaudeBrain", () => {
     );
   });
 
-  test("caps turns at MAX_TOOL_ROUNDS and reuses it for maxTurns", async () => {
+  test("returns accumulated streamed text instead of throwing when output already streamed before an error result", async () => {
+    const { brain } = stubbedBrain([
+      textDelta("Partial progress before "),
+      textDelta("hitting a limit."),
+      errorResult("error_max_turns", ["exceeded maximum turns"]),
+    ]);
+
+    const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+
+    assert.equal(reply, "Partial progress before hitting a limit.");
+  });
+
+  test("caps turns at CLAUDE_MAX_TURNS", async () => {
     const { brain, requests } = stubbedBrain([resultMessage("ok")]);
 
     await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
 
-    assert.equal(requests[0].options.maxTurns, 12);
+    assert.equal(requests[0].options.maxTurns, CLAUDE_MAX_TURNS);
   });
 
   test("canUseTool always allows (native-tool gating is deferred MVP debt)", async () => {
