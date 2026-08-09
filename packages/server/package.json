@@ -8,8 +8,10 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.2",
     "@workspace/shared": "*",
     "dotenv": "^17.4.2",
+    "postgres": "^3.4.9",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
