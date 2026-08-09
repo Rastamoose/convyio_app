@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { clientEventSchema } from "@workspace/shared";
@@ -49,9 +47,9 @@ describe("upload HTTP endpoints", async () => {
     assert.equal(attachment.width, 1);
     assert.equal(attachment.height, 1);
     assert.equal(attachment.url, `/api/uploads/${attachment.id}/pixel.png`);
-    assert.ok(
-      Buffer.from(fs.readFileSync(path.join(env.uploadsDir, attachment.id))).equals(PNG_BYTES),
-    );
+    const found = await env.attachments.get(attachment.id);
+    assert.ok(found);
+    assert.ok(Buffer.from(await found.blob.arrayBuffer()).equals(PNG_BYTES));
   });
 
   test("upload without auth → 401", async () => {
@@ -107,29 +105,27 @@ describe("upload HTTP endpoints", async () => {
     const theirsRes = await upload(env.baseUrl, other.token, PNG_BYTES);
     const { attachment: theirs } = await theirsRes.json();
 
-    assert.throws(
-      () => env.attachments.bind("m1", [randomUUID()], human.actor.id),
+    await assert.rejects(
+      env.attachments.bind("m1", [randomUUID()], human.actor.id),
       (err: any) => err.status === 400 && err.code === "BAD_ATTACHMENT",
     );
-    assert.throws(
-      () => env.attachments.bind("m1", [theirs.id], human.actor.id),
+    await assert.rejects(
+      env.attachments.bind("m1", [theirs.id], human.actor.id),
       (err: any) => err.status === 400 && err.code === "BAD_ATTACHMENT",
     );
 
-    env.attachments.bind("m1", [mine.id], human.actor.id);
-    assert.throws(
-      () => env.attachments.bind("m2", [mine.id], human.actor.id),
+    await env.attachments.bind("m1", [mine.id], human.actor.id);
+    await assert.rejects(
+      env.attachments.bind("m2", [mine.id], human.actor.id),
       (err: any) => err.status === 400 && err.code === "BAD_ATTACHMENT",
     );
 
     // A failed multi-bind rolls back entirely: the good id stays unbound.
     const freshRes = await upload(env.baseUrl, human.token, PNG_BYTES);
     const { attachment: fresh } = await freshRes.json();
-    assert.throws(() => env.attachments.bind("m3", [fresh.id, theirs.id], human.actor.id));
-    assert.deepEqual(
-      env.attachments.bind("m3", [fresh.id], human.actor.id).map((a) => a.id),
-      [fresh.id],
-    );
+    await assert.rejects(env.attachments.bind("m3", [fresh.id, theirs.id], human.actor.id));
+    const bound = await env.attachments.bind("m3", [fresh.id], human.actor.id);
+    assert.deepEqual(bound.map((a) => a.id), [fresh.id]);
   });
 
   test("sweepOrphans removes old unbound uploads, keeps bound ones", async () => {
@@ -137,19 +133,17 @@ describe("upload HTTP endpoints", async () => {
     const { attachment: orphan } = await orphanRes.json();
     const boundRes = await upload(env.baseUrl, human.token, PNG_BYTES);
     const { attachment: bound } = await boundRes.json();
-    env.attachments.bind("m-sweep", [bound.id], human.actor.id);
+    await env.attachments.bind("m-sweep", [bound.id], human.actor.id);
 
     // Backdate both rows past the 1h TTL, then sweep.
     const old = Date.now() - 2 * 60 * 60 * 1000;
-    env.db.db
-      .prepare(`UPDATE attachments SET created_at = ? WHERE id IN (?, ?)`)
-      .run(old, orphan.id, bound.id);
-    env.attachments.sweepOrphans();
+    await env.db.sql`
+      UPDATE attachments SET created_at = ${old} WHERE id IN ${env.db.sql([orphan.id, bound.id])}
+    `;
+    await env.attachments.sweepOrphans();
 
-    assert.equal(env.attachments.get(orphan.id), null);
-    assert.equal(fs.existsSync(path.join(env.uploadsDir, orphan.id)), false);
-    assert.ok(env.attachments.get(bound.id));
-    assert.ok(fs.existsSync(path.join(env.uploadsDir, bound.id)));
+    assert.equal(await env.attachments.get(orphan.id), null);
+    assert.ok(await env.attachments.get(bound.id));
   });
 });
 
@@ -204,14 +198,14 @@ describe("attachments on the websocket", async () => {
     assert.ok(Buffer.from(await fetched.arrayBuffer()).equals(PNG_BYTES));
 
     // The persisted message round-trips the attachments.
-    const stored = messages.list().find((m) => m.content === "look");
+    const stored = (await messages.list()).find((m) => m.content === "look");
     assert.ok(stored);
     assert.deepEqual(stored.attachments, frame.message.attachments);
     assert.equal(stored.id, frame.message.id);
 
     // Erik cannot send Dana's upload (already bound anyway) nor an unknown id:
     // the sender gets an error frame and nothing is persisted or broadcast.
-    const countBefore = messages.list().length;
+    const countBefore = (await messages.list()).length;
     erik.ws.send(
       JSON.stringify({ type: "message", content: "steal", attachmentIds: [attachment.id] }),
     );
@@ -222,7 +216,7 @@ describe("attachments on the websocket", async () => {
       JSON.stringify({ type: "message", content: "ghost", attachmentIds: [ghostId] }),
     );
     await erik.next((e) => e.type === "error" && e.error.includes(ghostId));
-    assert.equal(messages.list().length, countBefore);
+    assert.equal((await messages.list()).length, countBefore);
 
     env.close();
   });

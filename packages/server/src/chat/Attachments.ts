@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Actor, Attachment } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { WorkspaceDb } from "../db";
@@ -10,27 +9,28 @@ export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 /** Unbound uploads older than this are dead: the send they belonged to never happened. */
 const ORPHAN_TTL_MS = 60 * 60 * 1000;
 
+const BUCKET = "attachments";
+
 /**
- * Owns uploaded files: stores bytes on disk, records metadata, binds them to
- * messages, serves them back. Bytes live at <uploadsDir>/<id> with no
- * extension — the mime type lives in the attachments table, and the id is the
- * capability that grants access to the file.
+ * Owns uploaded files: stores bytes in the Supabase "attachments" bucket,
+ * records metadata, binds them to messages, serves them back. Objects are
+ * keyed by <id> with no extension — the mime type lives in the attachments
+ * table, and the id is the capability that grants access to the file (the
+ * bucket is private; only this server's service-role client can read it).
  */
 export class Attachments {
   constructor(
     private store: WorkspaceDb,
-    private uploadsDir: string,
-  ) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
+    private supabase: SupabaseClient,
+  ) {}
 
-  save(
+  async save(
     uploader: Actor,
     meta: { name: string; mime: string; width?: number; height?: number },
     bytes: Buffer,
-  ): Attachment {
+  ): Promise<Attachment> {
     // Lazy orphan sweep on the write path keeps the store bounded without timers.
-    this.sweepOrphans();
+    await this.sweepOrphans();
     if (bytes.length === 0) {
       throw new ApiError(400, "EMPTY_FILE", "attachment has no bytes");
     }
@@ -42,23 +42,25 @@ export class Attachments {
     const isImage = meta.mime.startsWith("image/");
     const width = isImage ? (meta.width ?? null) : null;
     const height = isImage ? (meta.height ?? null) : null;
-    fs.writeFileSync(path.join(this.uploadsDir, id), bytes);
-    this.store.db
-      .prepare(
-        `INSERT INTO attachments
-           (id, uploader_id, message_id, name, mime, size, width, height, created_at)
-         VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, uploader.id, name, meta.mime, bytes.length, width, height, Date.now());
+    const { error } = await this.supabase.storage.from(BUCKET).upload(id, bytes, {
+      contentType: meta.mime,
+    });
+    if (error) throw new ApiError(500, "UPLOAD_FAILED", `could not store the file: ${error.message}`);
+    await this.store.sql`
+      INSERT INTO attachments
+        (id, uploader_id, message_id, name, mime, size, width, height, created_at)
+      VALUES (${id}, ${uploader.id}, NULL, ${name}, ${meta.mime}, ${bytes.length}, ${width}, ${height}, ${Date.now()})
+    `;
     return toAttachment({ id, name, mime: meta.mime, size: bytes.length, width, height });
   }
 
-  get(id: string): { attachment: Attachment; filePath: string } | null {
-    const row = this.store.db
-      .prepare(`SELECT * FROM attachments WHERE id = ?`)
-      .get(id) as AttachmentRow | undefined;
+  async get(id: string): Promise<{ attachment: Attachment; blob: Blob } | null> {
+    const rows = await this.store.sql<AttachmentRow[]>`SELECT * FROM attachments WHERE id = ${id}`;
+    const row = rows[0];
     if (!row) return null;
-    return { attachment: toAttachment(row), filePath: path.join(this.uploadsDir, row.id) };
+    const { data, error } = await this.supabase.storage.from(BUCKET).download(row.id);
+    if (error || !data) return null;
+    return { attachment: toAttachment(row), blob: data };
   }
 
   /**
@@ -66,29 +68,30 @@ export class Attachments {
    * upload belonging to the sender, or the whole bind rolls back. Returns
    * the attachments in the given order.
    */
-  bind(messageId: string, ids: string[], senderId: string): Attachment[] {
-    return this.store.transaction(() =>
-      ids.map((id) => {
-        const row = this.store.db
-          .prepare(`SELECT * FROM attachments WHERE id = ?`)
-          .get(id) as AttachmentRow | undefined;
-        if (!row || row.message_id !== null || row.uploader_id !== senderId) {
-          throw new ApiError(400, "BAD_ATTACHMENT", `attachment ${id} is not an unbound upload of yours`);
-        }
-        this.store.db
-          .prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`)
-          .run(messageId, id);
-        return toAttachment(row);
-      }),
+  async bind(messageId: string, ids: string[], senderId: string): Promise<Attachment[]> {
+    return this.store.transaction((sql) =>
+      Promise.all(
+        ids.map(async (id) => {
+          const rows = await sql<AttachmentRow[]>`SELECT * FROM attachments WHERE id = ${id}`;
+          const row = rows[0];
+          if (!row || row.message_id !== null || row.uploader_id !== senderId) {
+            throw new ApiError(400, "BAD_ATTACHMENT", `attachment ${id} is not an unbound upload of yours`);
+          }
+          await sql`UPDATE attachments SET message_id = ${messageId} WHERE id = ${id}`;
+          return toAttachment(row);
+        }),
+      ),
     );
   }
 
-  /** Delete rows and files for unbound uploads older than the cutoff. */
-  sweepOrphans(olderThanMs = ORPHAN_TTL_MS): void {
-    const rows = this.store.db
-      .prepare(`DELETE FROM attachments WHERE message_id IS NULL AND created_at < ? RETURNING id`)
-      .all(Date.now() - olderThanMs) as unknown as { id: string }[];
-    for (const { id } of rows) fs.rmSync(path.join(this.uploadsDir, id), { force: true });
+  /** Delete rows and objects for unbound uploads older than the cutoff. */
+  async sweepOrphans(olderThanMs = ORPHAN_TTL_MS): Promise<void> {
+    const rows = await this.store.sql<{ id: string }[]>`
+      DELETE FROM attachments WHERE message_id IS NULL AND created_at < ${Date.now() - olderThanMs}
+      RETURNING id
+    `;
+    if (rows.length === 0) return;
+    await this.supabase.storage.from(BUCKET).remove(rows.map((r) => r.id));
   }
 }
 
