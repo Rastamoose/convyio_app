@@ -1,8 +1,11 @@
 import {
   query as claudeQuery,
+  tool,
+  createSdkMcpServer as claudeCreateSdkMcpServer,
   type Options,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import {
   MAX_TOOL_ROUNDS,
   buildPromptText,
@@ -10,10 +13,13 @@ import {
   type BrainCallbacks,
   type BrainInput,
   type BrainRunOptions,
+  type ToolDeclaration,
+  type ToolExecutor,
 } from "./brain";
 
 export class ClaudeBrain implements Brain {
   private query = claudeQuery;
+  private createSdkMcpServer = claudeCreateSdkMcpServer;
 
   constructor(
     private model: string,
@@ -27,6 +33,15 @@ export class ClaudeBrain implements Brain {
       options.signal.addEventListener("abort", () => abortController.abort());
     }
 
+    const boardServer =
+      input.tools?.length && options?.onToolCall
+        ? this.createSdkMcpServer({
+            name: "board",
+            version: "1.0.0",
+            tools: input.tools.map((decl) => toSdkTool(decl, options.onToolCall!)),
+          })
+        : undefined;
+
     const claudeOptions: Options = {
       model: this.model,
       cwd: this.cwd,
@@ -38,6 +53,7 @@ export class ClaudeBrain implements Brain {
       // Edit, ...) run ungated for MVP — board-approval routing for them is
       // deferred debt, see ARCHITECTURE.md's 2026-08-09 decision log entry.
       canUseTool: async () => ({ behavior: "allow" }),
+      ...(boardServer ? { mcpServers: { board: boardServer } } : {}),
     };
 
     const stream = this.query({ prompt: buildClaudePrompt(input), options: claudeOptions });
@@ -92,4 +108,39 @@ function buildClaudePrompt(input: BrainInput): string | AsyncIterable<SDKUserMes
       },
     };
   })();
+}
+
+function toSdkTool(decl: ToolDeclaration, executor: ToolExecutor) {
+  return tool(decl.name, decl.description, toZodShape(decl.parameters), async (args) => {
+    const result = await executor(decl.name, args as Record<string, unknown>);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  });
+}
+
+function toZodShape(params: ToolDeclaration["parameters"]): Record<string, z.ZodTypeAny> {
+  const required = new Set(params.required ?? []);
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const [key, prop] of Object.entries(params.properties)) {
+    const field = zodFieldFor(prop);
+    shape[key] = required.has(key) ? field : field.optional();
+  }
+  return shape;
+}
+
+function zodFieldFor(prop: { type: string; description?: string; items?: { type: string } }): z.ZodTypeAny {
+  const base = ((): z.ZodTypeAny => {
+    switch (prop.type) {
+      case "number":
+        return z.number();
+      case "integer":
+        return z.number().int();
+      case "boolean":
+        return z.boolean();
+      case "array":
+        return z.array(zodFieldFor(prop.items ?? { type: "string" }));
+      default:
+        return z.string();
+    }
+  })();
+  return prop.description ? base.describe(prop.description) : base;
 }

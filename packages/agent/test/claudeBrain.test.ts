@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeBrain } from "../src/claudeBrain";
 import type { BrainCallbacks } from "../src/brain";
+import type { ToolDeclaration, ToolExecutor } from "../src/brain";
 
 // query() is the brain's network boundary (spawns the bundled claude CLI
 // binary); the stub below stands in for it and records the request the
@@ -12,6 +13,12 @@ interface RecordedRequest {
   prompt: unknown;
   options: Record<string, unknown>;
 }
+
+interface RegisteredServer {
+  tools: { name: string; handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content: { type: string; text: string }[] }> }[];
+}
+
+const registeredTools: RegisteredServer[] = [];
 
 function stubbedBrain(
   messages: unknown[],
@@ -24,7 +31,13 @@ function stubbedBrain(
       for (const message of messages) yield message as SDKMessage;
     })();
   };
+  const createSdkMcpServer = (options: RegisteredServer) => {
+    registeredTools.push(options);
+    return { type: "sdk" as const, name: "board", instance: {} };
+  };
   (brain as unknown as { query: typeof query }).query = query;
+  (brain as unknown as { createSdkMcpServer: typeof createSdkMcpServer }).createSdkMcpServer =
+    createSdkMcpServer;
   return { brain, requests };
 }
 
@@ -152,5 +165,52 @@ describe("ClaudeBrain", () => {
       requestId: "req-1",
     });
     assert.deepEqual(result, { behavior: "allow" });
+  });
+
+  test("board tool calls are bridged through onToolCall and results returned as MCP content", async () => {
+    const toolDecl: ToolDeclaration = {
+      name: "board_list",
+      description: "List board items",
+      parameters: { type: "object", properties: {} },
+    };
+    const calls: { name: string; args: Record<string, unknown> }[] = [];
+    const onToolCall: ToolExecutor = async (name, args) => {
+      calls.push({ name, args });
+      return { board: "(empty)" };
+    };
+    const { brain, requests } = stubbedBrain([resultMessage("done")]);
+
+    await brain.run(
+      { system: "sys", context: "ctx", prompt: "hi", tools: [toolDecl] },
+      noopCallbacks,
+      { onToolCall },
+    );
+
+    const mcpServers = requests[0].options.mcpServers as
+      | Record<string, { instance?: unknown }>
+      | undefined;
+    assert.ok(mcpServers?.board, "expected a 'board' MCP server to be registered");
+
+    const registered = registeredTools.at(-1);
+    assert.ok(registered, "expected createSdkMcpServer to have been called");
+    assert.equal(registered!.tools.length, 1);
+    assert.equal(registered!.tools[0].name, "board_list");
+
+    const result = await registered!.tools[0].handler({}, undefined);
+    assert.deepEqual(calls, [{ name: "board_list", args: {} }]);
+    assert.deepEqual(result, { content: [{ type: "text", text: JSON.stringify({ board: "(empty)" }) }] });
+  });
+
+  test("no tools registered when the run has no onToolCall", async () => {
+    const toolDecl: ToolDeclaration = {
+      name: "board_list",
+      description: "List board items",
+      parameters: { type: "object", properties: {} },
+    };
+    const { brain, requests } = stubbedBrain([resultMessage("done")]);
+
+    await brain.run({ system: "sys", context: "ctx", prompt: "hi", tools: [toolDecl] }, noopCallbacks);
+
+    assert.equal(requests[0].options.mcpServers, undefined);
   });
 });
