@@ -3,14 +3,18 @@ import { isBoardEnvelope, type ChatMessage } from "@workspace/shared";
 import {
   AGENT_MODEL,
   AGENT_NAME,
+  AGENT_PROVIDER,
   AGENT_TOKEN,
   CHARTER_PATH,
+  CLAUDE_WORKDIR,
   DATA_DIR,
   GEMINI_API_KEY,
   WS_URL,
 } from "./config";
 import { AgentSocket } from "./socket";
+import type { Brain } from "./brain";
 import { GeminiBrain } from "./geminiBrain";
+import { ClaudeBrain } from "./claudeBrain";
 import { Memory } from "./memory";
 import { BoardClient } from "./boardClient";
 import { PendingWork } from "./pendingWork";
@@ -33,8 +37,15 @@ async function loadCharter(): Promise<string> {
   }
 }
 
+function createBrain(): Brain {
+  if (AGENT_PROVIDER === "claude") {
+    return new ClaudeBrain(AGENT_MODEL, CLAUDE_WORKDIR);
+  }
+  return new GeminiBrain(GEMINI_API_KEY!, AGENT_MODEL);
+}
+
 async function main() {
-  if (!GEMINI_API_KEY) {
+  if (AGENT_PROVIDER === "gemini" && !GEMINI_API_KEY) {
     console.error("[agent] Missing GEMINI_API_KEY. Set it in the environment and restart.");
     process.exit(1);
   }
@@ -42,7 +53,7 @@ async function main() {
   const systemPrompt = await loadCharter();
   const socket = new AgentSocket(WS_URL);
   const boardClient = new BoardClient(socket);
-  const brain = new GeminiBrain(GEMINI_API_KEY, AGENT_MODEL);
+  const brain = createBrain();
   const memory = await Memory.load(DATA_DIR);
   const pendingWork = await PendingWork.load(DATA_DIR);
   const presence = new Presence(socket, boardClient);
