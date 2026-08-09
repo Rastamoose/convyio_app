@@ -7,7 +7,7 @@ const MIN_PASSWORD_LENGTH = 8;
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full items-center justify-center bg-chat">
-      <div className="w-96 animate-fade-in rounded-lg bg-sidebar p-8 shadow-2xl">
+      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
         {children}
       </div>
     </div>
@@ -117,6 +117,7 @@ function EmailAuthForm() {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [forgotMsg, setForgotMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -171,23 +172,32 @@ function EmailAuthForm() {
         placeholder="••••••••"
       />
 
-      {mode === "login" && (
-        <div className="mb-4 flex items-center justify-end text-sm">
+      <div className="mb-4 text-sm">
+        <label className="flex items-center gap-2 text-muted">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="accent-blurple"
+          />
+          Remember for 30 days
+        </label>
+        {mode === "login" && (
           <button
             type="button"
             onClick={() => setForgotMsg("Password reset isn't set up yet — ask an admin for help.")}
-            className="font-medium text-blurple hover:underline"
+            className="mt-2 font-medium text-blurple hover:underline"
           >
             Forgot password
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {forgotMsg && <p className="mb-4 text-sm text-faint">{forgotMsg}</p>}
 
       <button
         onClick={() => void submit()}
         disabled={!canSubmit}
-        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         {mode === "login" ? "Sign in" : "Create account"}
       </button>
