@@ -7,12 +7,12 @@ import { createWsEnv } from "./helpers";
 /** Directly appends a fabricated message, bypassing the hub, so tests can
  *  control created_at exactly (including deliberate ties) without racing
  *  Date.now() resolution. */
-function seedMessage(
+async function seedMessage(
   env: Awaited<ReturnType<typeof createWsEnv>>,
   channel: string,
   content: string,
   timestamp: number,
-): ChatMessage {
+): Promise<ChatMessage> {
   const message: ChatMessage = {
     id: randomUUID(),
     authorId: "seed-author",
@@ -22,7 +22,7 @@ function seedMessage(
     timestamp,
     channel,
   };
-  env.messages.append(message);
+  await env.messages.append(message);
   return message;
 }
 
@@ -64,8 +64,8 @@ describe("message editing", async () => {
     );
     const refusal = await erik.next((e) => e.type === "error");
     assert.equal(refusal.error, "not the message author");
-    assert.equal(env.messages.list()[0].content, "mine");
-    assert.equal(env.messages.list()[0].editedAt, undefined);
+    assert.equal((await env.messages.list())[0].content, "mine");
+    assert.equal((await env.messages.list())[0].editedAt, undefined);
 
     env.close();
   });
@@ -101,13 +101,13 @@ describe("message deletion", async () => {
     erik.ws.send(JSON.stringify({ type: "message_delete", messageId }));
     const refusal = await erik.next((e) => e.type === "error");
     assert.equal(refusal.error, "not the message author");
-    assert.equal(env.messages.list().length, 1);
+    assert.equal((await env.messages.list()).length, 1);
 
     dana.ws.send(JSON.stringify({ type: "message_delete", messageId }));
     const deleted = await erik.next((e) => e.type === "message_deleted");
     assert.equal(deleted.messageId, messageId);
     assert.equal(deleted.channel, "general");
-    assert.equal(env.messages.list().length, 0);
+    assert.equal((await env.messages.list()).length, 0);
     const orphans = env.db.db
       .prepare(`SELECT COUNT(*) AS n FROM message_reactions`)
       .get() as { n: number };
@@ -159,7 +159,7 @@ describe("replies", async () => {
     dana.ws.send(JSON.stringify({ type: "message", content: "reply", replyToId: ghost }));
     const refusal = await dana.next((e) => e.type === "error");
     assert.equal(refusal.error, `unknown message: ${ghost}`);
-    assert.equal(env.messages.list().length, 0);
+    assert.equal((await env.messages.list()).length, 0);
 
     env.close();
   });
@@ -200,7 +200,7 @@ describe("reactions", async () => {
       },
     ]);
     // list() hydrates the same view.
-    assert.deepEqual(env.messages.list()[0].reactions, second.message.reactions);
+    assert.deepEqual((await env.messages.list())[0].reactions, second.message.reactions);
 
     // All on dana's connection so server-side ordering is guaranteed: a
     // duplicate add and a phantom remove change nothing (no broadcast), then
@@ -287,7 +287,7 @@ describe("typing indicator", async () => {
     await assert.rejects(dana.next((e) => e.type === "typing", 50), /timeout/);
 
     // Ephemeral: only the real message persisted.
-    assert.equal(env.messages.list().length, 1);
+    assert.equal((await env.messages.list()).length, 1);
 
     env.close();
   });
@@ -358,8 +358,8 @@ describe("welcome history cap", async () => {
     assert.equal(created.status, 201);
 
     for (let i = 0; i < 55; i++) {
-      seedMessage(env, "general", `general-${i}`, 1000 + i);
-      seedMessage(env, "random", `random-${i}`, 2000 + i);
+      await seedMessage(env, "general", `general-${i}`, 1000 + i);
+      await seedMessage(env, "random", `random-${i}`, 2000 + i);
     }
 
     const erik = await env.connect("erik", "human");
@@ -388,11 +388,11 @@ describe("GET /api/messages", async () => {
     const dana = await env.connect("dana", "human");
 
     // A and B deliberately share a millisecond; C/D/E do not.
-    const a = seedMessage(env, "general", "A", 1000);
-    const b = seedMessage(env, "general", "B", 1000);
-    const c = seedMessage(env, "general", "C", 2000);
-    const d = seedMessage(env, "general", "D", 3000);
-    const e = seedMessage(env, "general", "E", 4000);
+    const a = await seedMessage(env, "general", "A", 1000);
+    const b = await seedMessage(env, "general", "B", 1000);
+    const c = await seedMessage(env, "general", "C", 2000);
+    const d = await seedMessage(env, "general", "D", 3000);
+    const e = await seedMessage(env, "general", "E", 4000);
 
     const page = async (before: number, limit: number) => {
       const res = await fetch(
@@ -427,7 +427,7 @@ describe("GET /api/messages", async () => {
   test("limit is clamped, before must be numeric, request must be authenticated", async () => {
     const env = await createWsEnv();
     const dana = await env.connect("dana", "human");
-    for (let i = 0; i < 105; i++) seedMessage(env, "clamped", `m-${i}`, i);
+    for (let i = 0; i < 105; i++) await seedMessage(env, "clamped", `m-${i}`, i);
 
     const get = (qs: string, token: string | null = dana.token) =>
       fetch(`${env.baseUrl}/api/messages?${qs}`, {

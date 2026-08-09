@@ -33,7 +33,7 @@ describe("message pinning", async () => {
     );
     assert.equal(unpinned.message.pinnedAt, undefined);
     assert.equal(unpinned.message.pinnedBy, undefined);
-    assert.equal(env.messages.list()[0].pinnedAt, undefined);
+    assert.equal((await env.messages.list())[0].pinnedAt, undefined);
 
     env.close();
   });
@@ -51,7 +51,7 @@ describe("message pinning", async () => {
     );
     const refusal = await agent.next((e) => e.type === "error");
     assert.equal(refusal.error, "human-only event");
-    assert.equal(env.messages.list()[0].pinnedAt, undefined);
+    assert.equal((await env.messages.list())[0].pinnedAt, undefined);
 
     env.close();
   });
