@@ -10,11 +10,26 @@ const fetchMock = vi.fn<typeof fetch>();
 // frame and records what the UI sends, so the real Workspace can boot.
 // `historySeed` lets individual tests plant chat history before boot (e.g. an
 // own message to edit); tests reset it in beforeEach.
-const { sent, historySeed, channelsSeed } = vi.hoisted(() => ({
+const { sent, historySeed, channelsSeed, authState } = vi.hoisted(() => ({
   sent: [] as Array<{ type: string; content?: string; replyToId?: string }>,
   historySeed: [] as unknown[],
   channelsSeed: ["general"] as string[],
+  // The Supabase auth boundary: null = signed out. Tests set this directly
+  // instead of seeding localStorage, since App.tsx now sources its session
+  // from supabase.auth.getSession()/onAuthStateChange, not stored tokens.
+  authState: { session: null as null | { access_token: string } },
 }));
+
+vi.mock("./lib/supabase", () => ({
+  supabase: {
+    auth: {
+      getSession: () => Promise.resolve({ data: { session: authState.session } }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+      signOut: () => Promise.resolve({ error: null }),
+    },
+  },
+}));
+
 vi.mock("./ws", () => {
   class WorkspaceSocket {
     private listeners = new Set<(event: unknown) => void>();
@@ -102,9 +117,9 @@ const jsonResponse = (status: number, body: unknown): Response =>
     json: () => Promise.resolve(body),
   }) as Response;
 
-// node's experimental localStorage global (undefined without a flag) shadows
-// jsdom's in this test process, so back it with a real in-memory Storage.
-const storageStub = (): Storage => {
+// jsdom's localStorage is shadowed by Node's experimental global in this
+// test process, and WorkspaceProvider/MessageInput still read/write it.
+const makeStorage = (): Storage => {
   const map = new Map<string, string>();
   return {
     getItem: (k) => map.get(k) ?? null,
@@ -121,8 +136,8 @@ const storageStub = (): Storage => {
 describe("App boot decision", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("localStorage", storageStub());
-    window.sessionStorage.clear();
+    vi.stubGlobal("localStorage", makeStorage());
+    authState.session = null;
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -131,7 +146,7 @@ describe("App boot decision", () => {
 
   it("no auth method configured shows the contact-support dead end", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(200, { googleClientId: null, emailAuthEnabled: false }),
+      jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: false }),
     );
 
     render(<App />);
@@ -146,7 +161,7 @@ describe("App boot decision", () => {
 
   it("auth mode shows the Google login screen instead", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(200, { googleClientId: "client-1.apps.googleusercontent.com" }),
+      jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }),
     );
 
     render(<App />);
@@ -154,13 +169,35 @@ describe("App boot decision", () => {
     expect(await screen.findByText("Sign in")).toBeInTheDocument();
     expect(screen.queryByText("Join the workspace")).not.toBeInTheDocument();
   });
+
+  it("a signed-in Supabase user without a username sees the username step", async () => {
+    authState.session = { access_token: "tok-1" };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }),
+    );
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { status: "needs_username" }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Pick a username")).toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/auth/session"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok-1",
+        }),
+      }),
+    );
+  });
 });
 
 describe("Workspace composer", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("localStorage", storageStub());
-    window.sessionStorage.clear();
+    vi.stubGlobal("localStorage", makeStorage());
     sent.length = 0;
     historySeed.length = 0;
     channelsSeed.length = 0;
@@ -174,12 +211,14 @@ describe("Workspace composer", () => {
 
   /** Boot straight into the chat view and hand back the composer textarea. */
   const bootWorkspace = async (): Promise<HTMLElement> => {
-    window.localStorage.setItem("authToken", "tok-1");
+    authState.session = { access_token: "tok-1" };
     fetchMock.mockImplementation((input) => {
-      if (String(input).includes("/api/auth/config")) {
-        return Promise.resolve(
-          jsonResponse(200, { googleClientId: null, emailAuthEnabled: true }),
-        );
+      const url = String(input);
+      if (url.includes("/api/auth/config")) {
+        return Promise.resolve(jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: true }));
+      }
+      if (url.includes("/api/auth/session")) {
+        return Promise.resolve(jsonResponse(200, { status: "ok" }));
       }
       // Board snapshot etc.: stay pending, irrelevant to these tests.
       return new Promise<Response>(() => {});
@@ -295,8 +334,7 @@ describe("Workspace composer", () => {
 describe("Workspace keyboard navigation", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("localStorage", storageStub());
-    window.sessionStorage.clear();
+    vi.stubGlobal("localStorage", makeStorage());
     sent.length = 0;
     historySeed.length = 0;
     channelsSeed.length = 0;
@@ -310,12 +348,14 @@ describe("Workspace keyboard navigation", () => {
 
   /** Boot straight into the chat view and hand back the composer textarea. */
   const bootWorkspace = async (): Promise<HTMLElement> => {
-    window.localStorage.setItem("authToken", "tok-1");
+    authState.session = { access_token: "tok-1" };
     fetchMock.mockImplementation((input) => {
-      if (String(input).includes("/api/auth/config")) {
-        return Promise.resolve(
-          jsonResponse(200, { googleClientId: null, emailAuthEnabled: true }),
-        );
+      const url = String(input);
+      if (url.includes("/api/auth/config")) {
+        return Promise.resolve(jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: true }));
+      }
+      if (url.includes("/api/auth/session")) {
+        return Promise.resolve(jsonResponse(200, { status: "ok" }));
       }
       return new Promise<Response>(() => {});
     });
