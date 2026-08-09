@@ -4,6 +4,8 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    # Only the agent's file/bash-tool sandbox lives here now — the database
+    # and uploads are both in Supabase, not on this volume.
     volumes:
       - ./data:/data
     restart: unless-stopped

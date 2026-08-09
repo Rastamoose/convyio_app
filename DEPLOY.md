@@ -8,21 +8,26 @@ derives `welcome.apiUrl` per connection from the `Host` /
 
 ## Environment
 
-| Variable           | Used by | Default                    | Meaning                                                                 |
-| ------------------ | ------- | -------------------------- | ----------------------------------------------------------------------- |
-| `PORT`             | server  | `3001`                     | HTTP + websocket port.                                                  |
-| `DATA_DIR`         | server  | `./data` (`/data` in image)| Everything persistent: `board.db`, `workspace/`, `uploads/`, `agents/`. |
-| `GEMINI_API_KEY`   | agent   | —                          | Enables the agent when `AGENT_PROVIDER=gemini` (the default); unset = no agent starts under that provider. Not needed for `AGENT_PROVIDER=claude`. |
-| `AGENT_NAME`       | agent   | `noodle`                   | The agent's display name.                                               |
-| `AGENT_MODEL`      | agent   | `gemini-2.5-flash`         | Model id — Gemini model for the gemini provider, `claude-sonnet-5` default for the claude provider. |
-| `AGENT_PROVIDER`   | agent   | `gemini`                   | `gemini` or `claude`. `claude` needs no API key but does need a `claude login` session — see below. |
-| `CLAUDE_WORKDIR`   | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
-| `GOOGLE_CLIENT_ID` | server  | — (sign-in unavailable)    | Set = Google Sign-In offered to humans.                                 |
-| `EMAIL_AUTH`       | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
-| `AGENT_TOKEN`      | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
-| `CLIENT_DIST`      | server  | `packages/client/dist`     | Where the built client lives; absent = API only (dev).                  |
-| `CORS_ORIGIN`      | server  | `http://localhost:5173`    | Dev-only: the Vite origin allowed to call the API cross-origin.         |
-| `VITE_WS_URL`      | client  | —                          | Dev-only build override; production derives from `window.location`.     |
+| Variable                    | Used by | Default                    | Meaning                                                                 |
+| ---------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------ |
+| `PORT`                      | server  | `3001`                     | HTTP + websocket port.                                                  |
+| `DATA_DIR`                  | server  | `./data` (`/data` in image)| Agent file/bash-tool sandbox only (`Toolman`) — the database and uploads live in Supabase, not here. |
+| `SUPABASE_URL`              | server  | — (required)                | Supabase project URL.                                                    |
+| `SUPABASE_SECRET_KEY`       | server  | — (required)                | Secret (service-role) key: verifies user JWTs and reads/writes Storage server-side. Never expose to the client. |
+| `SUPABASE_DB_URL`           | server  | — (required)                | Postgres connection string (Supabase project settings → Database).      |
+| `VITE_SUPABASE_URL`         | client  | — (required)                | Same project URL, exposed to the browser bundle.                        |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | client  | — (required)            | Supabase publishable (public) key — safe to expose, used for browser sign-in. |
+| `GEMINI_API_KEY`            | agent   | —                          | Enables the agent when `AGENT_PROVIDER=gemini` (the default); unset = no agent starts under that provider. Not needed for `AGENT_PROVIDER=claude`. |
+| `AGENT_NAME`                | agent   | `noodle`                   | The agent's display name.                                               |
+| `AGENT_MODEL`               | agent   | `gemini-2.5-flash`         | Model id — Gemini model for the gemini provider, `claude-sonnet-5` default for the claude provider. |
+| `AGENT_PROVIDER`            | agent   | `gemini`                   | `gemini` or `claude`. `claude` needs no API key but does need a `claude login` session — see below. |
+| `CLAUDE_WORKDIR`            | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
+| `GOOGLE_AUTH_ENABLED`       | server  | — (sign-in unavailable)    | Set to `1` = Google Sign-In offered to humans. The OAuth client itself is configured in the Supabase dashboard, not here — see "Google Sign-In" below. |
+| `EMAIL_AUTH`                | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither this nor `GOOGLE_AUTH_ENABLED` set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
+| `AGENT_TOKEN`               | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
+| `CLIENT_DIST`               | server  | `packages/client/dist`     | Where the built client lives; absent = API only (dev).                  |
+| `CORS_ORIGIN`               | server  | `http://localhost:5173`    | Dev-only: the Vite origin allowed to call the API cross-origin.         |
+| `VITE_WS_URL`               | client  | —                          | Dev-only build override; production derives from `window.location`.     |
 
 ## Quick start — Docker
 
@@ -43,7 +48,7 @@ Health: `curl http://localhost:3001/api/health` → `{"ok":true}`.
 
 ## Quick start — bare metal
 
-Node 23.4+ (`node:sqlite` unflagged; Node 22 needs `--experimental-sqlite`).
+Node 20+ (no SQLite version constraint anymore — the database is Supabase Postgres).
 
 ```sh
 npm ci
@@ -103,18 +108,32 @@ location / {
 }
 ```
 
+## Supabase setup
+
+1. Create a project at [supabase.com](https://supabase.com) (the free tier is enough for this app's scale).
+2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or `psql "$SUPABASE_DB_URL" -f supabase/migrations/20260809120000_init.sql`), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
+3. Copy the project's URL and keys (Project Settings → API) into `.env`: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `VITE_SUPABASE_URL` (same as `SUPABASE_URL`), `VITE_SUPABASE_PUBLISHABLE_KEY` (same as `SUPABASE_PUBLISHABLE_KEY`); copy the Postgres connection string (Project Settings → Database → Connection string → URI) into `SUPABASE_DB_URL`.
+4. In Authentication → Providers, enable Email (for `EMAIL_AUTH=1`) and/or Google (for `GOOGLE_AUTH_ENABLED=1` — see "Google Sign-In" below for the OAuth client setup Google itself requires).
+5. If email/password sign-in is enabled, decide whether Authentication → Settings → "Confirm email" should be on. This app's UI does not currently have a "check your email" step — leaving it off gives the same zero-friction signup the app had before this migration; turning it on will strand new signups on this app's UI until that flow is built.
+
 ## Google Sign-In
 
 1. Google Cloud Console → Credentials → Create OAuth client ID, type
    **Web application**.
 2. **Authorized JavaScript origins**: your exact production origin
    (`https://chat.example.com`), plus `http://localhost:5173` for dev.
-   **No redirect URIs** — the GIS button flow doesn't use them.
-3. Set `GOOGLE_CLIENT_ID` on the server (this flips it out of guest mode).
-4. Set `AGENT_TOKEN` to a long random secret (`openssl rand -hex 32`) shared
+3. **Authorized redirect URIs**: `https://<your-project-ref>.supabase.co/auth/v1/callback`
+   — unlike the old in-page Google button, sign-in now redirects through
+   Supabase's own callback, so this one URI covers every environment (dev
+   and production both redirect back through the same Supabase project).
+4. In the Supabase dashboard, Authentication → Providers → Google: paste
+   this OAuth client's Client ID and Client Secret, and enable the provider.
+5. Set `GOOGLE_AUTH_ENABLED=1` on the server (this only controls whether the
+   client shows the Google button — the provider itself is already enabled
+   by step 4).
+6. Set `AGENT_TOKEN` to a long random secret (`openssl rand -hex 32`) shared
    with the agent process — without it no agent can join an auth-enabled
    server. The container passes it to the agent automatically.
-5. GIS requires HTTPS in production (localhost is exempt).
 
 ## Quick public URL for testing
 
@@ -128,9 +147,11 @@ authorized JavaScript origins.
 
 ## Data
 
-- Everything lives in `DATA_DIR` — back up that directory and you have
-  backed up the workspace.
+- The database, auth, and uploaded files all live in Supabase — back up
+  through Supabase's own dashboard/CLI (`supabase db dump`), not this
+  container. `DATA_DIR` only holds the agent's file/bash-tool sandbox now.
 - Uploads are unauthenticated capability URLs (the unguessable UUID is the
-  secret, the Discord-CDN model — recorded in ARCHITECTURE.md). Anyone who
-  holds a link can fetch those bytes.
+  secret, the Discord-CDN model — recorded in ARCHITECTURE.md): the server
+  proxies them from a private Supabase Storage bucket using the secret
+  key, so the bucket itself is never exposed directly.
 - Known gap: no rate limiting yet.
