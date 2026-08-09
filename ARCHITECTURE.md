@@ -83,8 +83,13 @@ the wire protocol (websocket) and the HTTP board API.
 - `ProposalLifecycle` — reacts to board decisions (resume approved, drop
   denied, halt on delete) and restart-recovery sweep.
 - `Presence` — computes and broadcasts working/blocked/idle status.
-- `GeminiBrain` — the concrete LLM client (no interface: single
-  implementation by design; extract one when a second provider exists).
+- `Brain` (`brain.ts`) — the interface every LLM backend implements
+  (`run(input, callbacks, options) -> text`), plus the shared tool/prompt
+  shapes both backends use.
+- `GeminiBrain` — the Gemini implementation of `Brain`.
+- `ClaudeBrain` — the Claude implementation of `Brain`, via
+  `@anthropic-ai/claude-agent-sdk`; subscription-authenticated (`claude
+  login`), no API key path.
 - `BoardClient` — the agent's view of the board over the HTTP API.
 - `Memory` / `PendingWork` — rolling transcript / stashed proposal work;
   static async factories so an uninitialized instance cannot exist.
@@ -93,7 +98,9 @@ the wire protocol (websocket) and the HTTP board API.
 
 - The board is a permission boundary. No agent write path may bypass
   `Toolman.execute`; tools not known to be read-only are treated as mutating
-  (fail closed).
+  (fail closed). Exception, tracked above: `ClaudeBrain`'s native Claude Code
+  tools (`AGENT_PROVIDER=claude`) currently bypass this — accepted MVP debt,
+  not the general rule.
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
 - Auth mode is a config switch, not a flag: GOOGLE_CLIENT_ID and/or
@@ -151,3 +158,17 @@ the wire protocol (websocket) and the HTTP board API.
   boot-time URL breaks behind any real domain or reverse proxy. Consequence:
   the server trusts those headers to name its public origin, so a proxy in
   front must set them (see DEPLOY.md).
+- 2026-08-09 — `ClaudeBrain` authenticates exclusively via a pre-logged-in
+  `claude` CLI subprocess (subscription auth, `claude login`), deliberately
+  with no `ANTHROPIC_API_KEY` fallback. Consequence: every host running the
+  agent with `AGENT_PROVIDER=claude` needs a one-time interactive login;
+  headless/CI deploys of this provider aren't possible until that changes.
+- 2026-08-09 — `ClaudeBrain` leaves Claude Code's native tools (Bash, Write,
+  Edit, ...) enabled ungated, alongside the existing board tools. This
+  bypasses the invariant below ("no agent write paths bypass Toolman") for
+  the claude provider specifically — accepted as MVP debt. Consequence: with
+  `AGENT_PROVIDER=claude`, the board is not a complete permission boundary; a
+  human board approval is not required for Claude to write files or run
+  shell commands. Follow-up: route `ClaudeBrain`'s `canUseTool` callback
+  through the same board-approval flow `board_propose`/`write_file` already
+  use.

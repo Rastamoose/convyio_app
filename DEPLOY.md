@@ -15,6 +15,8 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | `GEMINI_API_KEY`   | agent   | —                          | Enables the agent; unset = no agent starts.                             |
 | `AGENT_NAME`       | agent   | `noodle`                   | The agent's display name.                                               |
 | `AGENT_MODEL`      | agent   | `gemini-2.5-flash`         | Gemini model id.                                                        |
+| `AGENT_PROVIDER`   | agent   | `gemini`                   | `gemini` or `claude`. `claude` needs no API key but does need a `claude login` session — see below. |
+| `CLAUDE_WORKDIR`   | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
 | `GOOGLE_CLIENT_ID` | server  | — (sign-in unavailable)    | Set = Google Sign-In offered to humans.                                 |
 | `EMAIL_AUTH`       | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
 | `AGENT_TOKEN`      | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
@@ -52,6 +54,27 @@ GEMINI_API_KEY=... WS_URL=ws://localhost:3001 npx tsx packages/agent/src/index.t
 ```
 
 The server logs `[static] serving client from …` when it found the build.
+
+## Claude provider (subscription auth)
+
+Setting `AGENT_PROVIDER=claude` runs the agent against
+`@anthropic-ai/claude-agent-sdk` instead of Gemini. It authenticates via a
+Claude Pro/Max subscription, not an API key — there is no
+`ANTHROPIC_API_KEY` path. The SDK bundles its own `claude` CLI binary (no
+separate install needed), but that binary's credential store must hold a
+session from an interactive `claude login`, run once on whatever host
+executes `packages/agent`.
+
+- **Bare metal**: run `claude login` once on the machine before starting the
+  agent process.
+- **Docker**: the container is otherwise stateless, so the CLI's credential
+  directory needs its own mounted volume (the same pattern as `-v
+  "$PWD/data:/data"` for `DATA_DIR`) so a login survives container restarts —
+  not automated by the current Dockerfile/compose setup.
+
+Also known gap, tracked in `ARCHITECTURE.md`: with this provider, Claude
+Code's native Bash/Write/Edit tools run ungated alongside the board tools,
+so a board approval is not required for every mutation the agent can make.
 
 ## Reverse proxy + TLS
 

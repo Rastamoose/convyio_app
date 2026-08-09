@@ -16,8 +16,10 @@ npm install
 npm run dev   # server ws+http on :3001, client on :5173, agent
 ```
 
-Set `GEMINI_API_KEY` in `.env` for the agent. Env overrides: `PORT`,
-`CORS_ORIGIN`, `DATA_DIR` (server), `WS_URL` (agent), `VITE_WS_URL` (client).
+Set `GEMINI_API_KEY` in `.env` for the agent (default provider), or set
+`AGENT_PROVIDER=claude` to run it against a Claude subscription instead — see
+`DEPLOY.md` for what that requires. Env overrides: `PORT`, `CORS_ORIGIN`,
+`DATA_DIR` (server), `WS_URL` (agent), `VITE_WS_URL` (client).
 
 In production the server serves the built client itself — one origin for
 page, API, and websocket (`npm run build -w @workspace/client`, then the
