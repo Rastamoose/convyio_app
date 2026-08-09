@@ -8,7 +8,7 @@ import type {
   BoardItemEvent,
   ItemStatus,
 } from "@workspace/shared";
-import type { WorkspaceDb } from "../db";
+import type { Sql, WorkspaceDb } from "../db";
 import { validateScopePaths } from "./scope";
 
 export class ApiError extends Error {
@@ -20,6 +20,15 @@ export class ApiError extends Error {
     super(message);
   }
 }
+
+const selectItem = (sql: Sql) => sql`
+  SELECT i.*, c.display_name AS created_by_name, a.display_name AS approved_by_name,
+         o.display_name AS owner_name
+  FROM board_items i
+  JOIN actors c ON c.id = i.created_by
+  LEFT JOIN actors a ON a.id = i.approved_by
+  LEFT JOIN actors o ON o.id = i.owner
+`;
 
 /**
  * All board state changes flow through here. Each transition mutates
@@ -36,62 +45,62 @@ export class BoardService {
   // Queries
   // -------------------------------------------------------------------------
 
-  list(
+  async list(
     serverId: string,
     opts: { status?: ItemStatus; includeDeleted?: boolean } = {},
-  ): BoardItem[] {
-    const clauses = ["i.server_id = ?"];
-    const params: (string | number)[] = [serverId];
-    if (opts.status) {
-      clauses.push("i.status = ?");
-      params.push(opts.status);
-    } else if (!opts.includeDeleted) {
+  ): Promise<BoardItem[]> {
+    const sql = this.store.sql;
+    const statusFilter = opts.status
+      ? sql`AND i.status = ${opts.status}`
       // Default view excludes denied alongside deleted.
-      clauses.push("i.status != 'denied'");
-    }
-    if (!opts.includeDeleted) clauses.push("i.deleted_at IS NULL");
-    const rows = this.store.db
-      .prepare(`${SELECT_ITEM} WHERE ${clauses.join(" AND ")} ORDER BY i.created_at DESC`)
-      .all(...params) as unknown as ItemRow[];
+      : opts.includeDeleted
+        ? sql``
+        : sql`AND i.status != 'denied'`;
+    const deletedFilter = opts.includeDeleted ? sql`` : sql`AND i.deleted_at IS NULL`;
+    const rows = await sql<ItemRow[]>`
+      ${selectItem(sql)}
+      WHERE i.server_id = ${serverId} ${statusFilter} ${deletedFilter}
+      ORDER BY i.created_at DESC
+    `;
     return rows.map(toItem);
   }
 
   /** Look up by uuid or ref within a server. Includes deleted rows. */
-  find(serverId: string, idOrRef: string): BoardItem | null {
-    const row = this.store.db
-      .prepare(`${SELECT_ITEM} WHERE i.server_id = ? AND (i.id = ? OR i.ref = ?)`)
-      .get(serverId, idOrRef, idOrRef) as ItemRow | undefined;
-    return row ? toItem(row) : null;
+  async find(serverId: string, idOrRef: string): Promise<BoardItem | null> {
+    const sql = this.store.sql;
+    const rows = await sql<ItemRow[]>`
+      ${selectItem(sql)} WHERE i.server_id = ${serverId} AND (i.id = ${idOrRef} OR i.ref = ${idOrRef})
+    `;
+    return rows[0] ? toItem(rows[0]) : null;
   }
 
   /** Cross-server lookup used by authz to distinguish WRONG_SERVER. */
-  findAnywhere(idOrRef: string): BoardItem | null {
-    const row = this.store.db
-      .prepare(`${SELECT_ITEM} WHERE i.id = ? OR i.ref = ?`)
-      .get(idOrRef, idOrRef) as ItemRow | undefined;
-    return row ? toItem(row) : null;
+  async findAnywhere(idOrRef: string): Promise<BoardItem | null> {
+    const sql = this.store.sql;
+    const rows = await sql<ItemRow[]>`${selectItem(sql)} WHERE i.id = ${idOrRef} OR i.ref = ${idOrRef}`;
+    return rows[0] ? toItem(rows[0]) : null;
   }
 
   /** An item's audit trail, oldest first (the events table is append-only). */
-  events(serverId: string, idOrRef: string): BoardItemEvent[] {
-    const item = this.find(serverId, idOrRef);
+  async events(serverId: string, idOrRef: string): Promise<BoardItemEvent[]> {
+    const item = await this.find(serverId, idOrRef);
     if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", `no board item ${idOrRef}`);
-    const rows = this.store.db
-      .prepare(
-        `SELECT e.id, e.type, e.actor_id, e.payload, e.created_at,
-                a.display_name AS actor_name, a.kind AS actor_kind
-         FROM board_events e JOIN actors a ON a.id = e.actor_id
-         WHERE e.item_id = ? ORDER BY e.id ASC`,
-      )
-      .all(item.id) as unknown as {
-      id: number;
-      type: BoardItemEvent["type"];
-      actor_id: string;
-      payload: string;
-      created_at: number;
-      actor_name: string;
-      actor_kind: BoardItemEvent["actorKind"];
-    }[];
+    const rows = await this.store.sql<
+      {
+        id: number;
+        type: BoardItemEvent["type"];
+        actor_id: string;
+        payload: string;
+        created_at: number;
+        actor_name: string;
+        actor_kind: BoardItemEvent["actorKind"];
+      }[]
+    >`
+      SELECT e.id, e.type, e.actor_id, e.payload, e.created_at,
+             a.display_name AS actor_name, a.kind AS actor_kind
+      FROM board_events e JOIN actors a ON a.id = e.actor_id
+      WHERE e.item_id = ${item.id} ORDER BY e.id ASC
+    `;
     return rows.map((r) => ({
       id: r.id,
       type: r.type,
@@ -108,7 +117,7 @@ export class BoardService {
   // -------------------------------------------------------------------------
 
   /** Human create (approved by construction) or agent proposal (I2). */
-  create(
+  async create(
     actor: Actor,
     input: {
       title: string;
@@ -117,7 +126,7 @@ export class BoardService {
       effect?: string;
       scopePaths?: string[];
     },
-  ): BoardItem {
+  ): Promise<BoardItem> {
     const human = actor.kind === "human";
     if (!human && (!input.why || !input.effect)) {
       throw new ApiError(400, "PROPOSAL_FIELDS_REQUIRED", "agent proposals require why and effect");
@@ -130,109 +139,99 @@ export class BoardService {
     const scopePaths = this.normalizedScope(input.scopePaths);
     const now = Date.now();
     const id = randomUUID();
-    return this.mutate(actor, human ? "item.created" : "item.proposed", () => {
-      const ref = this.store.nextRef(actor.serverId);
-      this.store.db
-        .prepare(
-          `INSERT INTO board_items
-             (id, server_id, ref, title, description, status, origin, created_by,
-              approved_by, owner, proposal_why, proposal_effect, scope_paths,
-              created_at, approved_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    return this.mutate(actor, human ? "item.created" : "item.proposed", async (sql) => {
+      const ref = await this.store.nextRef(sql, actor.serverId);
+      await sql`
+        INSERT INTO board_items
+          (id, server_id, ref, title, description, status, origin, created_by,
+           approved_by, owner, proposal_why, proposal_effect, scope_paths,
+           created_at, approved_at)
+        VALUES (
+          ${id}, ${actor.serverId}, ${ref}, ${input.title}, ${input.description ?? null},
+          ${human ? "approved" : "proposed"}, ${actor.kind}, ${actor.id},
+          ${human ? actor.id : null}, ${null},
+          ${human ? null : input.why!}, ${human ? null : input.effect!},
+          ${scopePaths ? JSON.stringify(scopePaths) : null},
+          ${now}, ${human ? now : null}
         )
-        .run(
-          id,
-          actor.serverId,
-          ref,
-          input.title,
-          input.description ?? null,
-          human ? "approved" : "proposed",
-          actor.kind,
-          actor.id,
-          human ? actor.id : null,
-          null,
-          human ? null : input.why!,
-          human ? null : input.effect!,
-          scopePaths ? JSON.stringify(scopePaths) : null,
-          now,
-          human ? now : null,
-        );
+      `;
       return id;
     });
   }
 
-  approve(actor: Actor, idOrRef: string): BoardItem {
+  async approve(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "AGENT_CANNOT_APPROVE");
-    const item = this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["proposed"]);
-    return this.mutate(actor, "item.approved", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'approved', approved_by = ?, approved_at = ? WHERE id = ?`)
-        .run(actor.id, Date.now(), item.id);
+    return this.mutate(actor, "item.approved", async (sql) => {
+      await sql`
+        UPDATE board_items SET status = 'approved', approved_by = ${actor.id}, approved_at = ${Date.now()}
+        WHERE id = ${item.id}
+      `;
       return item.id;
     });
   }
 
-  deny(actor: Actor, idOrRef: string, reason?: string): BoardItem {
+  async deny(actor: Actor, idOrRef: string, reason?: string): Promise<BoardItem> {
     this.assertHuman(actor, "AGENT_CANNOT_APPROVE");
-    const item = this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["proposed"]);
-    return this.mutate(actor, "item.denied", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'denied' WHERE id = ?`)
-        .run(item.id);
-      return item.id;
-    }, reason ? { reason } : {});
+    return this.mutate(
+      actor,
+      "item.denied",
+      async (sql) => {
+        await sql`UPDATE board_items SET status = 'denied' WHERE id = ${item.id}`;
+        return item.id;
+      },
+      reason ? { reason } : {},
+    );
   }
 
-  start(actor: Actor, idOrRef: string): BoardItem {
-    const item = this.mustFind(actor.serverId, idOrRef);
+  async start(actor: Actor, idOrRef: string): Promise<BoardItem> {
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["approved"]);
-    return this.mutate(actor, "item.started", () => {
-      this.store.db
-        .prepare(
-          `UPDATE board_items SET status = 'in_progress', started_at = ?,
-             owner = COALESCE(owner, ?) WHERE id = ?`,
-        )
-        .run(Date.now(), actor.id, item.id);
+    return this.mutate(actor, "item.started", async (sql) => {
+      await sql`
+        UPDATE board_items SET status = 'in_progress', started_at = ${Date.now()},
+          owner = COALESCE(owner, ${actor.id}) WHERE id = ${item.id}
+      `;
       return item.id;
     });
   }
 
-  complete(actor: Actor, idOrRef: string): BoardItem {
-    const item = this.mustFind(actor.serverId, idOrRef);
+  async complete(actor: Actor, idOrRef: string): Promise<BoardItem> {
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["in_progress", "blocked"]);
-    return this.mutate(actor, "item.completed", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'done', completed_at = ? WHERE id = ?`)
-        .run(Date.now(), item.id);
+    return this.mutate(actor, "item.completed", async (sql) => {
+      await sql`UPDATE board_items SET status = 'done', completed_at = ${Date.now()} WHERE id = ${item.id}`;
       return item.id;
     });
   }
 
-  block(actor: Actor, idOrRef: string, reason: string): BoardItem {
-    const item = this.mustFind(actor.serverId, idOrRef);
+  async block(actor: Actor, idOrRef: string, reason: string): Promise<BoardItem> {
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["in_progress"]);
-    return this.mutate(actor, "item.blocked", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'blocked' WHERE id = ?`)
-        .run(item.id);
-      return item.id;
-    }, { reason });
+    return this.mutate(
+      actor,
+      "item.blocked",
+      async (sql) => {
+        await sql`UPDATE board_items SET status = 'blocked' WHERE id = ${item.id}`;
+        return item.id;
+      },
+      { reason },
+    );
   }
 
-  unblock(actor: Actor, idOrRef: string): BoardItem {
-    const item = this.mustFind(actor.serverId, idOrRef);
+  async unblock(actor: Actor, idOrRef: string): Promise<BoardItem> {
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["blocked"]);
-    return this.mutate(actor, "item.unblocked", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'in_progress' WHERE id = ?`)
-        .run(item.id);
+    return this.mutate(actor, "item.unblocked", async (sql) => {
+      await sql`UPDATE board_items SET status = 'in_progress' WHERE id = ${item.id}`;
       return item.id;
     });
   }
 
-  edit(
+  async edit(
     actor: Actor,
     idOrRef: string,
     fields: {
@@ -241,11 +240,11 @@ export class BoardService {
       owner?: string | null;
       scopePaths?: string[] | null;
     },
-  ): BoardItem {
+  ): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.serverId, idOrRef);
     if (fields.owner != null) {
-      const owner = this.store.getActor(fields.owner);
+      const owner = await this.store.getActor(fields.owner);
       if (!owner || owner.serverId !== actor.serverId) {
         throw new ApiError(400, "OWNER_NOT_FOUND", "owner must be an actor on this server");
       }
@@ -253,7 +252,7 @@ export class BoardService {
     const scopePaths =
       fields.scopePaths === undefined
         ? undefined
-        : this.normalizedScope(fields.scopePaths ?? undefined) ?? null;
+        : (this.normalizedScope(fields.scopePaths ?? undefined) ?? null);
     const changed: Record<string, { from: unknown; to: unknown }> = {};
     for (const key of ["title", "description", "owner"] as const) {
       if (fields[key] !== undefined && fields[key] !== item[key]) {
@@ -264,47 +263,45 @@ export class BoardService {
       changed.scopePaths = { from: item.scopePaths, to: scopePaths };
     }
     if (Object.keys(changed).length === 0) return item;
-    return this.mutate(actor, "item.edited", () => {
-      this.store.db
-        .prepare(
-          `UPDATE board_items SET
-             title = ?, description = ?, owner = ?, scope_paths = ?
-           WHERE id = ?`,
-        )
-        .run(
-          fields.title !== undefined ? fields.title : item.title,
-          fields.description !== undefined ? fields.description : item.description,
-          fields.owner !== undefined ? fields.owner : item.owner,
-          scopePaths !== undefined
-            ? scopePaths && JSON.stringify(scopePaths)
-            : item.scopePaths && JSON.stringify(item.scopePaths),
-          item.id,
-        );
-      return item.id;
-    }, { changed });
+    return this.mutate(
+      actor,
+      "item.edited",
+      async (sql) => {
+        await sql`
+          UPDATE board_items SET
+            title = ${fields.title !== undefined ? fields.title : item.title},
+            description = ${fields.description !== undefined ? fields.description : item.description},
+            owner = ${fields.owner !== undefined ? fields.owner : item.owner},
+            scope_paths = ${
+              scopePaths !== undefined
+                ? scopePaths && JSON.stringify(scopePaths)
+                : item.scopePaths && JSON.stringify(item.scopePaths)
+            }
+          WHERE id = ${item.id}
+        `;
+        return item.id;
+      },
+      { changed },
+    );
   }
 
   /** Soft delete. Halts in-progress work: authz fails afterwards (I4). */
-  softDelete(actor: Actor, idOrRef: string): BoardItem {
+  async softDelete(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.serverId, idOrRef);
     if (item.deletedAt) throw new ApiError(409, "ALREADY_DELETED", `${item.ref} is already deleted`);
-    return this.mutate(actor, "item.deleted", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET deleted_at = ? WHERE id = ?`)
-        .run(Date.now(), item.id);
+    return this.mutate(actor, "item.deleted", async (sql) => {
+      await sql`UPDATE board_items SET deleted_at = ${Date.now()} WHERE id = ${item.id}`;
       return item.id;
     });
   }
 
-  reopen(actor: Actor, idOrRef: string): BoardItem {
+  async reopen(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.serverId, idOrRef);
     this.assertStatus(item, ["done"]);
-    return this.mutate(actor, "item.reopened", () => {
-      this.store.db
-        .prepare(`UPDATE board_items SET status = 'approved', completed_at = NULL WHERE id = ?`)
-        .run(item.id);
+    return this.mutate(actor, "item.reopened", async (sql) => {
+      await sql`UPDATE board_items SET status = 'approved', completed_at = NULL WHERE id = ${item.id}`;
       return item.id;
     });
   }
@@ -315,25 +312,25 @@ export class BoardService {
 
   /**
    * Run a mutation and its audit row in one transaction (I5), then fan out
-   * the envelope after commit.
+   * the envelope after commit. `apply` receives the transaction's own `sql`
+   * — every query inside it (including a nested `nextRef` call) must use
+   * that `sql`, not `this.store.sql`, to stay inside the same transaction.
    */
-  private mutate(
+  private async mutate(
     actor: Actor,
     type: BoardEventType,
-    apply: () => string,
+    apply: (sql: Sql) => Promise<string>,
     payload: BoardEventPayload = {},
-  ): BoardItem {
-    const itemId = this.store.transaction(() => {
-      const id = apply();
-      this.store.db
-        .prepare(
-          `INSERT INTO board_events (server_id, item_id, type, actor_id, payload, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(actor.serverId, id, type, actor.id, JSON.stringify(payload), Date.now());
+  ): Promise<BoardItem> {
+    const itemId = await this.store.transaction(async (sql) => {
+      const id = await apply(sql);
+      await sql`
+        INSERT INTO board_events (server_id, item_id, type, actor_id, payload, created_at)
+        VALUES (${actor.serverId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${Date.now()})
+      `;
       return id;
     });
-    const item = this.find(actor.serverId, itemId)!;
+    const item = (await this.find(actor.serverId, itemId))!;
     this.onEvent?.({
       channel: "board",
       type,
@@ -354,8 +351,8 @@ export class BoardService {
     return result.paths;
   }
 
-  private mustFind(serverId: string, idOrRef: string): BoardItem {
-    const item = this.find(serverId, idOrRef);
+  private async mustFind(serverId: string, idOrRef: string): Promise<BoardItem> {
+    const item = await this.find(serverId, idOrRef);
     if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", `no board item ${idOrRef}`);
     if (item.deletedAt) throw new ApiError(409, "ITEM_DELETED", `${item.ref} is deleted`);
     return item;
@@ -378,14 +375,6 @@ export class BoardService {
     }
   }
 }
-
-const SELECT_ITEM = `
-  SELECT i.*, c.display_name AS created_by_name, a.display_name AS approved_by_name,
-         o.display_name AS owner_name
-  FROM board_items i
-  JOIN actors c ON c.id = i.created_by
-  LEFT JOIN actors a ON a.id = i.approved_by
-  LEFT JOIN actors o ON o.id = i.owner`;
 
 interface ItemRow {
   id: string;

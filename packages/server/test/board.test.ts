@@ -74,18 +74,18 @@ describe("board invariants", async () => {
   });
 
   test("T5: mutating action against proposed/denied/done → ITEM_NOT_WORKABLE", async () => {
-    const proposed = env.service.create(agent.actor, PROPOSAL);
+    const proposed = await env.service.create(agent.actor, PROPOSAL);
     for (const setup of [
-      () => proposed,
-      () => env.service.deny(human.actor, proposed.id),
-      () => {
-        const item = env.service.create(agent.actor, PROPOSAL);
-        env.service.approve(human.actor, item.id);
-        env.service.start(agent.actor, item.id);
-        return env.service.complete(agent.actor, item.id);
+      async () => proposed,
+      async () => await env.service.deny(human.actor, proposed.id),
+      async () => {
+        const item = await env.service.create(agent.actor, PROPOSAL);
+        await env.service.approve(human.actor, item.id);
+        await env.service.start(agent.actor, item.id);
+        return await env.service.complete(agent.actor, item.id);
       },
     ]) {
-      const item = setup();
+      const item = await setup();
       const authz = authorizeMutation(
         agent.actor,
         item.ref,
@@ -98,10 +98,10 @@ describe("board invariants", async () => {
   });
 
   test("T6: mutating action against deleted item → ITEM_DELETED; item.deleted emitted", async () => {
-    const item = env.service.create(human.actor, { title: "doomed" });
-    env.service.start(agent.actor, item.id);
+    const item = await env.service.create(human.actor, { title: "doomed" });
+    await env.service.start(agent.actor, item.id);
     env.envelopes.length = 0;
-    env.service.softDelete(human.actor, item.id);
+    await env.service.softDelete(human.actor, item.id);
     assert.equal(env.envelopes.length, 1);
     assert.equal(env.envelopes[0].type, "item.deleted");
     const authz = authorizeMutation(
@@ -132,17 +132,17 @@ describe("board invariants", async () => {
         .prepare(`SELECT count(*) AS c FROM board_events WHERE item_id = ?`)
         .get(itemId) as { c: number }).c;
 
-    const item = env.service.create(agent.actor, PROPOSAL);
+    const item = await env.service.create(agent.actor, PROPOSAL);
     assert.equal(countEvents(item.id), 1);
-    env.service.approve(human.actor, item.id);
+    await env.service.approve(human.actor, item.id);
     assert.equal(countEvents(item.id), 2);
-    env.service.start(agent.actor, item.id);
+    await env.service.start(agent.actor, item.id);
     assert.equal(countEvents(item.id), 3);
-    env.service.block(agent.actor, item.id, "awaiting input");
+    await env.service.block(agent.actor, item.id, "awaiting input");
     assert.equal(countEvents(item.id), 4);
-    env.service.unblock(agent.actor, item.id);
+    await env.service.unblock(agent.actor, item.id);
     assert.equal(countEvents(item.id), 5);
-    env.service.complete(agent.actor, item.id);
+    await env.service.complete(agent.actor, item.id);
     assert.equal(countEvents(item.id), 6);
 
     // Rolled-back transaction: creating with an actor that violates the
@@ -150,13 +150,13 @@ describe("board invariants", async () => {
     const itemsBefore = (env.db.db.prepare(`SELECT count(*) AS c FROM board_items`).get() as { c: number }).c;
     const eventsBefore = (env.db.db.prepare(`SELECT count(*) AS c FROM board_events`).get() as { c: number }).c;
     const ghost: Actor = { id: randomUUID(), kind: "human", displayName: "ghost", serverId: env.db.serverId };
-    assert.throws(() => env.service.create(ghost, { title: "never lands" }));
+    await assert.rejects(() => env.service.create(ghost, { title: "never lands" }));
     assert.equal((env.db.db.prepare(`SELECT count(*) AS c FROM board_items`).get() as { c: number }).c, itemsBefore);
     assert.equal((env.db.db.prepare(`SELECT count(*) AS c FROM board_events`).get() as { c: number }).c, eventsBefore);
   });
 
   test("T11: concurrent creation produces unique sequential refs", async () => {
-    const before = env.service.list(env.db.serverId, { includeDeleted: true }).length;
+    const before = (await env.service.list(env.db.serverId, { includeDeleted: true })).length;
     const results = await Promise.all(
       Array.from({ length: 10 }, (_, i) =>
         env.api("POST", "/api/board/items", human.token, { title: `parallel ${i}` }),
@@ -169,7 +169,7 @@ describe("board invariants", async () => {
       assert.equal(numbers[i], numbers[i - 1] + 1);
     }
     assert.equal(
-      env.service.list(env.db.serverId, { includeDeleted: true }).length,
+      (await env.service.list(env.db.serverId, { includeDeleted: true })).length,
       before + 10,
     );
   });
@@ -199,11 +199,11 @@ describe("board invariants", async () => {
   });
 
   test("list defaults exclude denied and deleted", async () => {
-    const item = env.service.create(agent.actor, PROPOSAL);
-    env.service.deny(human.actor, item.id);
-    const listed = env.service.list(env.db.serverId);
+    const item = await env.service.create(agent.actor, PROPOSAL);
+    await env.service.deny(human.actor, item.id);
+    const listed = await env.service.list(env.db.serverId);
     assert.ok(!listed.some((i) => i.id === item.id));
-    const all = env.service.list(env.db.serverId, { includeDeleted: true });
+    const all = await env.service.list(env.db.serverId, { includeDeleted: true });
     assert.ok(all.some((i) => i.id === item.id));
   });
 
