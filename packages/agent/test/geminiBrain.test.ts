@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { Part } from "@google/genai";
-import { GeminiBrain, type BrainCallbacks } from "../src/geminiBrain";
+import { GeminiBrain } from "../src/geminiBrain";
+import type { BrainCallbacks } from "../src/brain";
 
 // GoogleGenAI is the brain's network boundary; the stub below stands in for
 // it and records the request the brain assembles. The fake key never leaves
