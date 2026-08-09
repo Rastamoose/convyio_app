@@ -77,10 +77,17 @@ auth is entirely the pre-authenticated `claude` CLI's job (see §3).
 
 Wraps `query()` from `@anthropic-ai/claude-agent-sdk`. Per `run()` call:
 
-- **Auth**: none configured by us. `query()` shells out to the `claude` CLI
-  on `PATH`; that CLI must already be authenticated via an interactive
-  `claude login` on the host running the agent process. There is no
-  `ANTHROPIC_API_KEY` fallback path — a deliberate choice (see Decisions).
+- **Auth**: none configured by us. Correction from the design discussion —
+  the SDK is not a thin wrapper around a separately-installed global CLI; it
+  ships a native `claude` binary per platform as an optional dependency
+  (`@anthropic-ai/claude-agent-sdk-linux-x64` etc., confirmed from the
+  package's own README this session), resolved automatically by `query()`.
+  So `npm install` alone is enough to get the binary — no separate
+  `npm install -g @anthropic-ai/claude-code` step. What's still required:
+  that binary's credential store must hold a session from an interactive
+  `claude login`, run once on the host before the agent process starts.
+  There is no `ANTHROPIC_API_KEY` fallback path — a deliberate choice (see
+  Decisions).
 - **Tools — board tools**: `TOOL_DECLARATIONS` (from `tools.ts`) are bridged
   into an in-process MCP server via `createSdkMcpServer()` + `tool()` (zod
   schema per declaration — this is what pulls in the `zod ^4` peer dep),
