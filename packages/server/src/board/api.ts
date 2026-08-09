@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { Actor, ItemStatus } from "@workspace/shared";
@@ -29,22 +29,8 @@ const channelPatchBodySchema = z.object({
   pinned: z.boolean().optional(),
 });
 
-const googleLoginBodySchema = z.object({ credential: z.string().min(1) });
-// Bounds only; the real username/email/password rules (and their error
-// codes) live in Auth.
-const usernameBodySchema = z.object({
-  signupToken: z.string().min(1),
-  username: z.string().max(200),
-});
-const emailLoginBodySchema = z.object({
-  email: z.string().min(1).max(320),
-  password: z.string().min(1).max(200),
-});
-const emailSignupBodySchema = z.object({
-  email: z.string().min(1).max(320),
-  password: z.string().min(1).max(200),
-  username: z.string().max(200),
-});
+// Bounds only; the real username rules (and their error codes) live in Auth.
+const usernameBodySchema = z.object({ username: z.string().max(200) });
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
@@ -59,7 +45,7 @@ const statusValues: ItemStatus[] = ["proposed", "denied", "approved", "in_progre
 
 /** Present iff Google and/or email sign-in is configured. */
 export interface AuthGate {
-  googleClientId: string | null;
+  googleAuthEnabled: boolean;
   emailAuthEnabled: boolean;
   auth: Auth;
 }
@@ -103,9 +89,9 @@ export function createApiHandler(
         // Login endpoints are how a token is obtained, so they cannot demand one.
         await routeAuth(req, res, parts, authGate);
       } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
-        serveUpload(res, attachments, parts[2], method === "HEAD");
+        await serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
-        const actor = authenticate(req, db, sessions);
+        const actor = await authenticate(req, db, sessions);
         await route(req, res, parts, url, actor, service, db, messages, channels, attachments);
       }
     } catch (err) {
@@ -138,13 +124,13 @@ async function route(
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
-    return json(res, 200, { actors: db.listActors() });
+    return json(res, 200, { actors: await db.listActors() });
   }
 
   // POST /api/channels — any signed-in human can add a channel.
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
-    return json(res, 201, { channel: { name: channels.create(actor, body.name) } });
+    return json(res, 201, { channel: { name: await channels.create(actor, body.name) } });
   }
 
   // PATCH /api/channels/:name — rename and/or archive/pin, one field per call.
@@ -152,17 +138,17 @@ async function route(
     const name = decodeURIComponent(parts[2]);
     const body = channelPatchBodySchema.parse(await readBody(req));
     let current = name;
-    if (body.name !== undefined) current = channels.rename(actor, current, body.name);
-    if (body.archived !== undefined) channels.setArchived(actor, current, body.archived);
-    if (body.pinned !== undefined) channels.setPinned(actor, current, body.pinned);
+    if (body.name !== undefined) current = await channels.rename(actor, current, body.name);
+    if (body.archived !== undefined) await channels.setArchived(actor, current, body.archived);
+    if (body.pinned !== undefined) await channels.setPinned(actor, current, body.pinned);
     return json(res, 200, { channel: { name: current } });
   }
 
   // DELETE /api/channels/:name — also drops its message history.
   if (parts[1] === "channels" && parts.length === 3 && method === "DELETE") {
     const name = decodeURIComponent(parts[2]);
-    messages.clear(name);
-    channels.remove(actor, name);
+    await messages.clear(name);
+    await channels.remove(actor, name);
     return json(res, 200, { ok: true });
   }
 
@@ -178,14 +164,14 @@ async function route(
     if (!Number.isFinite(before)) {
       throw new ApiError(400, "BAD_BEFORE", "before must be a numeric timestamp");
     }
-    return json(res, 200, { messages: messages.olderPage(channel, before, historyLimit(url)) });
+    return json(res, 200, { messages: await messages.olderPage(channel, before, historyLimit(url)) });
   }
 
   // POST /api/uploads — raw binary body; metadata rides in headers because
   // multipart would mean a whole parser for no extra capability.
   if (parts[1] === "uploads" && parts.length === 2 && method === "POST") {
     const bytes = await readRawBody(req, MAX_ATTACHMENT_BYTES);
-    return json(res, 201, { attachment: attachments.save(actor, uploadMeta(req), bytes) });
+    return json(res, 201, { attachment: await attachments.save(actor, uploadMeta(req), bytes) });
   }
 
   if (parts[1] !== "board" || parts[2] !== "items") {
@@ -198,7 +184,7 @@ async function route(
     if (status && !statusValues.includes(status as ItemStatus)) {
       throw new ApiError(400, "BAD_STATUS", `status must be one of ${statusValues.join(", ")}`);
     }
-    const items = service.list(actor.serverId, {
+    const items = await service.list(actor.serverId, {
       status: (status as ItemStatus) ?? undefined,
       includeDeleted: url.searchParams.get("include_deleted") === "true",
     });
@@ -208,7 +194,7 @@ async function route(
   // POST /api/board/items
   if (parts.length === 3 && method === "POST") {
     const body = createBodySchema.parse(await readBody(req));
-    const item = service.create(actor, body);
+    const item = await service.create(actor, body);
     return json(res, 201, { item });
   }
 
@@ -219,40 +205,40 @@ async function route(
   if (parts.length === 4) {
     if (method === "PATCH") {
       const body = patchBodySchema.parse(await readBody(req));
-      return json(res, 200, { item: service.edit(actor, id, body) });
+      return json(res, 200, { item: await service.edit(actor, id, body) });
     }
     if (method === "DELETE") {
-      return json(res, 200, { item: service.softDelete(actor, id) });
+      return json(res, 200, { item: await service.softDelete(actor, id) });
     }
     throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
   }
 
   // GET /api/board/items/:id/events — the item's audit trail.
   if (parts.length === 5 && parts[4] === "events" && method === "GET") {
-    return json(res, 200, { events: service.events(actor.serverId, id) });
+    return json(res, 200, { events: await service.events(actor.serverId, id) });
   }
 
   // POST /api/board/items/:id/<action>
   if (parts.length === 5 && method === "POST") {
     switch (parts[4]) {
       case "approve":
-        return json(res, 200, { item: service.approve(actor, id) });
+        return json(res, 200, { item: await service.approve(actor, id) });
       case "deny": {
         const body = denyBodySchema.parse(await readBody(req));
-        return json(res, 200, { item: service.deny(actor, id, body.reason) });
+        return json(res, 200, { item: await service.deny(actor, id, body.reason) });
       }
       case "start":
-        return json(res, 200, { item: service.start(actor, id) });
+        return json(res, 200, { item: await service.start(actor, id) });
       case "complete":
-        return json(res, 200, { item: service.complete(actor, id) });
+        return json(res, 200, { item: await service.complete(actor, id) });
       case "block": {
         const body = blockBodySchema.parse(await readBody(req));
-        return json(res, 200, { item: service.block(actor, id, body.reason) });
+        return json(res, 200, { item: await service.block(actor, id, body.reason) });
       }
       case "unblock":
-        return json(res, 200, { item: service.unblock(actor, id) });
+        return json(res, 200, { item: await service.unblock(actor, id) });
       case "reopen":
-        return json(res, 200, { item: service.reopen(actor, id) });
+        return json(res, 200, { item: await service.reopen(actor, id) });
     }
   }
 
@@ -261,10 +247,10 @@ async function route(
 
 /**
  * /api/auth/*: the pre-token surface. `config` tells clients which modes the
- * server runs in; the POST routes only exist once at least one of Google or
- * email sign-in is configured (409 AUTH_DISABLED in guest mode), and each
- * provider-specific route further answers 409 if that particular provider
- * isn't enabled — Auth itself owns that check.
+ * server runs in. `session`/`username` both take the Supabase access token
+ * as a Bearer header — there is no other credential left on the server side,
+ * Supabase Auth issued it already — and re-verify it against Supabase on
+ * every call, same as the WS join gate (joinPolicy.ts) does.
  */
 async function routeAuth(
   req: IncomingMessage,
@@ -277,48 +263,32 @@ async function routeAuth(
 
   if (parts[2] === "config" && method === "GET") {
     return json(res, 200, {
-      googleClientId: authGate?.googleClientId ?? null,
+      googleAuthEnabled: authGate?.googleAuthEnabled ?? false,
       emailAuthEnabled: authGate?.emailAuthEnabled ?? false,
     });
   }
-  if (method !== "POST") throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
   if (!authGate) {
     throw new ApiError(409, "AUTH_DISABLED", "this server runs in guest mode");
   }
 
-  switch (parts[2]) {
-    case "google": {
-      const body = googleLoginBodySchema.parse(await readBody(req));
-      return json(res, 200, await authGate.auth.loginWithGoogle(body.credential));
-    }
-    case "username": {
-      const body = usernameBodySchema.parse(await readBody(req));
-      return json(res, 200, authGate.auth.completeSignup(body.signupToken, body.username));
-    }
-    case "email-login": {
-      const body = emailLoginBodySchema.parse(await readBody(req));
-      return json(res, 200, authGate.auth.loginWithEmail(body.email, body.password));
-    }
-    case "email-signup": {
-      const body = emailSignupBodySchema.parse(await readBody(req));
-      return json(
-        res,
-        200,
-        authGate.auth.signupWithEmail(body.email, body.password, body.username),
-      );
-    }
-    case "logout": {
-      authGate.auth.revoke(bearerToken(req) ?? "");
-      return void res.writeHead(204).end();
-    }
+  if (parts[2] === "session" && method === "GET") {
+    const jwt = bearerToken(req);
+    if (!jwt) throw new ApiError(401, "UNAUTHENTICATED", "missing bearer token");
+    return json(res, 200, await authGate.auth.session(jwt));
+  }
+  if (parts[2] === "username" && method === "POST") {
+    const jwt = bearerToken(req);
+    if (!jwt) throw new ApiError(401, "UNAUTHENTICATED", "missing bearer token");
+    const body = usernameBodySchema.parse(await readBody(req));
+    return json(res, 200, await authGate.auth.claimUsername(jwt, body.username));
   }
   throw new ApiError(404, "NOT_FOUND", "no such route");
 }
 
-function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions): Actor {
+async function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions): Promise<Actor> {
   const token = bearerToken(req);
   const actorId = token ? sessions.resolve(token) : null;
-  const actor = actorId ? db.getActor(actorId) : null;
+  const actor = actorId ? await db.getActor(actorId) : null;
   if (!actor) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
   return actor;
 }
@@ -329,15 +299,15 @@ function bearerToken(req: IncomingMessage): string | null {
 }
 
 /** GET/HEAD /api/uploads/:id/:name — the :name segment is URL aesthetics only. */
-function serveUpload(
+async function serveUpload(
   res: ServerResponse,
   attachments: Attachments,
   id: string,
   headOnly: boolean,
-): void {
-  const found = attachments.get(id);
+): Promise<void> {
+  const found = await attachments.get(id);
   if (!found) throw new ApiError(404, "NOT_FOUND", "no such upload");
-  const { attachment, filePath } = found;
+  const { attachment, blob } = found;
   res.writeHead(200, {
     "Content-Type": attachment.mime,
     "Content-Length": attachment.size,
@@ -346,8 +316,10 @@ function serveUpload(
     "Cache-Control": "private, max-age=31536000, immutable",
   });
   if (headOnly) return void res.end();
-  const stream = fs.createReadStream(filePath);
-  // Headers are already sent; a missing/unreadable file can only abort.
+  // blob.stream() is a web ReadableStream; Readable.fromWeb bridges it to
+  // the Node stream `res` needs to be piped into.
+  const stream = Readable.fromWeb(blob.stream() as Parameters<typeof Readable.fromWeb>[0]);
+  // Headers are already sent; a missing/unreadable object can only abort.
   stream.on("error", () => res.destroy());
   stream.pipe(res);
 }
