@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Attachment, BoardItem } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
-import type { GeminiBrain } from "./geminiBrain";
+import type { Brain } from "./brain";
 import type { Memory } from "./memory";
 import type { BoardClient } from "./boardClient";
 import type { PendingWork } from "./pendingWork";
@@ -35,7 +35,7 @@ export class AgentRunner {
 
   constructor(
     private socket: AgentSocket,
-    private brain: GeminiBrain,
+    private brain: Brain,
     private memory: Memory,
     private board: BoardClient,
     private pendingWork: PendingWork,

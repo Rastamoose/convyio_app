@@ -6,49 +6,17 @@ import {
   type Part,
   type Schema,
 } from "@google/genai";
+import {
+  MAX_TOOL_ROUNDS,
+  buildPromptText,
+  type Brain,
+  type BrainCallbacks,
+  type BrainInput,
+  type BrainRunOptions,
+  type ToolDeclaration,
+} from "./brain";
 
-const MAX_TOOL_ROUNDS = 12;
-
-export interface BrainCallbacks {
-  onThought(thought: string): void;
-  onText(text: string): void;
-}
-
-/** JSON-schema-shaped tool declaration, mapped to Gemini's format. */
-export interface ToolDeclaration {
-  name: string;
-  description: string;
-  parameters: {
-    type: "object";
-    properties: Record<
-      string,
-      { type: string; description?: string; items?: { type: string } }
-    >;
-    required?: string[];
-  };
-}
-
-export type ToolExecutor = (
-  name: string,
-  args: Record<string, unknown>,
-) => Promise<Record<string, unknown>>;
-
-export interface BrainInput {
-  system: string;
-  context: string;
-  prompt: string;
-  /** Images the triggering messages carried; data is base64-encoded bytes. */
-  images?: { mimeType: string; data: string }[];
-  tools?: ToolDeclaration[];
-}
-
-export interface BrainRunOptions {
-  signal?: AbortSignal;
-  /** Invoked for each tool call the model makes; result is fed back. */
-  onToolCall?: ToolExecutor;
-}
-
-export class GeminiBrain {
+export class GeminiBrain implements Brain {
   private ai: GoogleGenAI;
 
   constructor(
@@ -66,7 +34,7 @@ export class GeminiBrain {
         role: "user",
         parts: [
           ...(input.images ?? []).map((image): Part => ({ inlineData: image })),
-          { text: buildContents(input) },
+          { text: buildPromptText(input) },
         ],
       },
     ];
@@ -161,8 +129,4 @@ function typeFor(t: string): Type {
     default:
       return Type.STRING;
   }
-}
-
-function buildContents(input: BrainInput): string {
-  return `<context>\n${input.context}\n</context>\n\n${input.prompt}`;
 }

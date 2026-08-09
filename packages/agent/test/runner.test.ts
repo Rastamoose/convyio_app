@@ -7,7 +7,7 @@ import { PendingWork } from "../src/pendingWork";
 import { Presence } from "../src/presence";
 import type { AgentSocket } from "../src/socket";
 import type { BoardClient } from "../src/boardClient";
-import type { BrainInput, GeminiBrain } from "../src/geminiBrain";
+import type { Brain, BrainInput } from "../src/brain";
 import { tempDir, waitFor } from "./helpers";
 
 // The brain (Gemini) and socket (server) are the runner's network
@@ -36,7 +36,7 @@ describe("AgentRunner", () => {
         prompts.push(input.prompt);
         return `reply ${prompts.length}`;
       },
-    } as unknown as GeminiBrain;
+    } as unknown as Brain;
     const { socket, sent } = fakeSocket();
     const board = fakeBoard();
     const dir = await tempDir();
@@ -99,7 +99,7 @@ describe("AgentRunner attachments", () => {
         inputs.push(input);
         return "ok";
       },
-    } as unknown as GeminiBrain;
+    } as unknown as Brain;
     const { socket, sent } = fakeSocket();
     const dir = await tempDir();
     const runner = new AgentRunner(

@@ -1,5 +1,5 @@
 import type { BoardItem } from "@workspace/shared";
-import type { ToolDeclaration, ToolExecutor } from "./geminiBrain";
+import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
 export const TOOL_DECLARATIONS: ToolDeclaration[] = [
