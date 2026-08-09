@@ -9,12 +9,18 @@ import type { WorkspaceDb } from "./db";
 export class Roster {
   private known = new Map<string, Participant>();
 
-  constructor(private db: WorkspaceDb) {
-    // Agents are permanent members of the server, not ephemeral connections:
-    // every agent actor is in the roster from boot, grey until its process
-    // connects. Humans stay presence-only by design.
-    for (const actor of db.listActors("agent")) {
-      this.known.set(rosterKey("agent", actor.displayName), {
+  private constructor(private db: WorkspaceDb) {}
+
+  /**
+   * Async factory: agents are permanent members of the server, not
+   * ephemeral connections, so every agent actor must be loaded into the
+   * roster before the server accepts connections (grey/offline until its
+   * process connects). Humans stay presence-only by design.
+   */
+  static async create(db: WorkspaceDb): Promise<Roster> {
+    const roster = new Roster(db);
+    for (const actor of await db.listActors("agent")) {
+      roster.known.set(rosterKey("agent", actor.displayName), {
         id: actor.id,
         name: actor.displayName,
         kind: "agent",
@@ -23,6 +29,7 @@ export class Roster {
         online: false,
       });
     }
+    return roster;
   }
 
   /**
@@ -30,11 +37,11 @@ export class Roster {
    * identity is the persistent actor identity, so board attribution and
    * presence agree on ids.
    */
-  join(kind: ParticipantKind, name: string): Participant {
+  async join(kind: ParticipantKind, name: string): Promise<Participant> {
     const key = rosterKey(kind, name);
     let participant = this.known.get(key);
     if (!participant) {
-      const actor = this.db.upsertActor(kind, name);
+      const actor = await this.db.upsertActor(kind, name);
       participant = {
         id: actor.id,
         name: actor.displayName,
