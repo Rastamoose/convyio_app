@@ -18,7 +18,7 @@ import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
 import { Toolman } from "../src/board/Toolman";
-import { createApiHandler } from "../src/board/api";
+import { createApiHandler, type AuthGate } from "../src/board/api";
 import { Hub } from "../src/hub";
 import { createTestDb } from "./pgSchema";
 
@@ -35,13 +35,24 @@ export interface FakeSupabaseUser {
 }
 
 /** A fake Supabase admin client: getUser(jwt) resolves via a fixed lookup
- *  table the test controls, so ws-level auth tests never touch the network. */
-export function fakeSupabase(users: Record<string, FakeSupabaseUser>): SupabaseClient {
+ *  table the test controls, so ws-level auth tests never touch the network.
+ *  An unknown token gets a 401-status error (matching the real AuthApiError,
+ *  which Auth.verify treats as a definitive rejection); mapping a token to
+ *  "unavailable" simulates a Supabase outage/rate limit (status 503). The
+ *  table is read per call, so tests can mutate it mid-flight. */
+export function fakeSupabase(
+  users: Record<string, FakeSupabaseUser | "unavailable">,
+): SupabaseClient {
   return {
     auth: {
       getUser: async (jwt: string) => {
         const user = users[jwt];
-        return user ? { data: { user }, error: null } : { data: { user: null }, error: new Error("invalid") };
+        if (user === "unavailable") {
+          return { data: { user: null }, error: Object.assign(new Error("service down"), { status: 503 }) };
+        }
+        return user
+          ? { data: { user }, error: null }
+          : { data: { user: null }, error: Object.assign(new Error("invalid"), { status: 401 }) };
       },
     },
   } as unknown as SupabaseClient;
@@ -173,7 +184,7 @@ export interface WsEnv {
 
 export interface WsAuthOptions {
   /** Fake Supabase getUser(jwt) lookup table — see fakeSupabase() above. */
-  users: Record<string, FakeSupabaseUser>;
+  users: Record<string, FakeSupabaseUser | "unavailable">;
   agentToken?: string;
 }
 
@@ -191,7 +202,11 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const messages = new MessageStore(db);
   const attachments = new Attachments(db, supabaseAdmin());
   const agentInvites = new AgentInvites(db);
-  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, (actorId) => hub.closeAgentConnection(actorId));
+  // Auth-enabled envs expose /api/auth/* through the SAME Auth instance the
+  // join gate uses (prod runs one instance for both HTTP and ws, and the
+  // verify cache lives per instance).
+  const authGate: AuthGate | null = auth ? { googleAuthEnabled: true, emailAuthEnabled: true, auth } : null;
+  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", authGate, agentInvites, (actorId) => hub.closeAgentConnection(actorId));
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {

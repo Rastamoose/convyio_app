@@ -304,11 +304,23 @@ export class Hub {
   private async handleJoin(conn: Connection, join: JoinEvent): Promise<void> {
     // In guest mode the schema guarantees a name (joins carry name or
     // authToken; a token-only join can stand only where a gate resolves it).
-    const decision: JoinDecision = this.options.authorizeJoin
-      ? await this.options.authorizeJoin(join)
-      : join.name !== undefined
-        ? { ok: true, name: join.name }
-        : { ok: false };
+    let decision: JoinDecision;
+    try {
+      decision = this.options.authorizeJoin
+        ? await this.options.authorizeJoin(join)
+        : join.name !== undefined
+          ? { ok: true, name: join.name }
+          : { ok: false };
+    } catch (err) {
+      // The gate could not reach its verifier (Supabase rate limit/outage) —
+      // that says nothing about the credential. Close retryably: clients
+      // treat only the "unauthenticated" verdict as fatal, so their normal
+      // reconnect backoff covers this.
+      console.warn("[hub] join gate unavailable:", err instanceof Error ? err.message : err);
+      this.send(conn, { type: "error", error: "auth temporarily unavailable" });
+      conn.socket.close();
+      return;
+    }
     if (!decision.ok) {
       this.send(conn, { type: "error", error: "unauthenticated" });
       conn.socket.close();

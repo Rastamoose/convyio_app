@@ -102,17 +102,69 @@ export class Auth {
     return { available: true };
   }
 
+  /**
+   * Verify a JWT against Supabase. Three outcomes, and the difference is
+   * load-bearing: a definitive rejection (4xx from Supabase) returns null
+   * and ends the session; a transient failure (rate limit, network, 5xx)
+   * THROWS 503 so callers can tell the client to retry — treating those as
+   * "invalid token" made one Supabase hiccup sign the user out entirely.
+   * Successes are cached briefly so ws rejoins and bursts of API calls
+   * don't re-hit Supabase's rate-limited verification endpoint.
+   */
   private async verify(
     jwt: string,
   ): Promise<{ id: string; email: string | null; desiredUsername: string | null } | null> {
-    const { data, error } = await this.supabase.auth.getUser(jwt);
-    if (error || !data.user) return null;
+    const cached = this.verifyCache.get(jwt);
+    if (cached && cached.expiresAt > Date.now()) return cached.user;
+
+    let data: Awaited<ReturnType<SupabaseClient["auth"]["getUser"]>>["data"];
+    let error: { status?: number } | null;
+    try {
+      ({ data, error } = await this.supabase.auth.getUser(jwt));
+    } catch {
+      throw new ApiError(503, "AUTH_UNAVAILABLE", "could not verify the sign-in right now");
+    }
+    if (error) {
+      const status = error.status;
+      // 4xx (except 429) = Supabase examined the token and rejected it.
+      // Everything else — 429, 5xx, network errors with no status — is
+      // Supabase being unreachable, which says nothing about the token.
+      if (status !== undefined && status >= 400 && status < 500 && status !== 429) return null;
+      throw new ApiError(503, "AUTH_UNAVAILABLE", "could not verify the sign-in right now");
+    }
+    if (!data.user) return null;
     const desired = data.user.user_metadata?.desired_username;
-    return {
+    const user = {
       id: data.user.id,
       email: data.user.email ?? null,
       // user_metadata is client-writable JSON, so trust nothing but a string.
       desiredUsername: typeof desired === "string" ? desired : null,
     };
+    if (this.verifyCache.size >= 1000) this.sweepVerifyCache();
+    this.verifyCache.set(jwt, { user, expiresAt: Date.now() + VERIFY_CACHE_TTL_MS });
+    return user;
+  }
+
+  private verifyCache = new Map<
+    string,
+    { user: { id: string; email: string | null; desiredUsername: string | null }; expiresAt: number }
+  >();
+
+  private sweepVerifyCache(): void {
+    const now = Date.now();
+    for (const [jwt, entry] of this.verifyCache) {
+      if (entry.expiresAt <= now) this.verifyCache.delete(jwt);
+    }
+    // Still full of live entries: drop oldest-inserted so the map stays bounded.
+    if (this.verifyCache.size >= 1000) {
+      for (const jwt of this.verifyCache.keys()) {
+        if (this.verifyCache.size < 500) break;
+        this.verifyCache.delete(jwt);
+      }
+    }
   }
 }
+
+/** Long enough to absorb a reconnect burst, short enough that a revoked
+ *  Supabase session stops working within a minute. */
+const VERIFY_CACHE_TTL_MS = 60 * 1000;

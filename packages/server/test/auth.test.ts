@@ -99,6 +99,29 @@ describe("Auth", () => {
     assert.deepEqual(await auth.usernameAvailable("hana"), { available: false, reason: "TAKEN" });
     assert.deepEqual(await auth.usernameAvailable("***"), { available: false, reason: "INVALID" });
   });
+
+  test("a Supabase outage is 503 AUTH_UNAVAILABLE, never a 401 rejection", async () => {
+    const auth = new Auth(db, fakeSupabase({ "tok-out": "unavailable" }));
+    await assert.rejects(
+      auth.session("tok-out"),
+      (err) => err instanceof ApiError && err.status === 503 && err.code === "AUTH_UNAVAILABLE",
+    );
+    // resolveSession (the ws join path) must propagate too — returning null
+    // there is what once signed users out over a rate-limit blip.
+    await assert.rejects(auth.resolveSession("tok-out"), (err) => err instanceof ApiError && err.status === 503);
+  });
+
+  test("a verified token survives a Supabase outage via the verify cache", async () => {
+    const users: Parameters<typeof fakeSupabase>[0] = {
+      "tok-11": { id: "user-11", email: null, user_metadata: { desired_username: "Iris" } },
+    };
+    const auth = new Auth(db, fakeSupabase(users));
+    assert.deepEqual(await auth.session("tok-11"), { status: "ok", username: "Iris" });
+    // Supabase goes down; the recently verified token keeps resolving.
+    users["tok-11"] = "unavailable";
+    const actor = await auth.resolveSession("tok-11");
+    assert.equal(actor?.displayName, "Iris");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -108,7 +131,13 @@ describe("Auth", () => {
 
 describe("ws join gating with auth enabled", async () => {
   const env = await createWsEnv({
-    auth: { users: { "tok-dana": { id: "user-dana", email: "dana@example.com" } }, agentToken: "secret123" },
+    auth: {
+      users: {
+        "tok-dana": { id: "user-dana", email: "dana@example.com" },
+        "tok-flaky": "unavailable",
+      },
+      agentToken: "secret123",
+    },
   });
   after(() => env.close());
 
@@ -128,6 +157,15 @@ describe("ws join gating with auth enabled", async () => {
     const dead = await env.join({ type: "join", kind: "human", authToken: "not-a-session" });
     assert.equal(dead.welcome, null);
     assert.equal(dead.error, "unauthenticated");
+  });
+
+  test("a join during a Supabase outage closes retryably, not as unauthenticated", async () => {
+    const flaky = await env.join({ type: "join", kind: "human", authToken: "tok-flaky" });
+    assert.equal(flaky.welcome, null);
+    // "unauthenticated" is the fatal verdict that makes clients sign out;
+    // an outage must never wear it.
+    assert.equal(flaky.error, "auth temporarily unavailable");
+    assert.equal(flaky.closed, true);
   });
 
   test("a live session joins as its own username, whatever the frame claims", async () => {

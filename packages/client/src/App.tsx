@@ -79,17 +79,51 @@ export default function App() {
     }
     setUsernameStatus("unknown");
     let cancelled = false;
-    (async () => {
-      const res = await fetch(`${apiBaseUrl()}/api/auth/session`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      const data = (await res.json()) as { status: "ok" | "needs_username" };
-      if (!cancelled) setUsernameStatus(data.status);
-    })();
+    let retry: number | undefined;
+    const load = async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl()}/api/auth/session`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = (await res.json()) as { status: "ok" | "needs_username" };
+          setUsernameStatus(data.status);
+          return;
+        }
+        if (res.status === 401) {
+          // Supabase examined the token and rejected it: this session is dead.
+          void supabase.auth.signOut();
+          return;
+        }
+      } catch {
+        // Server unreachable — fall through to the retry below.
+      }
+      // 503 (Supabase hiccup) or a dev-server restart: the token is not at
+      // fault, so keep asking instead of wedging on "Connecting…".
+      if (!cancelled) retry = window.setTimeout(() => void load(), 2000);
+    };
+    void load();
     return () => {
       cancelled = true;
+      window.clearTimeout(retry);
     };
   }, [session?.access_token]);
+
+  // A refused ws join usually means the access token went stale while the
+  // tab slept: refresh once and let the new token reconnect on its own. Sign
+  // out only when the refresh fails — or when a recent recovery didn't stick,
+  // so a genuinely revoked account can't refresh-reconnect in a loop.
+  const lastAuthRecovery = useRef(0);
+  const handleAuthRejected = async () => {
+    const now = Date.now();
+    if (now - lastAuthRecovery.current > 30_000) {
+      lastAuthRecovery.current = now;
+      const { data, error } = await supabase.auth.refreshSession();
+      if (!error && data.session) return; // new access_token → ws reconnects
+    }
+    void supabase.auth.signOut();
+  };
 
   if (!authMode || session === undefined) {
     return (
@@ -152,7 +186,7 @@ export default function App() {
   return (
     <WorkspaceProvider
       credentials={{ authToken: session.access_token }}
-      onAuthRejected={() => void supabase.auth.signOut()}
+      onAuthRejected={() => void handleAuthRejected()}
       onSignOut={() => void supabase.auth.signOut()}
     >
       <Workspace />
