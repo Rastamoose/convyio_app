@@ -10,7 +10,15 @@ COPY packages/agent/package.json packages/agent/
 RUN npm ci
 COPY tsconfig.base.json ./
 COPY packages ./packages
-RUN npm run build -w @workspace/client
+# Supabase config is baked into the browser bundle at build time. There is no
+# .env inside the image, so the values arrive as build args (Railway forwards
+# service variables to Dockerfile builds only for declared ARGs). Publishable
+# key only — never the secret key, which would end up in public JS.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_PUBLISHABLE_KEY
+RUN VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
+    VITE_SUPABASE_PUBLISHABLE_KEY="$VITE_SUPABASE_PUBLISHABLE_KEY" \
+    npm run build -w @workspace/client
 
 # Runtime stage: server and agent run from TypeScript source via tsx (there
 # is no compiled dist for them), so node_modules ships as installed — tsx is

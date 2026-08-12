@@ -1,6 +1,12 @@
 services:
   workspace:
-    build: .
+    build:
+      context: .
+      # The client bundle bakes these in at build time (see Dockerfile ARGs);
+      # compose reads them from the same root .env.
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
     ports:
       - "3001:3001"
     env_file: .env
