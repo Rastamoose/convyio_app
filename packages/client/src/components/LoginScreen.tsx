@@ -133,8 +133,10 @@ function EmailAuthForm() {
 
   const trimmedUsername = username.trim();
   const emailValid = EMAIL_PATTERN.test(email.trim());
-  const passwordValid = password.length >= MIN_PASSWORD_LENGTH;
   const usernameValid = USERNAME_PATTERN.test(trimmedUsername);
+  // The length rule applies to NEW passwords only — signing in must accept
+  // whatever the account was created with (the server verifies it anyway).
+  const passwordValid = mode === "signup" ? password.length >= MIN_PASSWORD_LENGTH : password.length > 0;
   const canSubmit =
     emailValid &&
     passwordValid &&
