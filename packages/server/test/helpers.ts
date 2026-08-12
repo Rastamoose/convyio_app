@@ -206,7 +206,9 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   // join gate uses (prod runs one instance for both HTTP and ws, and the
   // verify cache lives per instance).
   const authGate: AuthGate | null = auth ? { googleAuthEnabled: true, emailAuthEnabled: true, auth } : null;
-  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", authGate, agentInvites, (actorId) => hub.closeAgentConnection(actorId));
+  // "localhost-dev" (the server's real default) rather than "*", so suites
+  // exercise the same same-origin/cross-origin classification prod runs.
+  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "localhost-dev", authGate, agentInvites, (actorId) => hub.closeAgentConnection(actorId));
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {

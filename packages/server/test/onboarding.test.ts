@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { after, describe, test } from "node:test";
 import { createWsEnv, type FakeSupabaseUser } from "./helpers";
 
@@ -196,5 +197,56 @@ describe("sign-up/onboarding journey", async () => {
     const garbage = await get("/api/auth/session", "not-a-supabase-jwt");
     assert.equal(garbage.status, 401);
     assert.equal(garbage.body.error, "BAD_CREDENTIAL");
+  });
+
+  // Browsers attach an Origin header to POSTs even same-origin, and prod
+  // serves client+API from one origin that is neither localhost nor the
+  // CORS_ORIGIN default. Classifying that as cross-origin once swallowed
+  // every browser POST in production as a silent 204 (the claim "succeeded"
+  // client-side, no actor existed, the ws join bounced the user out).
+  test("same-origin POSTs route; foreign-origin POSTs fail loudly", async () => {
+    // node fetch can't spoof Host, so use http.request to replay prod: the
+    // page and the API share the host, and the browser sends both headers.
+    const { port } = new URL(env.baseUrl);
+    const request = (headers: Record<string, string>, method = "POST") =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request(
+          { host: "127.0.0.1", port, path: "/api/auth/username", method, headers },
+          (res) => {
+            let body = "";
+            res.on("data", (c) => (body += c));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+          },
+        );
+        req.on("error", reject);
+        req.end(method === "POST" ? JSON.stringify({ username: "cors-probe" }) : undefined);
+      });
+
+    const sameOrigin = await request({
+      host: "app.convyio.com",
+      origin: "https://app.convyio.com",
+      authorization: "Bearer not-a-supabase-jwt",
+      "content-type": "application/json",
+    });
+    // 401 BAD_CREDENTIAL proves the request ROUTED (under the bug: silent 204).
+    assert.equal(sameOrigin.status, 401);
+    assert.equal(JSON.parse(sameOrigin.body).error, "BAD_CREDENTIAL");
+
+    const foreign = await request({
+      host: "app.convyio.com",
+      origin: "https://evil.example.com",
+      authorization: "Bearer not-a-supabase-jwt",
+      "content-type": "application/json",
+    });
+    assert.equal(foreign.status, 403);
+    assert.equal(JSON.parse(foreign.body).error, "ORIGIN_FORBIDDEN");
+
+    // Preflight for a disallowed origin stays a bare 204 (the browser then
+    // refuses to send the real request).
+    const preflight = await request(
+      { host: "app.convyio.com", origin: "https://evil.example.com" },
+      "OPTIONS",
+    );
+    assert.equal(preflight.status, 204);
   });
 });

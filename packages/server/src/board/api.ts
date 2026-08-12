@@ -74,9 +74,16 @@ export function createApiHandler(
 
     const allowedOrigin = resolveCorsOrigin(req, corsOrigin);
     if (!allowedOrigin) {
-      // CORS preflight for a disallowed origin: 204 with no ACAO is correct —
-      // the browser will reject the response and never issue the real request.
-      res.writeHead(204).end();
+      if (req.method === "OPTIONS") {
+        // Preflight for a disallowed origin: 204 with no ACAO — the browser
+        // rejects it and never sends the real request.
+        res.writeHead(204).end();
+      } else {
+        // A real request from a disallowed origin must fail LOUDLY. A silent
+        // 204 here once counted as res.ok in clients and made a swallowed
+        // username claim look successful (the prod Google-onboarding bounce).
+        json(res, 403, { error: "ORIGIN_FORBIDDEN", message: "cross-origin requests from this origin are not allowed" });
+      }
       return true;
     }
     res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
@@ -436,21 +443,31 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-/** Resolve the Access-Control-Allow-Origin header per request. When
- *  corsOrigin === "localhost-dev", mirror any localhost origin so the Vite
- *  dev server works regardless of which port it landed on. Production
- *  should pass a single explicit origin (the server serves the client from
- *  the same origin, so CORS isn't needed there — but the header is harmless). */
+/**
+ * Resolve the Access-Control-Allow-Origin header per request, or null for a
+ * disallowed cross-origin caller. Ordering matters, learned the hard way:
+ * browsers attach an Origin header to POST/PATCH/DELETE even on SAME-origin
+ * requests, so same-origin must be recognized first (by comparing against
+ * the request's own Host) — classifying those as cross-origin once silently
+ * broke every browser POST in production. After that: no Origin header means
+ * CORS is not in play (same-origin GET, curl, server-to-server); an explicit
+ * CORS_ORIGIN allows exactly that origin; the "localhost-dev" default
+ * mirrors any localhost/private-LAN origin so the Vite dev server works
+ * regardless of which port it landed on.
+ */
 function resolveCorsOrigin(req: IncomingMessage, corsOrigin: string): string | null {
-  if (corsOrigin !== "localhost-dev") return corsOrigin;
+  if (corsOrigin === "*") return "*"; // explicit wildcard: allow everyone
   const origin = req.headers.origin;
-  if (!origin) return "http://localhost:5173"; // no Origin header (same-origin request)
+  if (!origin) return corsOrigin === "localhost-dev" ? "http://localhost:5173" : corsOrigin;
   try {
-    const host = new URL(origin).hostname;
+    const parsed = new URL(origin);
+    if (parsed.host === req.headers.host) return origin; // same-origin
+    if (corsOrigin !== "localhost-dev") return origin === corsOrigin ? origin : null;
+    const host = parsed.hostname;
     if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) {
       return origin;
     }
-  } catch { /* malformed origin — let it through as null */ }
+  } catch { /* malformed Origin header — treat as disallowed */ }
   return null;
 }
 
