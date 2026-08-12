@@ -46,7 +46,7 @@ export class BoardService {
   // -------------------------------------------------------------------------
 
   async list(
-    serverId: string,
+    workspaceId: string,
     opts: { status?: ItemStatus; includeDeleted?: boolean } = {},
   ): Promise<BoardItem[]> {
     const sql = this.store.sql;
@@ -59,22 +59,22 @@ export class BoardService {
     const deletedFilter = opts.includeDeleted ? sql`` : sql`AND i.deleted_at IS NULL`;
     const rows = await sql<ItemRow[]>`
       ${selectItem(sql)}
-      WHERE i.server_id = ${serverId} ${statusFilter} ${deletedFilter}
+      WHERE i.workspace_id = ${workspaceId} ${statusFilter} ${deletedFilter}
       ORDER BY i.created_at DESC
     `;
     return rows.map(toItem);
   }
 
-  /** Look up by uuid or ref within a server. Includes deleted rows. */
-  async find(serverId: string, idOrRef: string): Promise<BoardItem | null> {
+  /** Look up by uuid or ref within a workspace. Includes deleted rows. */
+  async find(workspaceId: string, idOrRef: string): Promise<BoardItem | null> {
     const sql = this.store.sql;
     const rows = await sql<ItemRow[]>`
-      ${selectItem(sql)} WHERE i.server_id = ${serverId} AND (i.id = ${idOrRef} OR i.ref = ${idOrRef})
+      ${selectItem(sql)} WHERE i.workspace_id = ${workspaceId} AND (i.id = ${idOrRef} OR i.ref = ${idOrRef})
     `;
     return rows[0] ? toItem(rows[0]) : null;
   }
 
-  /** Cross-server lookup used by authz to distinguish WRONG_SERVER. */
+  /** Cross-workspace lookup used by authz to distinguish WRONG_SERVER. */
   async findAnywhere(idOrRef: string): Promise<BoardItem | null> {
     const sql = this.store.sql;
     const rows = await sql<ItemRow[]>`${selectItem(sql)} WHERE i.id = ${idOrRef} OR i.ref = ${idOrRef}`;
@@ -82,8 +82,8 @@ export class BoardService {
   }
 
   /** An item's audit trail, oldest first (the events table is append-only). */
-  async events(serverId: string, idOrRef: string): Promise<BoardItemEvent[]> {
-    const item = await this.find(serverId, idOrRef);
+  async events(workspaceId: string, idOrRef: string): Promise<BoardItemEvent[]> {
+    const item = await this.find(workspaceId, idOrRef);
     if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", `no board item ${idOrRef}`);
     const rows = await this.store.sql<
       {
@@ -140,14 +140,14 @@ export class BoardService {
     const now = Date.now();
     const id = randomUUID();
     return this.mutate(actor, human ? "item.created" : "item.proposed", async (sql) => {
-      const ref = await this.store.nextRef(sql, actor.serverId);
+      const ref = await this.store.nextRef(sql, actor.workspaceId);
       await sql`
         INSERT INTO board_items
-          (id, server_id, ref, title, description, status, origin, created_by,
+          (id, workspace_id, ref, title, description, status, origin, created_by,
            approved_by, owner, proposal_why, proposal_effect, scope_paths,
            created_at, approved_at)
         VALUES (
-          ${id}, ${actor.serverId}, ${ref}, ${input.title}, ${input.description ?? null},
+          ${id}, ${actor.workspaceId}, ${ref}, ${input.title}, ${input.description ?? null},
           ${human ? "approved" : "proposed"}, ${actor.kind}, ${actor.id},
           ${human ? actor.id : null}, ${null},
           ${human ? null : input.why!}, ${human ? null : input.effect!},
@@ -161,7 +161,7 @@ export class BoardService {
 
   async approve(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "AGENT_CANNOT_APPROVE");
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["proposed"]);
     return this.mutate(actor, "item.approved", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -176,7 +176,7 @@ export class BoardService {
 
   async deny(actor: Actor, idOrRef: string, reason?: string): Promise<BoardItem> {
     this.assertHuman(actor, "AGENT_CANNOT_APPROVE");
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["proposed"]);
     return this.mutate(
       actor,
@@ -193,7 +193,7 @@ export class BoardService {
   }
 
   async start(actor: Actor, idOrRef: string): Promise<BoardItem> {
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["approved"]);
     return this.mutate(actor, "item.started", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -208,7 +208,7 @@ export class BoardService {
   }
 
   async complete(actor: Actor, idOrRef: string): Promise<BoardItem> {
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["in_progress", "blocked"]);
     return this.mutate(actor, "item.completed", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -222,7 +222,7 @@ export class BoardService {
   }
 
   async block(actor: Actor, idOrRef: string, reason: string): Promise<BoardItem> {
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["in_progress"]);
     return this.mutate(
       actor,
@@ -241,7 +241,7 @@ export class BoardService {
   }
 
   async unblock(actor: Actor, idOrRef: string): Promise<BoardItem> {
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["blocked"]);
     return this.mutate(actor, "item.unblocked", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -265,10 +265,12 @@ export class BoardService {
     },
   ): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     if (fields.owner != null) {
+      // Only workspace members can be assigned as owner (getActor stamps
+      // this db's own workspaceId, so an id comparison would be vacuous).
       const owner = await this.store.getActor(fields.owner);
-      if (!owner || owner.serverId !== actor.serverId) {
+      if (!owner || !(await this.store.isMember(owner.id))) {
         throw new ApiError(400, "OWNER_NOT_FOUND", "owner must be an actor on this server");
       }
     }
@@ -311,7 +313,7 @@ export class BoardService {
   /** Soft delete. Halts in-progress work: authz fails afterwards (I4). */
   async softDelete(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     if (item.deletedAt) throw new ApiError(409, "ALREADY_DELETED", `${item.ref} is already deleted`);
     return this.mutate(actor, "item.deleted", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -326,7 +328,7 @@ export class BoardService {
 
   async reopen(actor: Actor, idOrRef: string): Promise<BoardItem> {
     this.assertHuman(actor, "HUMAN_ONLY");
-    const item = await this.mustFind(actor.serverId, idOrRef);
+    const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["done"]);
     return this.mutate(actor, "item.reopened", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
@@ -358,16 +360,16 @@ export class BoardService {
     const itemId = await this.store.transaction(async (sql) => {
       const id = await apply(sql);
       await sql`
-        INSERT INTO board_events (server_id, item_id, type, actor_id, payload, created_at)
-        VALUES (${actor.serverId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${Date.now()})
+        INSERT INTO board_events (workspace_id, item_id, type, actor_id, payload, created_at)
+        VALUES (${actor.workspaceId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${Date.now()})
       `;
       return id;
     });
-    const item = (await this.find(actor.serverId, itemId))!;
+    const item = (await this.find(actor.workspaceId, itemId))!;
     this.onEvent?.({
       channel: "board",
       type,
-      server_id: actor.serverId,
+      workspace_id: actor.workspaceId,
       actor: { id: actor.id, kind: actor.kind, display_name: actor.displayName },
       item,
       payload,
@@ -384,8 +386,8 @@ export class BoardService {
     return result.paths;
   }
 
-  private async mustFind(serverId: string, idOrRef: string): Promise<BoardItem> {
-    const item = await this.find(serverId, idOrRef);
+  private async mustFind(workspaceId: string, idOrRef: string): Promise<BoardItem> {
+    const item = await this.find(workspaceId, idOrRef);
     if (!item) throw new ApiError(404, "ITEM_NOT_FOUND", `no board item ${idOrRef}`);
     if (item.deletedAt) throw new ApiError(409, "ITEM_DELETED", `${item.ref} is deleted`);
     return item;
@@ -411,7 +413,7 @@ export class BoardService {
 
 interface ItemRow {
   id: string;
-  server_id: string;
+  workspace_id: string;
   ref: string;
   title: string;
   description: string | null;
@@ -436,7 +438,7 @@ interface ItemRow {
 function toItem(row: ItemRow): BoardItem {
   return {
     id: row.id,
-    serverId: row.server_id,
+    workspaceId: row.workspace_id,
     ref: row.ref,
     title: row.title,
     description: row.description,

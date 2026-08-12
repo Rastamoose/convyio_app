@@ -10,7 +10,7 @@ import { createToolExecutor, type ToolHooks } from "../src/tools";
 function boardItem(overrides: Partial<BoardItem> = {}): BoardItem {
   return {
     id: "item-1",
-    serverId: "srv-1",
+    workspaceId: "srv-1",
     ref: "task-1",
     title: "Migrate auth",
     description: null,

@@ -338,6 +338,17 @@ describe("message op schemas", () => {
   });
 });
 
+describe("welcome workspace identity", () => {
+  test("the welcome frame carries the workspace id and name", async () => {
+    const dana = await env.connect("dana", "human");
+    // The test DB bootstraps its workspace via ensureWorkspace, named "test_space".
+    assert.deepEqual(dana.welcome.workspace, {
+      id: env.db.workspaceId,
+      name: "test_space",
+    });
+  });
+});
+
 describe("welcome history cap", () => {
   test("with >50 messages in 2 channels, each yields exactly its newest 50, ascending", async () => {
     const dana = await env.connect("dana", "human");

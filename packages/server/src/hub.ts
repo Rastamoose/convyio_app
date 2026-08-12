@@ -19,6 +19,7 @@ import {
   type StatusUpdateEvent,
   type SummaryEvent,
   type TraceChunk,
+  type WorkspaceInfo,
 } from "@workspace/shared";
 import { ApiError } from "./board/BoardService";
 import type { Attachments } from "./chat/Attachments";
@@ -43,7 +44,7 @@ interface Connection {
 export type JoinDecision = { ok: true; name: string } | { ok: false };
 
 export interface HubOptions {
-  serverId: string;
+  workspace: WorkspaceInfo;
   demoChannels: string[];
   /**
    * The join gate. It exists so the Hub never knows how identities are
@@ -187,18 +188,15 @@ export class Hub {
     const { id, kind } = conn.participant;
     const stillConnected = [...this.connections].some((c) => c.participant?.id === id);
     if (kind === "human") {
-      // Humans exist only while a tab is open: last connection gone means
-      // logged out, and their API tokens die with the session.
+      // A logged-off human stays in the roster as offline (like agents);
+      // only their API tokens die with the last connection.
       if (!stillConnected) {
-        this.roster.removeHuman(id);
         this.sessions.revokeFor(id);
       }
-    } else {
-      if (conn.participant.runState === "working") {
-        conn.participant.runState = "dead";
-      }
-      this.roster.setOnline(id, stillConnected);
+    } else if (conn.participant.runState === "working") {
+      conn.participant.runState = "dead";
     }
+    this.roster.setOnline(id, stillConnected);
     this.broadcastPresence();
   }
 
@@ -352,6 +350,7 @@ export class Hub {
     ]);
     this.send(conn, {
       type: "welcome",
+      workspace: this.options.workspace,
       self: participant,
       history,
       participants: this.roster.list(),
@@ -477,7 +476,7 @@ export class Hub {
       id: p.id,
       kind: p.kind,
       displayName: p.name,
-      serverId: this.options.serverId,
+      workspaceId: this.options.workspace.id,
     };
     const result = await this.toolman.execute(actor, event.action, event.boardItemRef ?? null);
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });

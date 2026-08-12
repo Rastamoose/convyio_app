@@ -205,8 +205,15 @@ export type ClientEvent = z.infer<typeof clientEventSchema>;
 // Outbound: server -> clients
 // ---------------------------------------------------------------------------
 
+/** Identity of the workspace this server hosts. */
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+}
+
 export interface WelcomeEvent {
   type: "welcome";
+  workspace: WorkspaceInfo;
   self: Participant;
   history: ChatMessage[];
   participants: Participant[];

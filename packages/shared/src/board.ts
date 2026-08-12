@@ -11,7 +11,7 @@ export interface Actor {
   id: string;
   kind: ParticipantKind;
   displayName: string;
-  serverId: string;
+  workspaceId: string;
 }
 
 export type ItemStatus =
@@ -30,8 +30,8 @@ export const WORKABLE_STATUSES: ReadonlySet<ItemStatus> = new Set([
 
 export interface BoardItem {
   id: string;
-  serverId: string;
-  /** Human-friendly reference, unique per server, e.g. "task-14". */
+  workspaceId: string;
+  /** Human-friendly reference, unique per workspace, e.g. "task-14". */
   ref: string;
   title: string;
   description: string | null;
@@ -93,7 +93,7 @@ export type BoardEventPayload = ReasonPayload | EditedPayload | Record<string, n
 export interface BoardEventEnvelope {
   channel: "board";
   type: BoardEventType;
-  server_id: string;
+  workspace_id: string;
   actor: { id: string; kind: ParticipantKind; display_name: string };
   item: BoardItem;
   payload: BoardEventPayload;

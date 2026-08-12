@@ -12,11 +12,28 @@ describe("WorkspaceDb", () => {
   });
   after(() => drop());
 
+  test("a fresh schema bootstraps a workspace named test_space", () => {
+    assert.equal(db.workspaceName, "test_space");
+    assert.ok(db.workspaceId);
+  });
+
   test("upsertActor creates once, reuses on repeat calls with the same name", async () => {
     const first = await db.upsertActor("human", "Dana");
     const second = await db.upsertActor("human", "dana");
     assert.equal(second.id, first.id);
-    assert.equal(first.serverId, db.serverId);
+    assert.equal(first.workspaceId, db.workspaceId);
+  });
+
+  test("upsertActor('human') creates identity only, never membership", async () => {
+    const persona = await db.upsertActor("human", "Persona");
+    assert.equal(await db.isMember(persona.id), false);
+    assert.ok(!(await db.listMembers()).some((m) => m.id === persona.id));
+  });
+
+  test("upsertActor('agent') registers the agent as a workspace member", async () => {
+    const agent = await db.upsertActor("agent", "Registered Bot");
+    assert.equal(await db.isMember(agent.id), true);
+    assert.ok((await db.listMembers("agent")).some((m) => m.id === agent.id));
   });
 
   test("findActorByName is case-insensitive and null when absent", async () => {
@@ -27,17 +44,19 @@ describe("WorkspaceDb", () => {
     assert.equal(await db.findActorByName("agent", "nope"), null);
   });
 
-  test("createHuman uses the given id and stores email", async () => {
+  test("createHuman uses the given id, stores email, and registers membership", async () => {
     const actor = await db.createHuman("11111111-1111-1111-1111-111111111111", "Harris", "h@example.com");
     assert.equal(actor.id, "11111111-1111-1111-1111-111111111111");
     const fetched = await db.getActor(actor.id);
     assert.equal(fetched?.displayName, "Harris");
+    assert.equal(await db.isMember(actor.id), true);
+    assert.ok((await db.listMembers("human")).some((m) => m.id === actor.id));
   });
 
-  test("nextRef allocates sequential per-server refs inside a transaction", async () => {
+  test("nextRef allocates sequential per-workspace refs inside a transaction", async () => {
     const refs = await db.transaction(async (sql) => {
-      const a = await db.nextRef(sql, db.serverId);
-      const b = await db.nextRef(sql, db.serverId);
+      const a = await db.nextRef(sql, db.workspaceId);
+      const b = await db.nextRef(sql, db.workspaceId);
       return [a, b];
     });
     assert.notEqual(refs[0], refs[1]);
@@ -45,15 +64,16 @@ describe("WorkspaceDb", () => {
   });
 
   test("transaction rolls back on throw", async () => {
-    const before = await db.listActors("human");
+    const countActors = async () =>
+      (await db.sql<{ c: number }[]>`SELECT count(*) AS c FROM actors`)[0].c;
+    const before = await countActors();
     await assert.rejects(
       db.transaction(async (sql) => {
-        await sql`INSERT INTO actors (id, kind, display_name, server_id) VALUES (gen_random_uuid(), 'human', 'Rollback Me', ${db.serverId})`;
+        await sql`INSERT INTO actors (id, kind, display_name) VALUES (gen_random_uuid(), 'human', 'Rollback Me')`;
         throw new Error("boom");
       }),
       /boom/,
     );
-    const after = await db.listActors("human");
-    assert.equal(after.length, before.length);
+    assert.equal(await countActors(), before);
   });
 });

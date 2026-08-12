@@ -148,7 +148,7 @@ async function route(
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
-    return json(res, 200, { actors: await db.listActors() });
+    return json(res, 200, { actors: await db.listMembers() });
   }
 
   // GET /api/agents — user-created agents that are still invited.
@@ -233,7 +233,7 @@ async function route(
     if (status && !statusValues.includes(status as ItemStatus)) {
       throw new ApiError(400, "BAD_STATUS", `status must be one of ${statusValues.join(", ")}`);
     }
-    const items = await service.list(actor.serverId, {
+    const items = await service.list(actor.workspaceId, {
       status: (status as ItemStatus) ?? undefined,
       includeDeleted: url.searchParams.get("include_deleted") === "true",
     });
@@ -264,7 +264,7 @@ async function route(
 
   // GET /api/board/items/:id/events — the item's audit trail.
   if (parts.length === 5 && parts[4] === "events" && method === "GET") {
-    return json(res, 200, { events: await service.events(actor.serverId, id) });
+    return json(res, 200, { events: await service.events(actor.workspaceId, id) });
   }
 
   // POST /api/board/items/:id/<action>

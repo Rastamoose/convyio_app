@@ -15,34 +15,37 @@ export class Roster {
     private agentInvites: AgentInvites,
   ) {}
 
-  /**
-   * Async factory: agents are permanent members of the server, not
-   * ephemeral connections, so every agent actor must be loaded into the
-   * roster before the server accepts connections (grey/offline until its
-   * process connects). Humans stay presence-only by design.
-   *
-   * User-created agents whose invites have been revoked are not loaded, so
-   * they disappear from the roster after revocation (their actor rows stay
-   * in the database for attribution).
-   */
   /** Drop every in-memory participant. Tests that share one env call this
    *  after truncating the DB so the next test starts with an empty room. */
   clear(): void {
     this.known.clear();
   }
 
+  /**
+   * Async factory: agents and registered humans are permanent members of
+   * the workspace, not ephemeral connections, so every workspace member is
+   * loaded into the roster before the server accepts connections
+   * (grey/offline until its process or tab connects). Non-member actors
+   * (demo personas, guests) are identities only and are not pre-loaded.
+   *
+   * User-created agents whose invites have been revoked are not loaded, so
+   * they disappear from the roster after revocation (their actor rows stay
+   * in the database for attribution).
+   */
   static async create(db: WorkspaceDb, agentInvites: AgentInvites): Promise<Roster> {
     const roster = new Roster(db, agentInvites);
-    for (const actor of await db.listActors("agent")) {
-      if (await agentInvites.isRevoked(actor.id)) continue;
-      roster.known.set(rosterKey("agent", actor.displayName), {
-        id: actor.id,
-        name: actor.displayName,
-        kind: "agent",
-        status: "",
-        runState: "idle",
-        online: false,
-      });
+    for (const kind of ["agent", "human"] as const) {
+      for (const actor of await db.listMembers(kind)) {
+        if (kind === "agent" && (await agentInvites.isRevoked(actor.id))) continue;
+        roster.known.set(rosterKey(kind, actor.displayName), {
+          id: actor.id,
+          name: actor.displayName,
+          kind,
+          status: "",
+          runState: "idle",
+          online: false,
+        });
+      }
     }
     return roster;
   }
@@ -93,7 +96,8 @@ export class Roster {
     }
   }
 
-  /** Humans exist only while a tab is open; dropping one logs it out. */
+  /** Remove a scripted demo persona from the live roster after a demo run
+   *  (real humans persist as offline; their actor rows stay either way). */
   removeHuman(id: string): void {
     for (const [key, p] of this.known) {
       if (p.id === id && p.kind === "human") this.known.delete(key);

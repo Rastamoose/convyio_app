@@ -54,7 +54,7 @@ export async function authorizeMutation(
   if (!item) {
     return { allow: false, code: "ITEM_NOT_FOUND", message: `no board item ${boardItemRef}` };
   }
-  if (item.serverId !== actor.serverId) {
+  if (item.workspaceId !== actor.workspaceId) {
     return { allow: false, code: "ITEM_WRONG_SERVER", message: `${boardItemRef} belongs to another server` };
   }
   if (item.deletedAt) {

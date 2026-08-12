@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ClientEvent,
   Participant,
+  WorkspaceInfo,
 } from "@workspace/shared";
 import { isBoardEnvelope } from "@workspace/shared";
 import type { JoinCredentials } from "../ws";
@@ -27,6 +28,8 @@ import { useTyping, type Typist } from "./useTyping";
 import { useUnreads } from "./useUnreads";
 
 export interface WorkspaceState {
+  /** Workspace identity from the welcome frame; null until connected. */
+  workspace: WorkspaceInfo | null;
   self: Participant | null;
   participants: Participant[];
   channels: string[];
@@ -380,6 +383,7 @@ export function WorkspaceProvider({
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
+    workspace: connection.workspace,
     self: connection.self,
     participants: connection.participants,
     channels: connection.channels,

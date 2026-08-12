@@ -14,7 +14,7 @@ vi.mock("../hooks/WorkspaceContext", () => ({
 
 const item: BoardItem = {
   id: "item-1",
-  serverId: "srv-1",
+  workspaceId: "srv-1",
   ref: "task-1",
   title: "Fix ICP rounding",
   description: null,

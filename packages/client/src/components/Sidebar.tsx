@@ -9,7 +9,6 @@ import { ApprovalQueue } from "./ApprovalQueue";
 import { MemberCard } from "./MemberCard";
 import { PinIcon } from "./PinnedMessages";
 
-const SERVER_NAME = "Workspace";
 /** How long a "Delete" click stays armed before a second click is required. */
 const DELETE_CONFIRM_MS = 3000;
 
@@ -234,6 +233,7 @@ export function Sidebar({
   onPrefill: (text: string) => void;
 }) {
   const {
+    workspace,
     participants,
     self,
     channels,
@@ -395,7 +395,7 @@ export function Sidebar({
     <aside className="flex h-full w-60 flex-col bg-sidebar">
       {/* Workspace header */}
       <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4 select-none">
-        <span className="truncate font-semibold text-body">{SERVER_NAME}</span>
+        <span className="truncate font-semibold text-body">{workspace?.name}</span>
         <span className="truncate text-[11px] leading-tight text-faint">
           humans &amp; agents, one room
         </span>

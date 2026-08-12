@@ -20,6 +20,7 @@ const deleteChannel = vi.fn();
 const markRead = vi.fn();
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
+    workspace: { id: "ws-1", name: "test_space" },
     participants,
     self: participants[0] ?? null,
     channels,
@@ -60,7 +61,7 @@ const human = (id: string, name: string, online: boolean): Participant => ({
 
 const proposal = (id: string, createdAt: number): BoardItem => ({
   id,
-  serverId: "srv-1",
+  workspaceId: "srv-1",
   ref: id,
   title: id,
   description: null,
@@ -100,6 +101,12 @@ describe("Sidebar", () => {
     channels = ["general", "design"];
     archivedChannels = [];
     pinnedChannels = [];
+  });
+
+  it("shows the workspace name from context in the header", () => {
+    renderSidebar();
+
+    expect(screen.getByText("test_space")).toBeInTheDocument();
   });
 
   it("groups members into Online/Offline sections with counts", () => {

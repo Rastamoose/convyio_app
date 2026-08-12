@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ClientEvent, Participant, ServerEvent } from "@workspace/shared";
+import type { ClientEvent, Participant, ServerEvent, WorkspaceInfo } from "@workspace/shared";
 import { WorkspaceSocket, type JoinCredentials } from "../ws";
 
 /**
@@ -17,6 +17,7 @@ export function useConnection(
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
+  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [self, setSelf] = useState<Participant | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
@@ -32,6 +33,7 @@ export function useConnection(
     const unsubscribeEvents = socket.onEvent((event) => {
       switch (event.type) {
         case "welcome":
+          setWorkspace(event.workspace);
           setSelf(event.self);
           setParticipants(event.participants);
           setChannels(event.channels);
@@ -104,6 +106,7 @@ export function useConnection(
   }, [credentials.name, credentials.authToken]);
 
   return {
+    workspace,
     self,
     participants,
     channels,

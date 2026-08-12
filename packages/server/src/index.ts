@@ -90,7 +90,7 @@ async function main() {
 
   const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
-    serverId: db.serverId,
+    workspace: { id: db.workspaceId, name: db.workspaceName },
     demoChannels,
     // Unconfigured is not guest mode here: refuse every join rather than
     // trust self-declared names (the Hub's own undefined-gate fallback is

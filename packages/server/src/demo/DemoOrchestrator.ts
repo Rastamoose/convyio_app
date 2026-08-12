@@ -143,7 +143,7 @@ export class DemoOrchestrator {
     const ref =
       this.lastProposalRef ?? (await this.waitForProposal(AGENT_TIMEOUT_MS));
     const actor = await this.db.upsertActor("human", author);
-    const item = await this.service.find(this.db.serverId, ref);
+    const item = await this.service.find(this.db.workspaceId, ref);
     if (!item || item.status !== "proposed") {
       throw new Error(`demo proposal ${ref} is not approvable`);
     }
@@ -161,7 +161,7 @@ export class DemoOrchestrator {
     const actor = await this.db.upsertActor("human", asPersona);
     for (const ref of this.demoRefs) {
       try {
-        const item = await this.service.find(this.db.serverId, ref);
+        const item = await this.service.find(this.db.workspaceId, ref);
         if (item && item.deletedAt == null) await this.service.softDelete(actor, ref);
       } catch (err) {
         console.warn(`[demo] cleanup of ${ref} failed:`, err instanceof Error ? err.message : err);

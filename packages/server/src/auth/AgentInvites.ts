@@ -96,11 +96,13 @@ export class AgentInvites {
   }
 
   async list(): Promise<AgentInvite[]> {
+    // Actors are global identities; scope the listing through membership.
     const rows = await this.db.sql<InviteRow[]>`
       SELECT i.*, a.display_name AS name
       FROM agent_invites i
       JOIN actors a ON a.id = i.actor_id
-      WHERE a.server_id = ${this.db.serverId} AND i.revoked_at IS NULL
+      JOIN workspace_members m ON m.actor_id = i.actor_id AND m.workspace_id = ${this.db.workspaceId}
+      WHERE i.revoked_at IS NULL
       ORDER BY i.created_at DESC
     `;
     return rows.map(toInvite);

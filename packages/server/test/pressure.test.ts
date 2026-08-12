@@ -107,7 +107,7 @@ describe("pressure: HTTP edges", async () => {
       env.api("POST", `/api/board/items/${created.item.id}/deny`, human.token),
     ]);
     assert.deepEqual([a.status, b.status].sort(), [200, 409]);
-    const item = (await env.service.find(env.db.serverId, created.item.id))!;
+    const item = (await env.service.find(env.db.workspaceId, created.item.id))!;
     assert.ok(["approved", "denied"].includes(item.status));
   });
 
@@ -144,11 +144,16 @@ describe("pressure: HTTP edges", async () => {
     assert.equal(res.body.events[1].actorName, "dana");
   });
 
-  test("actors endpoint lists the roster", async () => {
+  test("actors endpoint lists workspace members only", async () => {
+    // dana came through upsertActor (guest identity, not registered);
+    // noodle is an agent (auto-registered); signup registers a human.
+    const registered = await env.db.createHuman(randomUUID(), "member-mia", "mia@example.com");
     const res = await env.api("GET", "/api/actors", human.token);
     assert.equal(res.status, 200);
     const names = res.body.actors.map((a: any) => a.displayName);
-    assert.ok(names.includes("dana") && names.includes("noodle"));
+    assert.ok(names.includes("noodle"));
+    assert.ok(names.includes(registered.displayName));
+    assert.ok(!names.includes("dana"));
   });
 
   test("operating on a deleted item → 409 everywhere", async () => {
@@ -208,9 +213,9 @@ describe("pressure: toolman sandbox", async () => {
     assert.equal(res.ok, true);
   });
 
-  test("agent write against wrong-server item → ITEM_WRONG_SERVER shape holds", async () => {
-    // Same DB is single-server; simulate by faking the agent's server id.
-    const foreign: Actor = { ...agent, serverId: randomUUID() };
+  test("agent write against wrong-workspace item → ITEM_WRONG_SERVER shape holds", async () => {
+    // Same DB is single-workspace; simulate by faking the agent's workspace id.
+    const foreign: Actor = { ...agent, workspaceId: randomUUID() };
     const res = await toolman.execute(foreign, { kind: "write_file", path: "f.txt", content: "z" }, item.ref);
     assert.equal(res.ok, false);
     assert.equal(res.code, "ITEM_WRONG_SERVER");

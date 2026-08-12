@@ -47,6 +47,7 @@ vi.mock("./ws", () => {
       for (const listener of this.listeners) {
         listener({
           type: "welcome",
+          workspace: { id: "ws-1", name: "test_space" },
           self,
           history: historySeed,
           participants: [self],

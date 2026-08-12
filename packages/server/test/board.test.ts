@@ -149,7 +149,7 @@ describe("board invariants", async () => {
     const eventsBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
     const itemsBefore = itemsBeforeRows[0].c;
     const eventsBefore = eventsBeforeRows[0].c;
-    const ghost: Actor = { id: randomUUID(), kind: "human", displayName: "ghost", serverId: env.db.serverId };
+    const ghost: Actor = { id: randomUUID(), kind: "human", displayName: "ghost", workspaceId: env.db.workspaceId };
     await assert.rejects(env.service.create(ghost, { title: "never lands" }));
     const itemsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
     const eventsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
@@ -158,7 +158,7 @@ describe("board invariants", async () => {
   });
 
   test("T11: concurrent creation produces unique sequential refs", async () => {
-    const before = (await env.service.list(env.db.serverId, { includeDeleted: true })).length;
+    const before = (await env.service.list(env.db.workspaceId, { includeDeleted: true })).length;
     const results = await Promise.all(
       Array.from({ length: 10 }, (_, i) =>
         env.api("POST", "/api/board/items", human.token, { title: `parallel ${i}` }),
@@ -171,7 +171,7 @@ describe("board invariants", async () => {
       assert.equal(numbers[i], numbers[i - 1] + 1);
     }
     assert.equal(
-      (await env.service.list(env.db.serverId, { includeDeleted: true })).length,
+      (await env.service.list(env.db.workspaceId, { includeDeleted: true })).length,
       before + 10,
     );
   });
@@ -203,9 +203,9 @@ describe("board invariants", async () => {
   test("list defaults exclude denied and deleted", async () => {
     const item = await env.service.create(agent.actor, PROPOSAL);
     await env.service.deny(human.actor, item.id);
-    const listed = await env.service.list(env.db.serverId);
+    const listed = await env.service.list(env.db.workspaceId);
     assert.ok(!listed.some((i) => i.id === item.id));
-    const all = await env.service.list(env.db.serverId, { includeDeleted: true });
+    const all = await env.service.list(env.db.workspaceId, { includeDeleted: true });
     assert.ok(all.some((i) => i.id === item.id));
   });
 
@@ -236,7 +236,7 @@ describe("T10: full-stack approval fan-out", async () => {
     const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, null);
     const server = http.createServer((req, res) => void handler(req, res));
     const hub = new Hub(server, await Roster.create(db, agentInvites), messages, channels, attachments, sessions, toolman, {
-      serverId: db.serverId,
+      workspace: { id: db.workspaceId, name: db.workspaceName },
       demoChannels: [],
     });
     service.onEvent = (e) => hub.broadcastBoardEvent(e);

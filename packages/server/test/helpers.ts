@@ -212,7 +212,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
   const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
-    serverId: db.serverId,
+    workspace: { id: db.workspaceId, name: db.workspaceName },
     demoChannels: [],
     authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites) : undefined,
   });
@@ -295,15 +295,17 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     },
     async reset() {
       this.closeClients();
-      // Truncate all mutable tables, keep the server_id meta row.
+      // Truncate all mutable tables, keep the workspaces row so
+      // db.workspaceId stays valid.
       await db.sql`
-        TRUNCATE TABLE actors, board_items, board_events, ref_counters,
-          channels, messages, message_reactions, attachments, agent_invites
+        TRUNCATE TABLE actors, workspace_members, board_items, board_events,
+          ref_counters, channels, messages, message_reactions, attachments,
+          agent_invites
         RESTART IDENTITY CASCADE
       `;
       await db.sql`
-        INSERT INTO ref_counters (server_id, n) VALUES (${db.serverId}, 0)
-        ON CONFLICT (server_id) DO UPDATE SET n = 0
+        INSERT INTO ref_counters (workspace_id, n) VALUES (${db.workspaceId}, 0)
+        ON CONFLICT (workspace_id) DO UPDATE SET n = 0
       `;
       await channels.seed([{ name: "general", isDemo: false }]);
       sessions.clear();
