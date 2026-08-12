@@ -21,8 +21,11 @@ export const config = {
   /** Sandbox root for the agent's native file/bash tools (Toolman) only —
    *  unrelated to persistence, which now lives entirely in Supabase. */
   dataDir: process.env.DATA_DIR ?? path.resolve(__dirname, "../../../data"),
-  /** Single allowed browser origin for the HTTP API (the Vite dev client). */
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  /** CORS origin for the HTTP API. In dev, the Vite client can end up on
+   *   any localhost port (5173, 5174, …), so the default mirrors any
+   *   localhost origin. Set CORS_ORIGIN explicitly for production (one
+   *   origin) or to a specific port in dev if you need it locked. */
+  corsOrigin: process.env.CORS_ORIGIN ?? "localhost-dev",
   supabaseUrl: required("SUPABASE_URL"),
   supabaseSecretKey: required("SUPABASE_SECRET_KEY"),
   supabaseDbUrl: required("SUPABASE_DB_URL"),

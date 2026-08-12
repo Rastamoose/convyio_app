@@ -28,6 +28,8 @@ vi.mock("./lib/supabase", () => ({
       signOut: () => Promise.resolve({ error: null }),
     },
   },
+  getRememberMe: () => true,
+  setRememberMe: vi.fn(),
 }));
 
 vi.mock("./ws", () => {

@@ -72,7 +72,14 @@ export function createApiHandler(
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/api/")) return false;
 
-    res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+    const allowedOrigin = resolveCorsOrigin(req, corsOrigin);
+    if (!allowedOrigin) {
+      // CORS preflight for a disallowed origin: 204 with no ACAO is correct —
+      // the browser will reject the response and never issue the real request.
+      res.writeHead(204).end();
+      return true;
+    }
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS");
     res.setHeader(
@@ -95,7 +102,7 @@ export function createApiHandler(
         json(res, 200, { ok: true });
       } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
-        await routeAuth(req, res, parts, authGate);
+        await routeAuth(req, res, parts, url, authGate);
       } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
         await serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
@@ -291,6 +298,7 @@ async function routeAuth(
   req: IncomingMessage,
   res: ServerResponse,
   parts: string[], // ["api", "auth", ...]
+  url: URL,
   authGate: AuthGate | null,
 ): Promise<void> {
   const method = req.method ?? "GET";
@@ -304,6 +312,17 @@ async function routeAuth(
   }
   if (!authGate) {
     throw new ApiError(409, "AUTH_DISABLED", "this server runs in guest mode");
+  }
+
+  // GET /api/auth/username-available?name= — unauthenticated on purpose:
+  // usernames are public display names and the signup form probes them
+  // before a session exists. Always 200; the verdict is in the body.
+  if (parts[2] === "username-available" && method === "GET") {
+    const name = url.searchParams.get("name") ?? "";
+    // Same bound as usernameBodySchema: absurd lengths are just "invalid",
+    // never a 4xx, so the form's probe loop stays a single code path.
+    if (name.length > 200) return json(res, 200, { available: false, reason: "INVALID" });
+    return json(res, 200, await authGate.auth.usernameAvailable(name));
   }
 
   if (parts[2] === "session" && method === "GET") {
@@ -415,6 +434,24 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   } catch {
     throw new ApiError(400, "BAD_JSON", "malformed JSON body");
   }
+}
+
+/** Resolve the Access-Control-Allow-Origin header per request. When
+ *  corsOrigin === "localhost-dev", mirror any localhost origin so the Vite
+ *  dev server works regardless of which port it landed on. Production
+ *  should pass a single explicit origin (the server serves the client from
+ *  the same origin, so CORS isn't needed there — but the header is harmless). */
+function resolveCorsOrigin(req: IncomingMessage, corsOrigin: string): string | null {
+  if (corsOrigin !== "localhost-dev") return corsOrigin;
+  const origin = req.headers.origin;
+  if (!origin) return "http://localhost:5173"; // no Origin header (same-origin request)
+  try {
+    const host = new URL(origin).hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) {
+      return origin;
+    }
+  } catch { /* malformed origin — let it through as null */ }
+  return null;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {

@@ -25,9 +25,18 @@ import { createTestDb } from "./pgSchema";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
+/** A user record for fakeSupabase; user_metadata mirrors the real Supabase
+ *  shape (data.user.user_metadata) so Auth's desired_username auto-claim is
+ *  testable offline. */
+export interface FakeSupabaseUser {
+  id: string;
+  email: string | null;
+  user_metadata?: { desired_username?: string };
+}
+
 /** A fake Supabase admin client: getUser(jwt) resolves via a fixed lookup
  *  table the test controls, so ws-level auth tests never touch the network. */
-export function fakeSupabase(users: Record<string, { id: string; email: string | null }>): SupabaseClient {
+export function fakeSupabase(users: Record<string, FakeSupabaseUser>): SupabaseClient {
   return {
     auth: {
       getUser: async (jwt: string) => {
@@ -164,7 +173,7 @@ export interface WsEnv {
 
 export interface WsAuthOptions {
   /** Fake Supabase getUser(jwt) lookup table — see fakeSupabase() above. */
-  users: Record<string, { id: string; email: string | null }>;
+  users: Record<string, FakeSupabaseUser>;
   agentToken?: string;
 }
 

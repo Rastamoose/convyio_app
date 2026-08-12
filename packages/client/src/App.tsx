@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { BoardItem, ChatMessage } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
-import { LoginScreen } from "./components/LoginScreen";
+import { LoginScreen, MIN_PASSWORD_LENGTH } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar, type WorkspaceView } from "./components/TopBar";
 import { FileDropZone } from "./components/FileDropZone";
@@ -21,9 +21,10 @@ const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
  * method configured is treated as a misconfigured deployment, not guest mode
  * — it shows a dead-end screen instead of letting anyone in unauthenticated.
  * Auth mode tracks the Supabase session directly (supabase-js persists and
- * refreshes it in localStorage on its own, no app-managed token storage
- * needed); a brand-new Supabase user who has not yet picked a username sees
- * UsernameStep before the workspace, for either sign-in provider alike.
+ * refreshes it through lib/supabase's remember-me storage adapter, no
+ * app-managed token storage needed); a brand-new Supabase user who has not
+ * yet picked a username sees UsernameStep before the workspace, for either
+ * sign-in provider alike.
  */
 export default function App() {
   const [authMode, setAuthMode] = useState<{
@@ -38,6 +39,9 @@ export default function App() {
   const [usernameStatus, setUsernameStatus] = useState<"unknown" | "ok" | "needs_username">(
     "unknown",
   );
+  // Set when the user arrives from a password-reset email; gates the whole
+  // app behind ResetPasswordScreen until a new password is saved.
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,7 +65,8 @@ export default function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
       setSession(newSession);
     });
     return () => listener.subscription.unsubscribe();
@@ -122,6 +127,10 @@ export default function App() {
         emailAuthEnabled={authMode.emailAuthEnabled}
       />
     );
+  }
+
+  if (recovering) {
+    return <ResetPasswordScreen onDone={() => setRecovering(false)} />;
   }
 
   if (usernameStatus === "unknown") {
@@ -218,6 +227,92 @@ function UsernameStep({ accessToken, onDone }: { accessToken: string; onDone: ()
           className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
         >
           Join Workspace
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Shown when the user lands from a password-reset email (PASSWORD_RECOVERY):
+ *  sets the new password on the live recovery session, then hands the user
+ *  back to the normal signed-in flow. */
+function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const valid = password.length >= MIN_PASSWORD_LENGTH && password === confirm;
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      setError(error.message);
+      setSubmitting(false);
+      return;
+    }
+    onDone();
+  };
+
+  const fieldClass =
+    "w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple";
+  const labelClass = "mb-2 block text-xs font-bold tracking-wide text-muted uppercase";
+
+  return (
+    <div className="flex h-full items-center justify-center bg-chat">
+      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
+        <h1 className="mb-1 text-2xl font-semibold text-body">Set a new password</h1>
+        <p className="mb-6 text-muted">
+          Choose a new password for your account ({MIN_PASSWORD_LENGTH}+ characters).
+        </p>
+        <div className="mb-4">
+          <label htmlFor="new-password" className={labelClass}>
+            New password
+          </label>
+          <input
+            id="new-password"
+            type="password"
+            autoFocus
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+            className={fieldClass}
+            placeholder="••••••••"
+          />
+        </div>
+        <div className="mb-4">
+          <label htmlFor="confirm-password" className={labelClass}>
+            Confirm password
+          </label>
+          <input
+            id="confirm-password"
+            type="password"
+            value={confirm}
+            onChange={(e) => {
+              setConfirm(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+            className={fieldClass}
+            placeholder="••••••••"
+          />
+        </div>
+        {error && (
+          <p role="alert" className="mb-4 text-sm text-dead">
+            {error}
+          </p>
+        )}
+        <button
+          onClick={() => void submit()}
+          disabled={!valid || submitting}
+          className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Save new password
         </button>
       </div>
     </div>

@@ -35,12 +35,33 @@ export class Auth {
 
   /** Same verification, framed as ok/needs_username for the HTTP front
    *  door (GET /api/auth/session) so the client knows whether to show the
-   *  username step after a fresh Supabase sign-in. */
+   *  username step after a fresh Supabase sign-in. When the signup flow
+   *  stashed a `desired_username` in Supabase user_metadata, the first
+   *  session call tries to claim it silently; any failure (invalid, taken,
+   *  or lost the unique-constraint race against another tab) falls back to
+   *  needs_username rather than throwing — the client's manual username
+   *  step is the recovery path. */
   async session(jwt: string): Promise<SessionResult> {
     const user = await this.verify(jwt);
     if (!user) throw new ApiError(401, "BAD_CREDENTIAL", "sign-in could not be verified");
     const actor = await this.store.getActor(user.id);
-    return actor ? { status: "ok", username: actor.displayName } : { status: "needs_username" };
+    if (actor) return { status: "ok", username: actor.displayName };
+    if (user.desiredUsername) {
+      const name = user.desiredUsername.trim();
+      if (
+        USERNAME_PATTERN.test(name) &&
+        !(await this.store.findActorByName("human", name)) &&
+        !(await this.store.findActorByName("agent", name))
+      ) {
+        try {
+          const created = await this.store.createHuman(user.id, name, user.email);
+          return { status: "ok", username: created.displayName };
+        } catch {
+          // Two tabs confirming at once: the other one won the insert.
+        }
+      }
+    }
+    return { status: "needs_username" };
   }
 
   /** Bind a username to the Supabase-verified caller, creating the actor.
@@ -67,9 +88,31 @@ export class Auth {
     return { username: actor.displayName };
   }
 
-  private async verify(jwt: string): Promise<{ id: string; email: string | null } | null> {
+  /** Availability check for the signup form (GET /api/auth/username-available).
+   *  Always answers rather than throwing — a form probing names as the user
+   *  types wants a verdict, not an error. The verdict is advisory only:
+   *  session()/claimUsername() re-check at claim time, so a stale "available"
+   *  can never bind a duplicate. */
+  async usernameAvailable(name: string): Promise<{ available: boolean; reason?: "INVALID" | "TAKEN" }> {
+    const trimmed = name.trim();
+    if (!USERNAME_PATTERN.test(trimmed)) return { available: false, reason: "INVALID" };
+    if ((await this.store.findActorByName("human", trimmed)) || (await this.store.findActorByName("agent", trimmed))) {
+      return { available: false, reason: "TAKEN" };
+    }
+    return { available: true };
+  }
+
+  private async verify(
+    jwt: string,
+  ): Promise<{ id: string; email: string | null; desiredUsername: string | null } | null> {
     const { data, error } = await this.supabase.auth.getUser(jwt);
     if (error || !data.user) return null;
-    return { id: data.user.id, email: data.user.email ?? null };
+    const desired = data.user.user_metadata?.desired_username;
+    return {
+      id: data.user.id,
+      email: data.user.email ?? null,
+      // user_metadata is client-writable JSON, so trust nothing but a string.
+      desiredUsername: typeof desired === "string" ? desired : null,
+    };
   }
 }

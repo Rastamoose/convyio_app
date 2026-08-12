@@ -35,7 +35,7 @@ Test one:     npm test -w @workspace/server -- --test-name-pattern "<name>"   (v
 Lint / types: npm run typecheck   (root; or npx tsc --noEmit -p packages/<name>)
 Run:          npm run dev   (server ws+http :3001, client :5173, agent; needs GEMINI_API_KEY in .env)
 Never touch:  package-lock.json (except via npm), data/ (runtime state), .env
-Ask first:    new dependency, SQLite schema change, wire-protocol or HTTP API change, auth/toolman changes
+Ask first:    new dependency, Postgres schema change (supabase/migrations/), wire-protocol or HTTP API change, auth/toolman changes
 ```
 
 ---

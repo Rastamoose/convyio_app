@@ -26,7 +26,7 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | `EMAIL_AUTH`                | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither this nor `GOOGLE_AUTH_ENABLED` set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
 | `AGENT_TOKEN`               | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
 | `CLIENT_DIST`               | server  | `packages/client/dist`     | Where the built client lives; absent = API only (dev).                  |
-| `CORS_ORIGIN`               | server  | `http://localhost:5173`    | Dev-only: the Vite origin allowed to call the API cross-origin.         |
+| `CORS_ORIGIN`               | server  | `localhost-dev`            | Dev-only: origin allowed to call the API cross-origin. The default mirrors any localhost/private-LAN origin (Vite may land on 5174+); set an explicit origin to lock it down. |
 | `VITE_WS_URL`               | client  | —                          | Dev-only build override; production derives from `window.location`.     |
 
 ## Quick start — Docker
@@ -111,10 +111,10 @@ location / {
 ## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com) (the free tier is enough for this app's scale).
-2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or `psql "$SUPABASE_DB_URL" -f supabase/migrations/20260809120000_init.sql`), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
+2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or run every file in `supabase/migrations/` in filename order with `psql "$SUPABASE_DB_URL" -f <file>` — later migrations add `agent_invites` and enable deny-all RLS, so the init file alone is not enough), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
 3. Copy the project's URL and keys (Project Settings → API) into `.env`: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `VITE_SUPABASE_URL` (same as `SUPABASE_URL`), `VITE_SUPABASE_PUBLISHABLE_KEY` (same as `SUPABASE_PUBLISHABLE_KEY`); copy the Postgres connection string (Project Settings → Database → Connection string → URI) into `SUPABASE_DB_URL`.
 4. In Authentication → Providers, enable Email (for `EMAIL_AUTH=1`) and/or Google (for `GOOGLE_AUTH_ENABLED=1` — see "Google Sign-In" below for the OAuth client setup Google itself requires).
-5. If email/password sign-in is enabled, decide whether Authentication → Settings → "Confirm email" should be on. This app's UI does not currently have a "check your email" step — leaving it off gives the same zero-friction signup the app had before this migration; turning it on will strand new signups on this app's UI until that flow is built.
+5. If email/password sign-in is enabled, decide whether Authentication → Settings → "Confirm email" should be on. With it on, the UI shows "Account created — check your email for a confirmation link" after signup, and the user signs in once confirmed. Leaving it off gives zero-friction signup (account + session immediately).
 
 ## Google Sign-In
 

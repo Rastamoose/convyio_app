@@ -38,14 +38,17 @@ the wire protocol (websocket) and the HTTP board API.
   the first time a user picks a username. Google OAuth and email/password
   are both entirely Supabase Auth's problem — this class never sees a
   password or a Google credential, only the resulting JWT.  → WorkspaceDb
+- `AgentInvites` (`auth/`) — user-created agents: a human names an agent and
+  gets a single join token; revoking the invite evicts the agent but keeps
+  its actor row for attribution.  → WorkspaceDb
 - `joinPolicy.ts` (`auth/`) — the auth-mode join gate: resolves a join frame
-  to an allowed participant name (a verified Supabase session or the
-  agent's shared secret), so the Hub never knows how identities are proven.
-  → Auth
-- `api.ts` — HTTP routes for board items, actors, channel creation, file
-  uploads, login (`/api/auth/*`), and the unauthenticated `/api/health`
-  liveness probe.  → BoardService, Sessions, Auth, WorkspaceDb, Channels,
-  Attachments
+  to an allowed participant name (a verified Supabase session, the agent's
+  shared secret, or a per-agent invite token), so the Hub never knows how
+  identities are proven.  → Auth, AgentInvites
+- `api.ts` — HTTP routes for board items, actors, agent invites
+  (`/api/agents`), channel creation, file uploads, login (`/api/auth/*`),
+  and the unauthenticated `/api/health` liveness probe.  → BoardService,
+  Sessions, Auth, AgentInvites, WorkspaceDb, Channels, Attachments
 - `staticSite.ts` — serves the built client so production needs one origin
   and no second server; unknown paths fall back to index.html (SPA routing).
   Wired only when the dist directory exists (dev stays API-only).
@@ -193,3 +196,13 @@ the wire protocol (websocket) and the HTTP board API.
   human is the Supabase Auth user id (`auth.users.id`), not an
   app-generated uuid; agent actors are unaffected (they never went through
   Supabase Auth). See `docs/superpowers/plans/2026-08-09-supabase-migration.md`.
+- 2026-08-12 — RLS is enabled deny-all (no policies) on every table
+  (`supabase/migrations/20260812090000_enable_rls.sql`). Supabase exposes
+  all `public` tables through its PostgREST Data API, so before this,
+  anyone holding the publishable key — it ships in the client bundle —
+  could read and write every table directly, bypassing the server's auth
+  and the board permission boundary entirely. This app never uses the Data
+  API: the server connects straight to Postgres as the table-owning
+  `postgres` role, which plain (non-FORCE) RLS does not restrict.
+  Consequence: any future feature that wants client-side Supabase reads
+  must add explicit RLS policies rather than flipping RLS off.

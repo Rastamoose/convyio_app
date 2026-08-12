@@ -1,8 +1,13 @@
 import { useState } from "react";
-import { supabase } from "../lib/supabase";
+import { getRememberMe, setRememberMe, supabase } from "../lib/supabase";
+import { apiBaseUrl } from "../lib/serverUrl";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MIN_PASSWORD_LENGTH = 8;
+export const MIN_PASSWORD_LENGTH = 8;
+
+// Same rule as the server's username claim and App.tsx's UsernameStep.
+const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
+const USERNAME_HINT = "1-32 characters: letters, digits, spaces, - and _";
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -110,34 +115,125 @@ export function LoginScreen({
   );
 }
 
-/** The email/password form: toggles between signing in and creating an
- *  account. Username is not collected here — both providers pick a
- *  username through the same post-auth step (App.tsx's UsernameStep). */
+/** The email/password form: toggles between signing in, creating an account
+ *  (username collected up front, claimed server-side from
+ *  user_metadata.desired_username on first session — App.tsx's UsernameStep
+ *  stays as the fallback), and requesting a password reset. */
 function EmailAuthForm() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
-  const [forgotMsg, setForgotMsg] = useState<string | null>(null);
+  const [rememberMe, setRememberMeChecked] = useState(getRememberMe);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [signupSentTo, setSignupSentTo] = useState<string | null>(null);
+  const [accountExists, setAccountExists] = useState(false);
 
+  const trimmedUsername = username.trim();
   const emailValid = EMAIL_PATTERN.test(email.trim());
   const passwordValid = password.length >= MIN_PASSWORD_LENGTH;
-  const canSubmit = emailValid && passwordValid && !submitting;
+  const usernameValid = USERNAME_PATTERN.test(trimmedUsername);
+  const canSubmit =
+    emailValid &&
+    passwordValid &&
+    !submitting &&
+    (mode !== "signup" || (usernameValid && !usernameError));
+
+  const switchMode = (next: "login" | "signup") => {
+    setMode(next);
+    setError(null);
+    setUsernameError(null);
+    setSignupSentTo(null);
+    setAccountExists(false);
+  };
+
+  /** Returns whether signup may proceed. An unreachable availability check
+   *  never blocks — the server-side claim falls back to UsernameStep. */
+  const checkUsername = async (): Promise<boolean> => {
+    if (!USERNAME_PATTERN.test(trimmedUsername)) {
+      setUsernameError(USERNAME_HINT);
+      return false;
+    }
+    try {
+      const res = await fetch(
+        `${apiBaseUrl()}/api/auth/username-available?name=${encodeURIComponent(trimmedUsername)}`,
+      );
+      const data = (await res.json()) as { available: boolean; reason?: "INVALID" | "TAKEN" };
+      if (!data.available) {
+        setUsernameError(data.reason === "TAKEN" ? "That username is taken" : USERNAME_HINT);
+        return false;
+      }
+    } catch {
+      // Server down or mid-restart: let the signup through anyway.
+    }
+    setUsernameError(null);
+    return true;
+  };
 
   const submit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
-    const { error } =
-      mode === "login"
-        ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
-        : await supabase.auth.signUp({ email: email.trim(), password });
-    if (error) setError(error.message);
+    // Set before the auth call so the token writes land in the right store.
+    setRememberMe(rememberMe);
+    if (mode === "signup") {
+      if (!(await checkUsername())) {
+        setSubmitting(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: { desired_username: trimmedUsername },
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (error) {
+        setError(error.message);
+      } else if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        // Supabase's anti-enumeration fake user: no identities means the
+        // email is already registered, and no confirmation email went out.
+        setAccountExists(true);
+      } else if (!data.session && data.user) {
+        setSignupSentTo(email.trim());
+      }
+      // With a session, App.tsx's onAuthStateChange takes over.
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      // Supabase deliberately doesn't reveal whether the email exists, so
+      // neither can we — one message covers both wrong-password and no-account.
+      if (error) {
+        setError("Invalid email or password. If you don't have an account yet, sign up first.");
+      }
+    }
     setSubmitting(false);
-    // On success App.tsx's onAuthStateChange picks up the new session.
   };
+
+  if (mode === "forgot") {
+    return <ForgotPasswordForm initialEmail={email} onBack={() => switchMode("login")} />;
+  }
+
+  if (signupSentTo) {
+    return (
+      <>
+        <h1 className="mb-1 text-2xl font-semibold text-body">Check your email</h1>
+        <p className="mb-6 text-muted">
+          Account created — we sent a confirmation link to{" "}
+          <span className="font-medium text-body">{signupSentTo}</span>. Click it, then come back
+          and sign in.
+        </p>
+        <button
+          onClick={() => switchMode("login")}
+          className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none"
+        >
+          Go to sign in
+        </button>
+      </>
+    );
+  }
 
   return (
     <>
@@ -146,15 +242,40 @@ function EmailAuthForm() {
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h1>
 
+      {mode === "signup" && (
+        <div className="mb-4">
+          <Field
+            id="username"
+            label="Username"
+            autoFocus
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setUsernameError(null);
+            }}
+            onBlur={() => trimmedUsername && void checkUsername()}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+            placeholder="e.g. harris"
+            maxLength={32}
+          />
+          <p
+            role={usernameError ? "alert" : undefined}
+            className={`-mt-2 text-sm ${usernameError ? "text-dead" : "text-faint"}`}
+          >
+            {usernameError ?? USERNAME_HINT}
+          </p>
+        </div>
+      )}
       <Field
         id="email"
         label="Email address"
         type="email"
-        autoFocus
+        autoFocus={mode === "login"}
         value={email}
         onChange={(e) => {
           setEmail(e.target.value);
           setError(null);
+          setAccountExists(false);
         }}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
         placeholder="you@example.com"
@@ -177,7 +298,10 @@ function EmailAuthForm() {
           <input
             type="checkbox"
             checked={rememberMe}
-            onChange={(e) => setRememberMe(e.target.checked)}
+            onChange={(e) => {
+              setRememberMeChecked(e.target.checked);
+              setRememberMe(e.target.checked);
+            }}
             className="accent-blurple"
           />
           Remember for 30 days
@@ -185,14 +309,13 @@ function EmailAuthForm() {
         {mode === "login" && (
           <button
             type="button"
-            onClick={() => setForgotMsg("Password reset isn't set up yet — ask an admin for help.")}
+            onClick={() => setMode("forgot")}
             className="mt-2 font-medium text-blurple hover:underline"
           >
             Forgot password
           </button>
         )}
       </div>
-      {forgotMsg && <p className="mb-4 text-sm text-faint">{forgotMsg}</p>}
 
       <button
         onClick={() => void submit()}
@@ -201,6 +324,20 @@ function EmailAuthForm() {
       >
         {mode === "login" ? "Sign in" : "Create account"}
       </button>
+
+      {accountExists && (
+        <p role="alert" className="mt-4 text-sm text-dead">
+          An account with this email already exists —{" "}
+          <button
+            type="button"
+            onClick={() => switchMode("login")}
+            className="font-medium text-blurple hover:underline"
+          >
+            sign in instead
+          </button>
+          .
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="mt-4 text-sm text-dead">
@@ -212,13 +349,69 @@ function EmailAuthForm() {
         {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
         <button
           type="button"
-          onClick={() => {
-            setMode(mode === "login" ? "signup" : "login");
-            setError(null);
-          }}
+          onClick={() => switchMode(mode === "login" ? "signup" : "login")}
           className="font-medium text-blurple hover:underline"
         >
           {mode === "login" ? "Sign up" : "Sign in"}
+        </button>
+      </p>
+    </>
+  );
+}
+
+/** Requests a Supabase reset email. The confirmation copy never reveals
+ *  whether the account exists, so the call's outcome is deliberately not
+ *  surfaced. The reset link lands back on the app origin, where App.tsx's
+ *  PASSWORD_RECOVERY handling shows the new-password screen. */
+function ForgotPasswordForm({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const valid = EMAIL_PATTERN.test(email.trim());
+
+  const submit = async () => {
+    if (!valid || submitting) return;
+    setSubmitting(true);
+    await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin,
+    });
+    setSentTo(email.trim());
+    setSubmitting(false);
+  };
+
+  return (
+    <>
+      <h1 className="mb-1 text-2xl font-semibold text-body">Reset your password</h1>
+      <p className="mb-6 text-muted">Enter your email and we'll send you a reset link.</p>
+      {sentTo ? (
+        <p className="mb-4 text-sm text-body">
+          If an account exists for <span className="font-medium">{sentTo}</span>, a password reset
+          link is on its way.
+        </p>
+      ) : (
+        <>
+          <Field
+            id="reset-email"
+            label="Email address"
+            type="email"
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+            placeholder="you@example.com"
+          />
+          <button
+            onClick={() => void submit()}
+            disabled={!valid || submitting}
+            className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Send reset link
+          </button>
+        </>
+      )}
+      <p className="mt-6 text-center text-sm text-muted">
+        <button type="button" onClick={onBack} className="font-medium text-blurple hover:underline">
+          Back to sign in
         </button>
       </p>
     </>

@@ -55,6 +55,50 @@ describe("Auth", () => {
     const actor = await auth.resolveSession("tok-5");
     assert.equal(actor?.displayName, "Erin");
   });
+
+  test("session() auto-claims desired_username from Supabase user_metadata", async () => {
+    const auth = new Auth(
+      db,
+      fakeSupabase({
+        "tok-6": { id: "user-6", email: "f@example.com", user_metadata: { desired_username: "Frankie" } },
+      }),
+    );
+    assert.deepEqual(await auth.session("tok-6"), { status: "ok", username: "Frankie" });
+    const actor = await db.getActor("user-6");
+    assert.equal(actor?.displayName, "Frankie");
+  });
+
+  test("session() falls back to needs_username when desired_username is already taken", async () => {
+    const auth = new Auth(
+      db,
+      fakeSupabase({
+        "tok-7": { id: "user-7", email: null },
+        "tok-8": { id: "user-8", email: null, user_metadata: { desired_username: "Grace" } },
+      }),
+    );
+    await auth.claimUsername("tok-7", "Grace");
+    assert.deepEqual(await auth.session("tok-8"), { status: "needs_username" });
+    assert.equal(await db.getActor("user-8"), null);
+  });
+
+  test("session() falls back to needs_username for an invalid desired_username", async () => {
+    const auth = new Auth(
+      db,
+      fakeSupabase({
+        "tok-9": { id: "user-9", email: null, user_metadata: { desired_username: "***bad***" } },
+      }),
+    );
+    assert.deepEqual(await auth.session("tok-9"), { status: "needs_username" });
+    assert.equal(await db.getActor("user-9"), null);
+  });
+
+  test("usernameAvailable() reports free, taken (case-insensitively) and invalid names", async () => {
+    const auth = new Auth(db, fakeSupabase({ "tok-10": { id: "user-10", email: null } }));
+    assert.deepEqual(await auth.usernameAvailable("Hana"), { available: true });
+    await auth.claimUsername("tok-10", "Hana");
+    assert.deepEqual(await auth.usernameAvailable("hana"), { available: false, reason: "TAKEN" });
+    assert.deepEqual(await auth.usernameAvailable("***"), { available: false, reason: "INVALID" });
+  });
 });
 
 // ---------------------------------------------------------------------------
