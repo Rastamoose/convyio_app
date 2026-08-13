@@ -207,16 +207,21 @@ export class AcpBrain implements Brain {
     }
   }
 
+  /**
+   * Resolves the profile's model preference against what this harness actually
+   * offers, and returns what will really be used. A model the harness does not
+   * advertise falls back to the harness default rather than failing: the
+   * preference is stored server-side and can outlive the harness version that
+   * accepted it, and a stale preference must not take the agent offline. The
+   * caller reports the difference (see runtime.ts) as a degraded runner.
+   */
   private async applyRequestedModel(session: SessionState, requestedModel: string | null): Promise<string | undefined> {
     const modelOption = session.configOptions.find((option) => option.category === "model");
-    if (!requestedModel) return modelOption?.type === "select" ? modelOption.currentValue : undefined;
-    if (!modelOption || modelOption.type !== "select") {
-      throw new AcpFailure("ACP_MISCONFIGURED", "The Claude ACP harness did not advertise a model configuration option.");
-    }
+    const harnessDefault = modelOption?.type === "select" ? modelOption.currentValue : undefined;
+    if (!requestedModel) return harnessDefault;
+    if (!modelOption || modelOption.type !== "select") return harnessDefault;
     const values = selectChoices(modelOption).map((choice) => choice.value);
-    if (!values.includes(requestedModel)) {
-      throw new AcpFailure("ACP_MISCONFIGURED", `Requested model ${JSON.stringify(requestedModel)} is not advertised by the Claude ACP harness.`);
-    }
+    if (!values.includes(requestedModel)) return harnessDefault;
     if (modelOption.currentValue !== requestedModel) {
       const response = await this.contextOrThrow().request(acp.methods.agent.session.setConfigOption, {
         sessionId: session.sessionId,

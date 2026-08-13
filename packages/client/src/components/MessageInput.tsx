@@ -82,6 +82,11 @@ const EMOJI_SHORTCODES: Record<string, string> = {
 };
 const EMOJI_GRID = Object.values(EMOJI_SHORTCODES);
 
+// Highlighted row in the autocomplete popups. `bg-input` matches `--color-popup`
+// in light mode, so the selection was invisible there; tint with the accent
+// instead, which reads in both themes.
+const SELECTED = "bg-blurple/15 text-body";
+
 function findCommandQuery(text: string): string | null {
   if (!text.startsWith("/")) return null;
   const query = text.slice(1);
@@ -427,7 +432,7 @@ export function MessageInput({
   return (
     <div className="relative shrink-0 px-4 pb-6">
       {commandOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Commands
           </div>
@@ -436,7 +441,7 @@ export function MessageInput({
               <li key={c.name}>
                 <button
                   className={`flex w-full items-center gap-3 rounded px-2 py-1.5 text-left ${
-                    i === highlighted ? "bg-input" : ""
+                    i === highlighted ? SELECTED : ""
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
                   onMouseDown={(e) => {
@@ -458,7 +463,7 @@ export function MessageInput({
         </div>
       )}
       {mentionOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Members
           </div>
@@ -467,7 +472,7 @@ export function MessageInput({
               <li key={p.id}>
                 <button
                   className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left ${
-                    i === highlighted ? "bg-input text-body" : "text-body"
+                    i === highlighted ? SELECTED : "text-body"
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
                   onMouseDown={(e) => {
@@ -485,7 +490,7 @@ export function MessageInput({
         </div>
       )}
       {shortcodeOpen && (
-        <div className="absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg bg-popup shadow-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
             Emoji
           </div>
@@ -494,7 +499,7 @@ export function MessageInput({
               <li key={name}>
                 <button
                   className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left ${
-                    i === highlighted ? "bg-input" : ""
+                    i === highlighted ? SELECTED : ""
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
                   onMouseDown={(e) => {
@@ -513,7 +518,7 @@ export function MessageInput({
       {emojiPickerOpen && (
         <div
           ref={emojiPopupRef}
-          className="absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg bg-popup p-2 shadow-lg"
+          className="elevated absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg p-2"
         >
           {EMOJI_GRID.map((emoji, i) => (
             <button

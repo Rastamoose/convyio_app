@@ -1,4 +1,4 @@
-import type { ItemStatus, Participant } from "@workspace/shared";
+import type { AgentRuntimeSummary, ItemStatus, Participant, RunnerHealth } from "@workspace/shared";
 
 /**
  * Status → label/color mappings — the single source so the board, drawer and
@@ -51,4 +51,32 @@ export function presenceLabel(participant: Participant): string {
     return participant.online ? "Idle" : "Offline";
   }
   return participant.online ? "Online" : "Offline";
+}
+
+/** A paired agent's runner health, reported over the wire by `runner_status`. */
+const RUNNER_HEALTH_LABEL: Record<RunnerHealth, string> = {
+  checking: "Checking",
+  ready: "Ready",
+  degraded: "Degraded",
+  auth_required: "Needs sign-in",
+  misconfigured: "Misconfigured",
+  incompatible: "Incompatible",
+};
+
+const RUNNER_HEALTH_DOT: Record<RunnerHealth, string> = {
+  checking: "bg-away",
+  ready: "bg-online",
+  degraded: "bg-away",
+  auth_required: "bg-dead",
+  misconfigured: "bg-dead",
+  incompatible: "bg-dead",
+};
+
+/** A runner that has never connected is neither healthy nor unhealthy — offline. */
+export function runtimeHealthLabel(runtime: AgentRuntimeSummary): string {
+  return runtime.connected ? RUNNER_HEALTH_LABEL[runtime.health] : "Not connected";
+}
+
+export function runtimeHealthDot(runtime: AgentRuntimeSummary): string {
+  return runtime.connected ? RUNNER_HEALTH_DOT[runtime.health] : "bg-offline";
 }

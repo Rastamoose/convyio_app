@@ -179,7 +179,7 @@ function HoverRail({
   onPin: () => void;
 }) {
   return (
-    <div className="absolute -top-3 right-4 hidden overflow-hidden rounded border border-divider bg-popup shadow-sm group-hover:flex">
+    <div className="elevated absolute -top-3 right-4 hidden overflow-hidden rounded group-hover:flex">
       <RailButton title="Add reaction" onClick={onReact}>
         <SmileIcon className="h-4 w-4" />
       </RailButton>
@@ -223,7 +223,7 @@ function ReactionEmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => v
   return (
     <div
       ref={ref}
-      className="absolute top-6 right-4 z-30 flex gap-0.5 rounded-lg border border-divider bg-popup p-1.5 shadow-lg"
+      className="elevated absolute top-6 right-4 z-30 flex gap-0.5 rounded-lg p-1.5"
     >
       <EmojiRow onPick={onPick} />
     </div>
@@ -301,7 +301,7 @@ function MessageContextMenu({
       ref={ref}
       role="menu"
       style={{ top: pos.top, left: pos.left }}
-      className="fixed z-50 w-52 rounded-lg border border-divider bg-popup p-1 shadow-lg"
+      className="elevated fixed z-50 w-52 rounded-lg p-1"
     >
       <div className="flex gap-0.5 border-b border-divider p-1.5">
         <EmojiRow

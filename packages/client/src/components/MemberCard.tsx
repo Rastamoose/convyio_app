@@ -103,7 +103,7 @@ export function MemberCard({
     <div
       ref={ref}
       style={{ top, left: anchor.right + 8 }}
-      className="animate-pop-in fixed z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg bg-popup p-4 shadow-lg"
+      className="elevated animate-pop-in fixed z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg p-4"
     >
       <div className="mb-3 flex items-center gap-3">
         <Avatar name={participant.name} size={48} />

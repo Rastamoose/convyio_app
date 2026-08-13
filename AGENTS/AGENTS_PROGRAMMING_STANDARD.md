@@ -415,6 +415,18 @@ Minimalism is about structure, not correctness:
   solid, transparent, unfilled, or otherwise intentionally styled — never a
   tinted outline with a washed-out version of itself inside. This is a hard UX
   prohibition; do not introduce it, and remove it where found.
+- **Floating surfaces carry their own edge.** Anything that floats above the page —
+  popover, dropdown, context menu, autocomplete, command palette, modal panel — uses
+  the `elevated` utility from `packages/client/src/index.css` for its background,
+  border and shadow. Never a bare `bg-popup`, and never a shadow on its own: in light
+  mode `--color-popup` and `--color-chat` are the same white, and shadows barely
+  register against the dark surfaces, so a borderless card dissolves into whatever it
+  floats over. Callers bring their own radius, padding and position and do not
+  re-declare background, border or shadow. The one exception is a surface that needs a
+  meaning-carrying border colour of its own (toasts): those keep their own `border`
+  plus `bg-popup shadow-popup`, because `.elevated` sorts after `border-*` utilities in
+  the compiled sheet and would overwrite the colour. Guarded by
+  `packages/client/src/elevatedSurfaces.test.ts`.
 - Anything the user explicitly asked for. If the request is over-built by these
   standards, say so in one line — then build what was asked.
 - **Tests that can fail.** Non-trivial logic leaves one runnable check behind: the

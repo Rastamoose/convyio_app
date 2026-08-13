@@ -74,7 +74,7 @@ export function QuickSwitcher({
     <div className="fixed inset-0 z-50 animate-fade-in bg-sidebar-dark/80">
       <div
         ref={ref}
-        className="animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-lg bg-popup shadow-lg"
+        className="elevated animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-lg"
       >
         <input
           ref={inputRef}

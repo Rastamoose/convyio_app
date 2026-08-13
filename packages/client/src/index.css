@@ -38,6 +38,20 @@
   --color-scrollbar: #d4d4d1;
   --color-scrollbar-hover: #bfbfbb;
 
+  /* Offset ink shadows for the pressable login/auth buttons and their cards:
+     they pair with `border-2 border-body` and an `active:translate-*` press,
+     so the shadow is a hard offset block, not a blur. */
+  --shadow-hard-sm: 2px 2px 0 var(--color-body);
+  --shadow-hard-lg: 6px 6px 0 var(--color-body);
+
+  /* `shadow-popup` for the one floating surface that can't take `elevated`:
+     a toast draws its own variant-coloured border, and `.elevated` sorts after
+     `border-*` utilities in the output, so it would overwrite that colour.
+     Indirecting through `--popup-shadow` keeps the value theme-aware — Tailwind
+     inlines this declaration verbatim, so it stays a var the browser resolves
+     per element rather than a frozen light-mode value. */
+  --shadow-popup: var(--popup-shadow);
+
   --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
 
@@ -79,6 +93,28 @@
   }
 }
 
+/* Edge and lift for surfaces that float above the page. Plain custom
+   properties rather than `@theme` entries on purpose: Tailwind inlines a
+   theme value into the utility it generates, which would freeze the light
+   values into `.elevated` and leave dark mode unstyled. As vars they resolve
+   at use time, so the `html.dark` block below swaps them. */
+:root {
+  --popup-border: #d4d4d0;
+  --popup-shadow:
+    0 10px 30px -6px rgb(24 24 26 / 0.18), 0 2px 8px -2px rgb(24 24 26 / 0.1);
+}
+
+/* Every floating surface — popovers, dropdowns, context menus, autocompletes,
+   toasts, modal panels — wears this and nothing else for its background. The
+   border is what actually does the work: `--color-popup` matches `--color-chat`
+   exactly in light mode, so a shadow alone leaves a card dissolving into the
+   message list. Callers still bring their own radius, padding and position. */
+@utility elevated {
+  background: var(--color-popup);
+  border: 1px solid var(--popup-border);
+  box-shadow: var(--popup-shadow);
+}
+
 /* Dark theme: the same palette rotated onto dark surfaces. Every surface/ink
    token above is re-pointed here so components keep addressing colors by
    semantic name and never branch on the active theme. Toggled by the `dark`
@@ -111,6 +147,12 @@ html.dark {
   --color-away: #ea8a33;
   --color-scrollbar: #3a3a3f;
   --color-scrollbar-hover: #4d4d54;
+  /* Lighter than `--color-divider` (#2c2c30) so the outer edge of a popover
+     reads as a step up, not as one more internal rule. The shadow carries
+     almost nothing on dark surfaces, so it goes heavier and the border leads. */
+  --popup-border: #3a3a40;
+  --popup-shadow:
+    0 12px 32px -6px rgb(0 0 0 / 0.65), 0 2px 8px -2px rgb(0 0 0 / 0.45);
 }
 
 html,

@@ -60,11 +60,16 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
         local.acp.configure(profile.requestedModel);
         runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions));
         socket.send({ type: "runner_hello", protocolVersion: RUNNER_PROTOCOL_VERSION, harness: readiness.harness, options: readiness.options });
+        // The harness fell back to its default model, so the agent still works
+        // but not as configured — degraded (which stays workable) rather than
+        // misconfigured, which would strand the agent over a preference.
+        const modelDenied = profile.requestedModel !== null && readiness.effectiveModel !== profile.requestedModel;
         socket.send({
           type: "runner_status",
           configRevision: revision,
-          health: "ready",
+          health: modelDenied ? "degraded" : "ready",
           ...(readiness.effectiveModel ? { effectiveModel: readiness.effectiveModel } : {}),
+          ...(modelDenied ? { diagnosticCode: "MODEL_UNAVAILABLE" } : {}),
         });
       } else {
         runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions));

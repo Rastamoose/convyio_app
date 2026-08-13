@@ -429,7 +429,7 @@ export function ItemDrawer({
             )}
           </button>
           {ownerOpen && (
-            <div className="absolute top-full left-0 z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg bg-popup p-1 shadow-lg">
+            <div className="elevated absolute top-full left-0 z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg p-1">
               <button
                 onClick={() => assignOwner(null)}
                 className={`block w-full rounded px-2 py-1.5 text-left text-sm text-muted hover:bg-input ${

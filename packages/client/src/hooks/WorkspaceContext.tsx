@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   Actor,
+  AgentAccessPolicy,
   AgentInvite,
   AgentProvider,
+  AgentSummary,
   Attachment,
   BoardItem,
   BoardItemEvent,
@@ -15,7 +17,6 @@ import type {
 } from "@workspace/shared";
 import { isBoardEnvelope } from "@workspace/shared";
 import type { JoinCredentials } from "../ws";
-import { wsUrl } from "../lib/serverUrl";
 import { useConnection } from "./useConnection";
 import { useChatMessages, type LocalMessage } from "./useChatMessages";
 import { useAgentTraces, type ActiveRun } from "./useAgentTraces";
@@ -106,15 +107,29 @@ export interface WorkspaceState {
   editItem: (itemId: string, fields: BoardItemEdit) => void;
   fetchActors: () => Promise<Actor[]>;
   fetchItemEvents: (itemId: string) => Promise<BoardItemEvent[]>;
-  /** User-created agent invites currently on the server. */
-  agentInvites: AgentInvite[];
-  /** Create a user-added agent and return the server token + a shell command. */
-  createAgent: (
-    name: string,
-    provider: AgentProvider,
-  ) => Promise<(AgentInvite & { token: string; command: string }) | null>;
+  /** User-created agent invites currently on the server, each with live runtime state. */
+  agentInvites: AgentSummary[];
+  /** Absolute origin of the connected server (the same one `welcome.apiUrl` carried), for building agent setup commands. */
+  apiUrl: string;
+  /** Create a user-added agent and return its id plus the one-time pairing code; the invite token never reaches the UI. */
+  createAgent: (fields: {
+    name: string;
+    provider: AgentProvider;
+    instructions?: string;
+    model?: string | null;
+    access?: AgentAccessPolicy;
+  }) => Promise<{ id: string; pairingCode: string } | null>;
+  /** Update an agent's profile: instructions, model, and/or access policy. */
+  updateAgent: (
+    id: string,
+    fields: { instructions?: string; model?: string | null; access?: AgentAccessPolicy },
+  ) => Promise<boolean>;
+  /** Issue a fresh pairing code for an existing agent, replacing any unused one. */
+  repairAgent: (id: string) => Promise<string | null>;
   /** Revoke a user-added agent. */
   revokeAgent: (id: string) => Promise<boolean>;
+  /** Re-fetch the agent list (and its runtime state) from the server. */
+  refreshAgents: () => Promise<void>;
   /** Remove a human from the workspace (humans only; not self). */
   removeMember: (actorId: string) => Promise<boolean>;
 }
@@ -229,23 +244,27 @@ export function WorkspaceProvider({
     }
   });
 
-  const [agentInvites, setAgentInvites] = useState<AgentInvite[]>([]);
+  const [agentInvites, setAgentInvites] = useState<AgentSummary[]>([]);
+
+  /** Re-fetch the agent list; runtime health/effectiveModel only change here,
+   *  the server does not push them, so callers that need fresh runtime state
+   *  (the pairing/profile UI) re-call this on a timer while they're open. */
+  const refreshAgents = async (): Promise<void> => {
+    const request = api.fetch("/api/agents");
+    if (!request) return;
+    try {
+      const res = await request;
+      if (!res.ok) return;
+      const data = (await res.json()) as { agents: AgentSummary[] };
+      setAgentInvites(data.agents);
+    } catch (err) {
+      console.warn("[workspace] failed to load agent invites:", err);
+    }
+  };
 
   useEffect(() => {
     if (!connection.self) return;
-    const load = async () => {
-      const request = api.fetch("/api/agents");
-      if (!request) return;
-      try {
-        const res = await request;
-        if (!res.ok) return;
-        const data = (await res.json()) as { agents: AgentInvite[] };
-        setAgentInvites(data.agents);
-      } catch (err) {
-        console.warn("[workspace] failed to load agent invites:", err);
-      }
-    };
-    void load();
+    void refreshAgents();
   }, [connection.self]);
 
   const typing = useTyping(connection.self?.id, (channel) =>
@@ -353,13 +372,16 @@ export function WorkspaceProvider({
     }
   };
 
-  const createAgent = async (
-    name: string,
-    provider: AgentProvider,
-  ): Promise<(AgentInvite & { token: string; command: string }) | null> => {
+  const createAgent = async (fields: {
+    name: string;
+    provider: AgentProvider;
+    instructions?: string;
+    model?: string | null;
+    access?: AgentAccessPolicy;
+  }): Promise<{ id: string; pairingCode: string } | null> => {
     const request = api.fetch("/api/agents", {
       method: "POST",
-      body: JSON.stringify({ name, provider }),
+      body: JSON.stringify(fields),
     });
     if (!request) return null;
     try {
@@ -368,12 +390,65 @@ export function WorkspaceProvider({
         pushToast(`Could not add the agent: ${await api.errorMessage(res)}`);
         return null;
       }
-      const data = (await res.json()) as AgentInvite & { token: string };
-      setAgentInvites((prev) => [data, ...prev]);
-      const command = `AGENT_PROVIDER=${data.provider} AGENT_NAME=${data.name} AGENT_TOKEN=${data.token} WS_URL=${wsUrl()} npm run dev -w @workspace/agent`;
-      return { ...data, command };
+      // The response also carries `token` (the agent's own join secret) and
+      // `pairing`; neither is surfaced to the UI — only the pairing code is,
+      // and only until it's consumed by `convyio-agent pair`.
+      const data = (await res.json()) as AgentInvite & { token: string; pairingCode: string };
+      setAgentInvites((prev) => [
+        {
+          ...data,
+          runtime: { connected: false, health: "checking", configRevision: data.configRevision, options: [] },
+        },
+        ...prev,
+      ]);
+      return { id: data.id, pairingCode: data.pairingCode };
     } catch (err) {
       pushToast(`Could not add the agent: ${String(err)}`);
+      return null;
+    }
+  };
+
+  const updateAgent = async (
+    id: string,
+    fields: { instructions?: string; model?: string | null; access?: AgentAccessPolicy },
+  ): Promise<boolean> => {
+    const request = api.fetch(`/api/agents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not update the agent: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      // PATCH returns the invite only (no runtime); keep whatever runtime
+      // state this agent already had in the list.
+      const updated = (await res.json()) as AgentInvite;
+      setAgentInvites((prev) => prev.map((a) => (a.id === id ? { ...a, ...updated } : a)));
+      return true;
+    } catch (err) {
+      pushToast(`Could not update the agent: ${String(err)}`);
+      return false;
+    }
+  };
+
+  const repairAgent = async (id: string): Promise<string | null> => {
+    const request = api.fetch(`/api/agents/${encodeURIComponent(id)}/pairings`, {
+      method: "POST",
+    });
+    if (!request) return null;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not create a new pairing code: ${await api.errorMessage(res)}`);
+        return null;
+      }
+      const data = (await res.json()) as { pairingCode: string };
+      return data.pairingCode;
+    } catch (err) {
+      pushToast(`Could not create a new pairing code: ${String(err)}`);
       return null;
     }
   };
@@ -515,8 +590,15 @@ export function WorkspaceProvider({
     fetchActors: board.fetchActors,
     fetchItemEvents: board.fetchItemEvents,
     agentInvites,
+    // Empty until the welcome frame lands; the page's own origin is the
+    // production server anyway, and a blank --server would paste a broken
+    // pairing command.
+    apiUrl: api.url("") || window.location.origin,
     createAgent,
+    updateAgent,
+    repairAgent,
     revokeAgent,
+    refreshAgents,
     removeMember,
   };
 

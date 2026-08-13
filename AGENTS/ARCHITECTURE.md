@@ -45,6 +45,8 @@ the wire protocol (websocket) and the HTTP board API.
   otherwise starts fine and fails feature by feature, which surfaces in the
   browser as an unexplained "Connecting…" rather than as a missing migration.
 - `Sessions` — bearer tokens with TTL and revocation.
+- `RunnerRuntime` — ephemeral per-runner health and capabilities. Not
+  persisted: it describes a process, not a profile.
 - `Auth` (`auth/`) — bridges a verified Supabase session to a workspace
   actor: re-verifies the caller's Supabase access token on every call (via
   a Supabase admin client) and maps it onto an `actors` row, creating one
@@ -108,6 +110,15 @@ the wire protocol (websocket) and the HTTP board API.
 - `ClaudeBrain` — the Claude implementation of `Brain`, via
   `@anthropic-ai/claude-agent-sdk`; subscription-authenticated (`claude
   login`), no API key path.
+- `AcpBrain` — the Agent Client Protocol implementation of `Brain`; spawns
+  the Claude ACP harness and denies any non-read tool call.
+- `cli.ts` — the `convyio-agent` entry point: pair, run, status.
+  Deliberately never imports `config.ts`, so a paired agent cannot inherit
+  the repo-root `.env`.
+- `installation.ts` — the durable pairing credential on disk, outside the
+  repo.
+- `runtime.ts` — resolves a stored profile into an effective local
+  configuration and reports the result as runner health.
 - `BoardClient` — the agent's view of the board over the HTTP API.
 - `Memory` / `PendingWork` — rolling transcript / stashed proposal work;
   static async factories so an uninitialized instance cannot exist.
@@ -256,3 +267,10 @@ the wire protocol (websocket) and the HTTP board API.
   but nothing links the new agent to the old one. Humans are unaffected:
   `findActorByName("human", ...)` stays global with no workspace filter,
   matching the permanent-username, multi-workspace-capable account model.
+- 2026-08-13 — A model the harness does not advertise falls back to the
+  harness default and reports `degraded` + `MODEL_UNAVAILABLE`, rather than
+  failing preflight. A model preference is stored server-side and outlives
+  the harness version that accepted it, so a stale preference must not take
+  an agent offline. Consequence: an agent can run on a model other than the
+  one configured, and the profile panel is the only place that difference is
+  visible.

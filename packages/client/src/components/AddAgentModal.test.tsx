@@ -1,24 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AgentInvite } from "@workspace/shared";
+import type { AgentSummary, Participant, RunnerConfigOption } from "@workspace/shared";
 import { AddAgentModal } from "./AddAgentModal";
 
 // AddAgentModal reads/writes agent invites through the workspace context;
-// swap in a controllable stub whose createAgent/revokeAgent actually mutate
-// the shared `agentInvites` list, the way the real hook does.
-let agentInvites: AgentInvite[] = [];
+// swap in a controllable stub, per-test state via module-level lets, the
+// same shape the real WorkspaceContext exposes.
+let agentInvites: AgentSummary[] = [];
+let participants: Participant[] = [];
 const createAgent = vi.fn();
+const updateAgent = vi.fn();
+const repairAgent = vi.fn();
 const revokeAgent = vi.fn();
+const refreshAgents = vi.fn().mockResolvedValue(undefined);
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     agentInvites,
+    apiUrl: "http://localhost:3001",
+    participants,
     createAgent,
+    updateAgent,
+    repairAgent,
     revokeAgent,
+    refreshAgents,
   }),
 }));
 
-const invite = (id: string, name: string): AgentInvite => ({
+const summary = (
+  id: string,
+  name: string,
+  overrides: Partial<AgentSummary["runtime"]> = {},
+): AgentSummary => ({
   id,
   actorId: id,
   name,
@@ -32,57 +45,83 @@ const invite = (id: string, name: string): AgentInvite => ({
   createdBy: "h1",
   createdAt: 1_000,
   revokedAt: null,
+  runtime: { connected: true, health: "ready", configRevision: 1, options: [], ...overrides },
 });
 
+const human = (id: string, name: string): Participant => ({
+  id,
+  name,
+  kind: "human",
+  status: "",
+  runState: "idle",
+  online: true,
+});
+
+const modelOption: RunnerConfigOption = {
+  id: "model",
+  label: "Model",
+  category: "model",
+  kind: "select",
+  choices: [{ value: "claude-opus", label: "Opus" }],
+};
+
 describe("AddAgentModal", () => {
-  it("clears the just-created banner once that agent is removed", async () => {
+  it("shows the pairing code and a setup prompt containing it after creating an agent", async () => {
     const user = userEvent.setup();
     agentInvites = [];
-    createAgent.mockImplementation(async (name: string) => {
-      const created = invite("inv-1", name);
-      agentInvites = [created];
-      return { ...created, token: "secret-token", command: "run-command" };
-    });
-    revokeAgent.mockImplementation(async (id: string) => {
-      agentInvites = agentInvites.filter((a) => a.id !== id);
-      return true;
+    createAgent.mockImplementation(async (fields: { name: string }) => {
+      agentInvites = [summary("inv-1", fields.name)];
+      return { id: "inv-1", pairingCode: "pair-code-xyz" };
     });
 
-    const { rerender } = render(
-      <AddAgentModal open={true} onClose={() => {}} />,
-    );
+    render(<AddAgentModal open={true} onClose={() => {}} />);
 
     await user.type(screen.getByLabelText("Agent name"), "helper");
     await user.click(screen.getByText("Create agent"));
 
-    expect(await screen.findByText("secret-token")).toBeInTheDocument();
-
-    await user.click(screen.getByText("Remove"));
-    rerender(<AddAgentModal open={true} onClose={() => {}} />);
-
-    expect(screen.queryByText("secret-token")).not.toBeInTheDocument();
+    expect(await screen.findByText("pair-code-xyz")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /convyio-agent pair --server http:\/\/localhost:3001 --code pair-code-xyz --workspace \./,
+      ),
+    ).toBeInTheDocument();
   });
 
-  it("does not carry the created banner across a close/reopen", async () => {
+  it("disables the model select until the runner reports a model option", async () => {
     const user = userEvent.setup();
-    agentInvites = [];
-    createAgent.mockImplementation(async (name: string) => {
-      const created = invite("inv-2", name);
-      agentInvites = [created];
-      return { ...created, token: "secret-token-2", command: "run-command-2" };
-    });
+    agentInvites = [summary("inv-2", "helper2", { options: [] })];
 
-    const { rerender } = render(
-      <AddAgentModal open={true} onClose={() => {}} />,
-    );
+    const { rerender } = render(<AddAgentModal open={true} onClose={() => {}} />);
+    await user.click(screen.getByText("helper2"));
 
-    await user.type(screen.getByLabelText("Agent name"), "helper2");
-    await user.click(screen.getByText("Create agent"));
-    expect(await screen.findByText("secret-token-2")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeDisabled();
 
-    rerender(<AddAgentModal open={false} onClose={() => {}} />);
+    agentInvites = [summary("inv-2", "helper2", { options: [modelOption] })];
     rerender(<AddAgentModal open={true} onClose={() => {}} />);
 
-    expect(screen.queryByText("secret-token-2")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).not.toBeDisabled();
+  });
+
+  it("PATCHes the expected access body when 'selected' access is saved", async () => {
+    const user = userEvent.setup();
+    agentInvites = [summary("inv-3", "helper3")];
+    participants = [human("human-1", "alice")];
+    updateAgent.mockResolvedValue(true);
+
+    render(<AddAgentModal open={true} onClose={() => {}} />);
+    await user.click(screen.getByText("helper3"));
+
+    fireEvent.change(screen.getByLabelText("Who can direct this agent"), {
+      target: { value: "selected" },
+    });
+    await user.click(screen.getByLabelText("alice"));
+    await user.click(screen.getByText("Save changes"));
+
+    expect(updateAgent).toHaveBeenCalledWith(
+      "inv-3",
+      expect.objectContaining({
+        access: { mode: "selected", selectedActorIds: ["human-1"] },
+      }),
+    );
   });
 });

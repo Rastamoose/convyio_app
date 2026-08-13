@@ -103,7 +103,7 @@ function RoomContextMenu({
       role="menu"
       aria-label={`Room actions for ${channel}`}
       style={{ top: pos.top, left: pos.left }}
-      className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
+      className="elevated fixed z-50 w-48 rounded-lg p-1"
     >
       <ContextMenuItem
         label="Mark as read"
@@ -205,7 +205,7 @@ function MemberContextMenu({
       role="menu"
       aria-label={`Member actions for ${name}`}
       style={{ top: pos.top, left: pos.left }}
-      className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
+      className="elevated fixed z-50 w-48 rounded-lg p-1"
     >
       <ContextMenuItem
         label="Remove"

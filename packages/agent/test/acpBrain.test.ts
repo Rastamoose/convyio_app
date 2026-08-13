@@ -164,6 +164,16 @@ describe("AcpBrain", () => {
     brain.close();
   });
 
+  test("falls back to the harness default when the requested model is not advertised", async () => {
+    const workspace = await tempDir();
+    const record = { newSessions: [] as string[], loaded: [] as string[], selected: [] as string[], prompts: [] as string[], cancelled: [] as string[] };
+    const brain = new AcpBrain(workspace, fakeAgent(record));
+    const readiness = await brain.preflight("gemini-2.5-pro");
+    assert.equal(readiness.effectiveModel, "default-model");
+    assert.deepEqual(record.selected, []);
+    brain.close();
+  });
+
   test("sends ACP cancellation", async () => {
     const workspace = await tempDir();
     const record = { newSessions: [] as string[], loaded: [] as string[], selected: [] as string[], prompts: [] as string[], cancelled: [] as string[] };

@@ -617,7 +617,7 @@ function Workspace() {
       {!workspace.connected && (
         <div
           role="status"
-          className="fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full bg-popup px-3 py-1 text-xs font-semibold text-working shadow-lg"
+          className="elevated fixed top-14 left-1/2 z-[60] -translate-x-1/2 rounded-full px-3 py-1 text-xs font-semibold text-working"
         >
           {workspace.self ? "Reconnecting…" : "Connecting…"}
         </div>

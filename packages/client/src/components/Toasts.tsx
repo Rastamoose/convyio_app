@@ -48,7 +48,7 @@ function ToastItem({
       onAnimationEnd={() => {
         if (closing) onDismiss(toast.id);
       }}
-      className={`flex items-start gap-2 rounded-lg border bg-popup px-3 py-2 text-sm text-body shadow-lg ${
+      className={`flex items-start gap-2 rounded-lg border bg-popup px-3 py-2 text-sm text-body shadow-popup ${
         style.border
       } ${closing ? "animate-toast-out" : "animate-slide-up-fade"}`}
     >

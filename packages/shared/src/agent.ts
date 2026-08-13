@@ -1,4 +1,4 @@
-import type { WorkspaceInfo } from "./protocol";
+import type { AgentRuntimeSummary, WorkspaceInfo } from "./protocol";
 
 export type AgentProvider = "claude" | "codex";
 export type AgentAccessMode = "workspace" | "creator" | "selected";
@@ -22,6 +22,12 @@ export interface AgentInvite {
   createdAt: number;
   updatedAt: number;
   revokedAt: number | null;
+}
+
+/** A listed agent: its profile plus the runner's live connection/health state
+ *  (GET /api/agents adds this; it isn't stored, only computed per request). */
+export interface AgentSummary extends AgentInvite {
+  runtime: AgentRuntimeSummary;
 }
 
 export interface AgentPairing {
