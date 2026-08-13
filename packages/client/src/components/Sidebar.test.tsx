@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { BoardItem, Participant } from "@workspace/shared";
+import type { AgentInvite, BoardItem, Participant } from "@workspace/shared";
 import { Sidebar } from "./Sidebar";
 
 // Sidebar (and the MemberCard it opens) read from the workspace context;
@@ -12,12 +12,14 @@ let unreadsByChannel: Record<string, number> = {};
 let channels = ["general", "design"];
 let archivedChannels: string[] = [];
 let pinnedChannels: string[] = [];
+let agentInvites: AgentInvite[] = [];
 const createChannel = vi.fn();
 const renameChannel = vi.fn();
 const archiveChannel = vi.fn();
 const pinChannel = vi.fn();
 const deleteChannel = vi.fn();
 const markRead = vi.fn();
+const revokeAgent = vi.fn();
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     workspace: { id: "ws-1", name: "test_space" },
@@ -38,6 +40,8 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     deleteChannel,
     unreadCount: (channel: string) => unreadsByChannel[channel] ?? 0,
     markRead,
+    agentInvites,
+    revokeAgent,
   }),
 }));
 
@@ -57,6 +61,25 @@ const human = (id: string, name: string, online: boolean): Participant => ({
   status: "",
   runState: "idle",
   online,
+});
+
+const agent = (id: string, name: string, online: boolean): Participant => ({
+  id,
+  name,
+  kind: "agent",
+  status: "",
+  runState: "idle",
+  online,
+});
+
+const invite = (id: string, actorId: string, name: string): AgentInvite => ({
+  id,
+  actorId,
+  name,
+  provider: "claude",
+  createdBy: "h1",
+  createdAt: 1_000,
+  revokedAt: null,
 });
 
 const proposal = (id: string, createdAt: number): BoardItem => ({
@@ -101,6 +124,7 @@ describe("Sidebar", () => {
     channels = ["general", "design"];
     archivedChannels = [];
     pinnedChannels = [];
+    agentInvites = [];
   });
 
   it("shows the workspace name from context in the header", () => {
@@ -290,6 +314,35 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
     await user.click(screen.getByText("Confirm delete?"));
     expect(deleteChannel).toHaveBeenCalledWith("design");
+  });
+
+  it("right-clicking an invite-created agent offers a red Remove that revokes its invite", async () => {
+    const user = userEvent.setup();
+    participants = [human("h1", "al", true), agent("a1", "helper", true)];
+    agentInvites = [invite("inv-1", "a1", "helper")];
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByText("helper"));
+    const menu = screen.getByRole("menu", { name: "Member actions for helper" });
+    const remove = within(menu).getByText("Remove from workspace");
+    expect(remove).toHaveClass("text-dead");
+    expect(remove).toBeEnabled();
+
+    await user.click(remove);
+    expect(revokeAgent).toHaveBeenCalledWith("inv-1");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("disables Remove from workspace for humans and token-joined agents", () => {
+    participants = [human("h1", "al", true), agent("a1", "noodle", true)];
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getAllByText("al")[0]);
+    expect(screen.getByText("Remove from workspace")).toBeDisabled();
+
+    fireEvent.contextMenu(screen.getByText("noodle"));
+    const menu = screen.getByRole("menu", { name: "Member actions for noodle" });
+    expect(within(menu).getByText("Remove from workspace")).toBeDisabled();
   });
 
   it("Rename opens an inline input pre-filled with the current name, submits on Enter", async () => {

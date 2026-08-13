@@ -15,7 +15,8 @@ the wire protocol (websocket) and the HTTP board API.
 
 ### packages/server
 - `WorkspaceDb` (`db.ts`) — owns the Supabase Postgres connection: queries,
-  transactions, actors, per-server ref allocation. Schema/migrations live in
+  transactions, the single workspace row, global actors + workspace
+  membership, per-workspace ref allocation. Schema/migrations live in
   `supabase/migrations/`, applied via the Supabase CLI, not in this file.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
 - `Channels` (`chat/`) — the set of chat channels: seeds defaults, validates
@@ -23,7 +24,9 @@ the wire protocol (websocket) and the HTTP board API.
 - `Attachments` (`chat/`) — owns uploaded files: stores bytes in the
   Supabase Storage `attachments` bucket, records metadata, binds them to
   messages, serves them back.  → WorkspaceDb
-- `Roster` — participant identity + live presence.  → WorkspaceDb
+- `Roster` — participant identity + live presence; pre-loads workspace
+  members (humans and agents) as offline so registered users never vanish
+  from the list.  → WorkspaceDb
 - `Hub` — routes websocket frames; the single message-posting path.
   → Roster, MessageStore, Channels, Attachments, Sessions, Toolman
 - `BoardService` — every board transition, each with its audit row in one
@@ -158,8 +161,6 @@ the wire protocol (websocket) and the HTTP board API.
   anyone holding an attachment URL can fetch its bytes. Uploading stays
   bearer-token gated; unbound uploads are swept after 1h (lazily, on the
   next upload).
-- One hardcoded server: `server_id` is plumbed through the data model but
-  there is no multi-tenancy in the transport.
 - 2026-08-05 — `welcome.apiUrl` is derived per connection from the upgrade
   request's Host and X-Forwarded-Proto headers, not configured at boot: a
   boot-time URL breaks behind any real domain or reverse proxy. Consequence:
@@ -206,3 +207,15 @@ the wire protocol (websocket) and the HTTP board API.
   `postgres` role, which plain (non-FORCE) RLS does not restrict.
   Consequence: any future feature that wants client-side Supabase reads
   must add explicit RLS policies rather than flipping RLS off.
+- 2026-08-12 — The workspace became a first-class entity (supersedes "one
+  hardcoded server"): a `workspaces` table (single row named `test_space`,
+  keeping the old meta server_id uuid) plus a `workspace_members` join table
+  separate global identity (`actors`; Supabase Auth ids for humans) from
+  workspace registration. Membership is written at signup, agent-invite
+  creation, and AGENT_TOKEN agent creation; demo personas and guest actors
+  stay non-members and are never pre-loaded into the roster. Offline members
+  (humans included) persist in the roster — "humans exist only while a tab
+  is open" is gone, though API tokens still die with the last connection.
+  `server_id` is renamed to `workspace_id` everywhere (schema, code, wire)
+  and `meta` is dropped. Still exactly one workspace, no multi-tenancy in
+  the transport — multi-workspace is structure-ready, not implemented.

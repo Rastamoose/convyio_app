@@ -12,19 +12,25 @@ import { PinIcon } from "./PinnedMessages";
 /** How long a "Delete" click stays armed before a second click is required. */
 const DELETE_CONFIRM_MS = 3000;
 
-function RoomMenuItem({
+function ContextMenuItem({
   label,
   onClick,
   danger,
+  disabled,
+  title,
 }: {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-mention-bg-hover ${danger ? "text-dead" : "text-body"}`}
+      disabled={disabled}
+      title={title}
+      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium ${danger ? "text-dead" : "text-body"} ${disabled ? "cursor-not-allowed opacity-40" : "hover:bg-mention-bg-hover"}`}
     >
       {label}
     </button>
@@ -99,14 +105,14 @@ function RoomContextMenu({
       style={{ top: pos.top, left: pos.left }}
       className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
     >
-      <RoomMenuItem
+      <ContextMenuItem
         label="Mark as read"
         onClick={() => {
           onMarkRead();
           onClose();
         }}
       />
-      <RoomMenuItem
+      <ContextMenuItem
         label={pinned ? "Unpin" : "Pin channel"}
         onClick={() => {
           onTogglePin();
@@ -114,7 +120,7 @@ function RoomContextMenu({
         }}
       />
       {!isGeneral && (
-        <RoomMenuItem
+        <ContextMenuItem
           label="Rename"
           onClick={() => {
             onRename();
@@ -123,7 +129,7 @@ function RoomContextMenu({
         />
       )}
       {!isGeneral && (
-        <RoomMenuItem
+        <ContextMenuItem
           label={archived ? "Unarchive" : "Archive"}
           onClick={() => {
             onToggleArchive();
@@ -132,7 +138,7 @@ function RoomContextMenu({
         />
       )}
       {!isGeneral && (
-        <RoomMenuItem
+        <ContextMenuItem
           label={confirmingDelete ? "Confirm delete?" : "Delete"}
           danger
           onClick={() => {
@@ -141,6 +147,80 @@ function RoomContextMenu({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Right-click menu for a member row, positioned at the cursor. */
+function MemberContextMenu({
+  x,
+  y,
+  name,
+  removable,
+  onRemove,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  name: string;
+  /** Only invite-created agents are removable today; humans and agents
+   *  joined with the server-wide token need server-side permissions that
+   *  don't exist yet, so for them the action shows as unavailable. */
+  removable: boolean;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: y, left: x });
+
+  // Clamp into the viewport once we know the menu's real size (jsdom reports
+  // 0 for offsetWidth/Height, so tests just see the raw cursor position).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setPos({
+      top: Math.min(y, window.innerHeight - el.offsetHeight - 8),
+      left: Math.min(x, window.innerWidth - el.offsetWidth - 8),
+    });
+  }, [x, y]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={`Member actions for ${name}`}
+      style={{ top: pos.top, left: pos.left }}
+      className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
+    >
+      <ContextMenuItem
+        label="Remove from workspace"
+        danger
+        disabled={!removable}
+        title={
+          removable
+            ? undefined
+            : "You don't have permission to remove this member"
+        }
+        onClick={() => {
+          onRemove();
+          onClose();
+        }}
+      />
     </div>
   );
 }
@@ -174,9 +254,11 @@ function PresenceDot({ participant }: { participant: Participant }) {
 function StatusRow({
   participant,
   onSelect,
+  onContextMenu,
 }: {
   participant: Participant;
   onSelect: (participant: Participant, anchor: DOMRect) => void;
+  onContextMenu: (participant: Participant, e: React.MouseEvent) => void;
 }) {
   const isAgent = participant.kind === "agent";
   const working = isAgent && participant.runState === "working";
@@ -190,6 +272,7 @@ function StatusRow({
       }`}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => onSelect(participant, e.currentTarget.getBoundingClientRect())}
+      onContextMenu={(e) => onContextMenu(participant, e)}
     >
       <div className="relative">
         <Avatar name={participant.name} size={32} grayscale={offline} />
@@ -249,6 +332,8 @@ export function Sidebar({
     deleteChannel,
     unreadCount,
     markRead,
+    agentInvites,
+    revokeAgent,
   } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -266,6 +351,11 @@ export function Sidebar({
     x: number;
     y: number;
   } | null>(null);
+  const [memberMenu, setMemberMenu] = useState<{
+    participantId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [renamingChannel, setRenamingChannel] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -280,6 +370,11 @@ export function Sidebar({
   const openRoomMenu = (e: React.MouseEvent, name: string) => {
     e.preventDefault();
     setContextMenu({ channel: name, x: e.clientX, y: e.clientY });
+  };
+
+  const openMemberMenu = (participant: Participant, e: React.MouseEvent) => {
+    e.preventDefault();
+    setMemberMenu({ participantId: participant.id, x: e.clientX, y: e.clientY });
   };
 
   const startRename = (name: string) => {
@@ -369,6 +464,14 @@ export function Sidebar({
   const selectedMember = selected
     ? (participants.find((p) => p.id === selected.participantId) ?? null)
     : null;
+  const menuMember = memberMenu
+    ? (participants.find((p) => p.id === memberMenu.participantId) ?? null)
+    : null;
+  // "Remove from workspace" is really "revoke the agent's invite" for now, so
+  // it only works for members that have one (see MemberContextMenu.removable).
+  const menuMemberInvite = menuMember
+    ? (agentInvites.find((i) => i.actorId === menuMember.id) ?? null)
+    : null;
 
   const discuss = (item: BoardItem) => {
     setQueueOpen(false);
@@ -424,6 +527,7 @@ export function Sidebar({
             key={p.id}
             participant={p}
             onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
+            onContextMenu={openMemberMenu}
           />
         ))}
         {offline.length > 0 && (
@@ -436,6 +540,7 @@ export function Sidebar({
                 key={p.id}
                 participant={p}
                 onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
+                onContextMenu={openMemberMenu}
               />
             ))}
           </>
@@ -608,6 +713,18 @@ export function Sidebar({
           }
           onDelete={() => handleDeleteClick(contextMenu.channel)}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+      {memberMenu && menuMember && (
+        <MemberContextMenu
+          x={memberMenu.x}
+          y={memberMenu.y}
+          name={menuMember.name}
+          removable={menuMemberInvite !== null}
+          onRemove={() => {
+            if (menuMemberInvite) void revokeAgent(menuMemberInvite.id);
+          }}
+          onClose={() => setMemberMenu(null)}
         />
       )}
       <AddAgentModal open={addAgentOpen} onClose={() => setAddAgentOpen(false)} />
