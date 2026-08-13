@@ -9,7 +9,13 @@ import type { Auth } from "../auth/Auth";
 import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT, type MessageStore } from "../chat/MessageStore";
+import {
+  DEFAULT_THREAD_EVENT_LIMIT,
+  MAX_THREAD_EVENT_LIMIT,
+  type ThreadEventStore,
+} from "../chat/ThreadEventStore";
 import type { WorkspaceDb } from "../db";
+import { requestOrigin, websocketUrl } from "../requestOrigin";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 
@@ -33,10 +39,25 @@ const channelPatchBodySchema = z.object({
 // Bounds only; the real username rules (and their error codes) live in Auth.
 const usernameBodySchema = z.object({ username: z.string().max(200) });
 
+const agentAccessSchema = z.object({
+  mode: z.enum(["workspace", "creator", "selected"] as const),
+  selectedActorIds: z.array(z.string().min(1).max(100)).max(100).default([]),
+});
 const createAgentBodySchema = z.object({
   name: z.string().min(1).max(32),
   provider: z.enum(["claude", "codex"] as const),
+  instructions: z.string().max(20000).default(""),
+  model: z.string().trim().min(1).max(200).nullable().default(null),
+  access: agentAccessSchema.default({ mode: "workspace", selectedActorIds: [] }),
 });
+const patchAgentBodySchema = z
+  .object({
+    instructions: z.string().max(20000).optional(),
+    model: z.string().trim().min(1).max(200).nullable().optional(),
+    access: agentAccessSchema.optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, { message: "at least one profile field is required" });
+const pairingExchangeBodySchema = z.object({ pairingCode: z.string().min(1).max(256) });
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
@@ -61,6 +82,7 @@ export function createApiHandler(
   service: BoardService,
   sessions: Sessions,
   messages: MessageStore,
+  threadEvents: ThreadEventStore,
   channels: Channels,
   attachments: Attachments,
   corsOrigin: string,
@@ -113,9 +135,28 @@ export function createApiHandler(
         await routeAuth(req, res, parts, url, authGate);
       } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
         await serveUpload(res, attachments, parts[2], method === "HEAD");
+      } else if (
+        parts[1] === "agent-pairings" &&
+        parts[2] === "exchange" &&
+        parts.length === 3 &&
+        method === "POST"
+      ) {
+        if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+        const body = pairingExchangeBodySchema.parse(await readBody(req));
+        const exchanged = await agentInvites.exchangePairing(body.pairingCode);
+        if (!exchanged) throw new ApiError(401, "INVALID_PAIRING", "pairing code is invalid or expired");
+        const apiUrl = requestOrigin(req);
+        json(res, 200, {
+          installation: exchanged.installation,
+          installationToken: exchanged.installationToken,
+          agent: exchanged.invite,
+          workspace: { id: db.workspaceId, name: db.workspaceName },
+          apiUrl,
+          wsUrl: websocketUrl(apiUrl),
+        });
       } else {
         const actor = await authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, service, db, messages, channels, attachments, agentInvites, onRevokeAgent, onRemoveMember);
+        await route(req, res, parts, url, actor, service, db, messages, threadEvents, channels, attachments, agentInvites, onRevokeAgent, onRemoveMember);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -140,6 +181,7 @@ async function route(
   service: BoardService,
   db: WorkspaceDb,
   messages: MessageStore,
+  threadEvents: ThreadEventStore,
   channels: Channels,
   attachments: Attachments,
   agentInvites: AgentInvites | null,
@@ -179,8 +221,37 @@ async function route(
     if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can add agents");
     const body = createAgentBodySchema.parse(await readBody(req));
-    const { invite, token } = await agentInvites.create(body.name, body.provider, actor);
-    return json(res, 201, { ...invite, token });
+    const { invite, token } = await agentInvites.create(body.name, body.provider, actor, {
+      instructions: body.instructions,
+      requestedModel: body.model,
+      access: body.access,
+    });
+    const pairing = await agentInvites.createPairing(invite.id, actor);
+    if (!pairing) throw new Error("new agent invite could not issue a pairing");
+    return json(res, 201, { ...invite, token, ...pairing });
+  }
+
+  // PATCH /api/agents/:id — update profile configuration (humans only).
+  if (parts[1] === "agents" && parts.length === 3 && method === "PATCH") {
+    if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can configure agents");
+    const body = patchAgentBodySchema.parse(await readBody(req));
+    const updated = await agentInvites.update(parts[2], {
+      instructions: body.instructions,
+      requestedModel: body.model,
+      access: body.access,
+    });
+    if (!updated) throw new ApiError(404, "NOT_FOUND", "no such agent invite");
+    return json(res, 200, updated);
+  }
+
+  // POST /api/agents/:id/pairings — replace any unused pairing (humans only).
+  if (parts[1] === "agents" && parts[3] === "pairings" && parts.length === 4 && method === "POST") {
+    if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can pair agents");
+    const pairing = await agentInvites.createPairing(parts[2], actor);
+    if (!pairing) throw new ApiError(404, "NOT_FOUND", "no such agent invite");
+    return json(res, 201, pairing);
   }
 
   // DELETE /api/agents/:id — revoke an agent invite (humans only). This
@@ -200,7 +271,8 @@ async function route(
   // POST /api/channels — any signed-in human can add a channel.
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
-    return json(res, 201, { channel: { name: await channels.create(actor, body.name) } });
+    const channel = await channels.create(actor, body.name);
+    return json(res, 201, { channel: { name: channel.name } });
   }
 
   // PATCH /api/channels/:name — rename and/or archive/pin, one field per call.
@@ -217,9 +289,33 @@ async function route(
   // DELETE /api/channels/:name — also drops its message history.
   if (parts[1] === "channels" && parts.length === 3 && method === "DELETE") {
     const name = decodeURIComponent(parts[2]);
-    await messages.clear(name);
+    if (actor.kind !== "human") {
+      throw new ApiError(403, "FORBIDDEN", "only humans can manage channels");
+    }
+    const channel = await channels.get(name);
+    if (!channel) throw new ApiError(404, "NOT_FOUND", `no such channel: ${name}`);
+    if (name === "general") {
+      throw new ApiError(400, "CHANNEL_FIXED", "the general channel cannot be changed");
+    }
+    await messages.clear(actor.id, channel);
     await channels.remove(actor, name);
     return json(res, 200, { ok: true });
+  }
+
+  // GET /api/thread/events?channel_id=&before_seq=&limit= — canonical
+  // channel activity, newest page returned in ascending sequence order.
+  if (parts[1] === "thread" && parts[2] === "events" && parts.length === 3 && method === "GET") {
+    const channelId = url.searchParams.get("channel_id");
+    if (!channelId) throw new ApiError(400, "BAD_CHANNEL_ID", "channel_id is required");
+    const beforeSeq = optionalPositiveInt(url, "before_seq", "BAD_BEFORE_SEQ");
+    return json(res, 200, {
+      events: await threadEvents.list({
+        workspaceId: actor.workspaceId,
+        channelId,
+        beforeSeq,
+        limit: threadEventLimit(url),
+      }),
+    });
   }
 
   // GET /api/messages?channel=&before=&limit= — an older page of chat
@@ -433,6 +529,26 @@ function historyLimit(url: URL): number {
   const n = raw === null ? DEFAULT_HISTORY_LIMIT : Number(raw);
   if (!Number.isInteger(n) || n < 1) return DEFAULT_HISTORY_LIMIT;
   return Math.min(n, MAX_HISTORY_LIMIT);
+}
+
+function threadEventLimit(url: URL): number {
+  const raw = url.searchParams.get("limit");
+  if (raw === null) return DEFAULT_THREAD_EVENT_LIMIT;
+  const limit = Number(raw);
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new ApiError(400, "BAD_LIMIT", "limit must be a positive integer");
+  }
+  return Math.min(limit, MAX_THREAD_EVENT_LIMIT);
+}
+
+function optionalPositiveInt(url: URL, name: string, code: string): number | undefined {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ApiError(400, code, `${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function intHeader(req: IncomingMessage, header: string): number | undefined {

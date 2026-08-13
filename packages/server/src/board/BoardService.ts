@@ -7,8 +7,10 @@ import type {
   BoardItem,
   BoardItemEvent,
   ItemStatus,
+  ThreadEventPayload,
 } from "@workspace/shared";
 import type { Sql, WorkspaceDb } from "../db";
+import type { ThreadEventStore } from "../chat/ThreadEventStore";
 import { validateScopePaths } from "./scope";
 
 export class ApiError extends Error {
@@ -32,14 +34,17 @@ const selectItem = (sql: Sql) => sql`
 
 /**
  * All board state changes flow through here. Each transition mutates
- * board_items and appends exactly one board_events row in the same
- * transaction (I5), then hands the envelope to the fan-out hook.
+ * board_items and appends one compatibility board_events row plus one
+ * canonical thread event in the same transaction, then fans out.
  */
 export class BoardService {
   /** Realtime fan-out hook; invoked after the transaction commits. */
   onEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
 
-  constructor(private store: WorkspaceDb) {}
+  constructor(
+    private store: WorkspaceDb,
+    private threadEvents: ThreadEventStore,
+  ) {}
 
   // -------------------------------------------------------------------------
   // Queries
@@ -346,9 +351,9 @@ export class BoardService {
   // -------------------------------------------------------------------------
 
   /**
-   * Run a mutation and its audit row in one transaction (I5), then fan out
-   * the envelope after commit. `apply` receives the transaction's own `sql`
-   * — every query inside it (including a nested `nextRef` call) must use
+   * Run a mutation and both event rows in one transaction, then fan out the
+   * compatibility envelope after commit. `apply` receives the transaction's
+   * own `sql` — every query inside it (including a nested `nextRef` call) must use
    * that `sql`, not `this.store.sql`, to stay inside the same transaction.
    */
   private async mutate(
@@ -359,10 +364,22 @@ export class BoardService {
   ): Promise<BoardItem> {
     const itemId = await this.store.transaction(async (sql) => {
       const id = await apply(sql);
+      const createdAt = Date.now();
+      const [{ ref }] = await sql<{ ref: string }[]>`
+        SELECT ref FROM board_items WHERE id = ${id}
+      `;
       await sql`
         INSERT INTO board_events (workspace_id, item_id, type, actor_id, payload, created_at)
-        VALUES (${actor.workspaceId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${Date.now()})
+        VALUES (${actor.workspaceId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${createdAt})
       `;
+      await this.threadEvents.append(sql, {
+        workspaceId: actor.workspaceId,
+        actorId: actor.id,
+        kind: type,
+        subjectId: id,
+        payload: { itemId: id, itemRef: ref, ...payload } as ThreadEventPayload,
+        createdAt,
+      });
       return id;
     });
     const item = (await this.find(actor.workspaceId, itemId))!;

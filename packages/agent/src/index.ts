@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { isBoardEnvelope, type ChatMessage } from "@workspace/shared";
+import { isBoardEnvelope } from "@workspace/shared";
 import {
   AGENT_MODEL,
   AGENT_NAME,
@@ -21,12 +21,7 @@ import { PendingWork } from "./pendingWork";
 import { Presence } from "./presence";
 import { AgentRunner } from "./runner";
 import { ProposalLifecycle } from "./proposalLifecycle";
-
-const mentionRegex = new RegExp(`@${AGENT_NAME}\\b`, "i");
-
-function isMention(message: ChatMessage): boolean {
-  return message.authorKind === "human" && mentionRegex.test(message.content);
-}
+import { ConversationSessions } from "./conversationSessions";
 
 async function loadCharter(): Promise<string> {
   try {
@@ -42,7 +37,7 @@ function createBrain(): Brain {
     return new ClaudeBrain(AGENT_MODEL, CLAUDE_WORKDIR);
   }
   if (AGENT_PROVIDER === "gemini") {
-    return new GeminiBrain(GEMINI_API_KEY!, AGENT_MODEL);
+    return new GeminiBrain(GEMINI_API_KEY!, AGENT_MODEL!);
   }
   throw new Error("codex provider is not yet supported");
 }
@@ -66,8 +61,18 @@ async function main() {
   const brain = createBrain();
   const memory = await Memory.load(DATA_DIR);
   const pendingWork = await PendingWork.load(DATA_DIR);
+  const conversationSessions = await ConversationSessions.load(DATA_DIR);
   const presence = new Presence(socket, boardClient);
-  const runner = new AgentRunner(socket, brain, memory, boardClient, pendingWork, presence, systemPrompt);
+  const runner = new AgentRunner(
+    socket,
+    brain,
+    memory,
+    boardClient,
+    pendingWork,
+    conversationSessions,
+    presence,
+    systemPrompt,
+  );
   const lifecycle = new ProposalLifecycle(boardClient, pendingWork, runner, presence);
 
   socket.onEvent((event) => {
@@ -78,6 +83,7 @@ async function main() {
     }
     switch (event.type) {
       case "welcome":
+        runner.onWelcome();
         presence.setSelf(event.self.id);
         memory.seed(event.history);
         console.log(`[agent] joined as ${event.self.name} (${event.self.id})`);
@@ -94,17 +100,12 @@ async function main() {
         console.log(
           `[agent] got message from ${event.message.authorName} (${event.message.authorKind}): ${event.message.content.slice(0, 80)}`,
         );
-        if (event.message.authorKind === "agent") return;
-        if (event.message.content.trimStart().toLowerCase().startsWith("/interrupt")) return;
-        if (isMention(event.message)) {
-          console.log("[agent] mention detected, queueing");
-          runner.enqueue({
-            authorName: event.message.authorName,
-            content: event.message.content,
-            channel: event.message.channel ?? "general",
-            attachments: event.message.attachments,
-          });
-        }
+        break;
+      case "work_available":
+        runner.claimAvailable(event.requestIds);
+        break;
+      case "work_assigned":
+        for (const assignment of event.assignments) runner.enqueueAssignment(assignment);
         break;
       case "interrupt":
         console.log(`[agent] interrupted by ${event.authorName}: ${event.content.slice(0, 80)}`);

@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import type { Actor, BoardItem } from "@workspace/shared";
+import { AgentWorkStore } from "../src/chat/AgentWorkStore";
 import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
+import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
@@ -125,36 +127,66 @@ describe("board invariants", async () => {
   });
 
   test("T9: each transition writes exactly one event row; rollback writes none", async () => {
-    const countEvents = async (itemId: string) => {
-      const rows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events WHERE item_id = ${itemId}`;
+    const countEvents = async (table: "board_events" | "thread_events", itemId: string) => {
+      const rows = table === "board_events"
+        ? await env.db.sql<{ c: number }[]>`
+            SELECT count(*) AS c FROM board_events WHERE item_id = ${itemId}
+          `
+        : await env.db.sql<{ c: number }[]>`
+            SELECT count(*) AS c FROM thread_events WHERE subject_id = ${itemId}
+          `;
       return rows[0].c;
+    };
+    const assertCounts = async (itemId: string, expected: number) => {
+      assert.equal(await countEvents("board_events", itemId), expected);
+      assert.equal(await countEvents("thread_events", itemId), expected);
     };
 
     const item = await env.service.create(agent.actor, PROPOSAL);
-    assert.equal(await countEvents(item.id), 1);
+    await assertCounts(item.id, 1);
     await env.service.approve(human.actor, item.id);
-    assert.equal(await countEvents(item.id), 2);
+    await assertCounts(item.id, 2);
     await env.service.start(agent.actor, item.id);
-    assert.equal(await countEvents(item.id), 3);
+    await assertCounts(item.id, 3);
     await env.service.block(agent.actor, item.id, "awaiting input");
-    assert.equal(await countEvents(item.id), 4);
+    await assertCounts(item.id, 4);
     await env.service.unblock(agent.actor, item.id);
-    assert.equal(await countEvents(item.id), 5);
+    await assertCounts(item.id, 5);
     await env.service.complete(agent.actor, item.id);
-    assert.equal(await countEvents(item.id), 6);
+    await assertCounts(item.id, 6);
+    const canonical = await env.db.sql<
+      { kind: string; payload: { itemId: string; itemRef: string } }[]
+    >`
+      SELECT kind, payload FROM thread_events WHERE subject_id = ${item.id} ORDER BY seq
+    `;
+    assert.deepEqual(canonical.map((event) => event.kind), [
+      "item.proposed",
+      "item.approved",
+      "item.started",
+      "item.blocked",
+      "item.unblocked",
+      "item.completed",
+    ]);
+    assert.ok(canonical.every((event) =>
+      event.payload.itemId === item.id && event.payload.itemRef === item.ref
+    ));
 
-    // Rolled-back transaction: creating with an actor that violates the
-    // actors FK aborts mid-transaction; neither item nor event may remain.
+    // The compatibility writes succeed, then the canonical workspace FK
+    // fails; the shared transaction must roll all three writes back.
     const itemsBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
     const eventsBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
+    const threadBeforeRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM thread_events`;
     const itemsBefore = itemsBeforeRows[0].c;
     const eventsBefore = eventsBeforeRows[0].c;
-    const ghost: Actor = { id: randomUUID(), kind: "human", displayName: "ghost", workspaceId: env.db.workspaceId };
-    await assert.rejects(env.service.create(ghost, { title: "never lands" }));
+    const threadBefore = threadBeforeRows[0].c;
+    const invalidWorkspace: Actor = { ...human.actor, workspaceId: randomUUID() };
+    await assert.rejects(env.service.create(invalidWorkspace, { title: "never lands" }));
     const itemsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
     const eventsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
+    const threadAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM thread_events`;
     assert.equal(itemsAfterRows[0].c, itemsBefore);
     assert.equal(eventsAfterRows[0].c, eventsBefore);
+    assert.equal(threadAfterRows[0].c, threadBefore);
   });
 
   test("T11: concurrent creation produces unique sequential refs", async () => {
@@ -224,18 +256,32 @@ describe("board invariants", async () => {
 describe("T10: full-stack approval fan-out", async () => {
   test("approval reaches all clients within 1s and unblocks agent work", async () => {
     const { db, drop } = await createTestDb();
-    const service = new BoardService(db);
+    const threadEvents = new ThreadEventStore(db);
+    const service = new BoardService(db, threadEvents);
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
     const channels = new Channels(db);
     await channels.seed([{ name: "general", isDemo: false }]);
     const attachments = new Attachments(db, supabaseAdmin());
-    const messages = new MessageStore(db);
+    const messages = new MessageStore(db, threadEvents);
+    const agentWork = new AgentWorkStore(db, threadEvents, messages);
     const agentInvites = new AgentInvites(db);
-    const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, null);
+    const handler = createApiHandler(
+      db,
+      service,
+      sessions,
+      messages,
+      threadEvents,
+      channels,
+      attachments,
+      "*",
+      null,
+      agentInvites,
+      null,
+    );
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, await Roster.create(db, agentInvites), messages, channels, attachments, sessions, toolman, {
+    const hub = new Hub(server, await Roster.create(db, agentInvites), messages, agentWork, channels, attachments, sessions, toolman, {
       workspace: { id: db.workspaceId, name: db.workspaceName },
       demoChannels: [],
     });

@@ -55,11 +55,14 @@ export class Roster {
    * identity is the persistent actor identity, so board attribution and
    * presence agree on ids.
    */
-  async join(kind: ParticipantKind, name: string): Promise<Participant> {
+  async join(kind: ParticipantKind, name: string, actorId?: string): Promise<Participant> {
     const key = rosterKey(kind, name);
-    let participant = this.known.get(key);
+    let participant = actorId
+      ? [...this.known.values()].find((known) => known.id === actorId)
+      : this.known.get(key);
     if (!participant) {
-      const actor = await this.db.upsertActor(kind, name);
+      const actor = actorId ? await this.db.getActor(actorId) : await this.db.upsertActor(kind, name);
+      if (!actor || actor.kind !== kind) throw new Error("join identity no longer exists");
       participant = {
         id: actor.id,
         name: actor.displayName,
@@ -68,7 +71,7 @@ export class Roster {
         runState: "idle",
         online: true,
       };
-      this.known.set(key, participant);
+      this.known.set(rosterKey(kind, actor.displayName), participant);
     }
     participant.online = true;
     participant.runState = "idle";

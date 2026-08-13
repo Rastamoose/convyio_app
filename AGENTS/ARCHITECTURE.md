@@ -129,6 +129,16 @@ the wire protocol (websocket) and the HTTP board API.
 - `messages.author_id` has no FK to `actors`: kept loose so a message and
   its reactions can be deleted together without a cascade depending on the
   author row still existing.
+- Client components must never copy an entity from a context list
+  (agentInvites, participants, channels, board) into local useState and
+  render from that copy — store only the id (plus any truly ephemeral data
+  with no other source, e.g. a one-time secret) and re-derive via `.find()`
+  on the context list every render, so the source updating/removing it is
+  reflected automatically. Any modal that stays mounted across open/close
+  (parent toggles an `open` prop instead of conditionally rendering) must
+  reset its transient local state in a `useEffect` keyed on `open`, since
+  unmounting won't do it for you. (`AddAgentModal`'s "created agent" banner
+  was the counterexample, fixed 2026-08-13.)
 
 ## Decisions a reader would not predict
 
@@ -219,3 +229,14 @@ the wire protocol (websocket) and the HTTP board API.
   `server_id` is renamed to `workspace_id` everywhere (schema, code, wire)
   and `meta` is dropped. Still exactly one workspace, no multi-tenancy in
   the transport — multi-workspace is structure-ready, not implemented.
+- 2026-08-13 — Agent identity is workspace-scoped, not a global account:
+  `findActorByName("agent", ...)` only matches agents still in
+  `workspace_members` for this workspace, and revoking an agent invite
+  (`DELETE /api/agents/:id`) now also drops that membership row
+  (previously it only flipped `agent_invites.revoked_at`, leaving the
+  agent a member forever). Consequence: once an agent is removed, its
+  name is free again for what is a genuinely new actor row/id — old board
+  items and messages keep pointing at the retired actor for attribution,
+  but nothing links the new agent to the old one. Humans are unaffected:
+  `findActorByName("human", ...)` stays global with no workspace filter,
+  matching the permanent-username, multi-workspace-capable account model.

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { Attachment, ClientEvent } from "@workspace/shared";
+import type { AgentWorkAssignment, Attachment, ClientEvent } from "@workspace/shared";
 import { AgentRunner } from "../src/runner";
 import { Memory } from "../src/memory";
 import { PendingWork } from "../src/pendingWork";
 import { Presence } from "../src/presence";
+import { ConversationSessions } from "../src/conversationSessions";
 import type { AgentSocket } from "../src/socket";
 import type { BoardClient } from "../src/boardClient";
 import type { Brain, BrainInput } from "../src/brain";
@@ -46,6 +47,7 @@ describe("AgentRunner", () => {
       await Memory.load(dir),
       board,
       await PendingWork.load(dir),
+      await ConversationSessions.load(dir),
       new Presence(socket, board),
       "system prompt",
     );
@@ -108,6 +110,7 @@ describe("AgentRunner attachments", () => {
       await Memory.load(dir),
       board,
       await PendingWork.load(dir),
+      await ConversationSessions.load(dir),
       new Presence(socket, board),
       "system prompt",
     );
@@ -214,5 +217,126 @@ describe("AgentRunner attachments", () => {
     assert.match(input.prompt, /\[image broken\.png unavailable\]/);
     const summary = sent.find((e): e is Extract<ClientEvent, { type: "summary" }> => e.type === "summary");
     assert.equal(summary?.content, "ok");
+  });
+});
+
+function assignment(id: string): AgentWorkAssignment {
+  return {
+    request: {
+      id,
+      workspaceId: "workspace-1",
+      channelId: "channel-1",
+      agentId: "agent-1",
+      messageId: `message-${id}`,
+      conversationId: "conversation-1",
+      status: "claimed",
+      createdAt: 1,
+      claimedAt: 2,
+      completedAt: null,
+    },
+    conversation: {
+      id: "conversation-1",
+      workspaceId: "workspace-1",
+      agentId: "agent-1",
+      channelId: "channel-1",
+      providerSessionId: null,
+      permissionMode: "default",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    trigger: {
+      id: `message-${id}`,
+      authorId: "human-1",
+      authorName: "dana",
+      authorKind: "human",
+      content: "@noodle please help",
+      timestamp: 1,
+      channelId: "channel-1",
+      channel: "general",
+      mentions: ["agent-1"],
+    },
+  };
+}
+
+describe("AgentRunner durable work protocol", () => {
+  async function makeProtocolRunner(brain: Brain) {
+    const { socket, sent } = fakeSocket();
+    const board = fakeBoard();
+    const dir = await tempDir();
+    const runner = new AgentRunner(
+      socket,
+      brain,
+      await Memory.load(dir),
+      board,
+      await PendingWork.load(dir),
+      await ConversationSessions.load(dir),
+      new Presence(socket, board),
+      "system prompt",
+    );
+    return { runner, sent };
+  }
+
+  test("claims notifications once per connection and completes only after its summary", async () => {
+    const brain = { run: async () => "done" } as unknown as Brain;
+    const { runner, sent } = await makeProtocolRunner(brain);
+
+    runner.claimAvailable(["request-1"]);
+    runner.claimAvailable(["request-1"]);
+    assert.equal(sent.filter((event) => event.type === "work_claim").length, 1);
+    runner.onWelcome();
+    runner.claimAvailable(["request-1"]);
+    assert.equal(sent.filter((event) => event.type === "work_claim").length, 2);
+
+    runner.enqueueAssignment(assignment("request-1"));
+    await waitFor(
+      () => sent.find((event) => event.type === "work_complete"),
+      "work completion",
+    );
+    const summaryIndex = sent.findIndex((event) => event.type === "summary");
+    const completionIndex = sent.findIndex((event) => event.type === "work_complete");
+    assert.ok(summaryIndex >= 0 && completionIndex > summaryIndex);
+    assert.deepEqual(sent[completionIndex], {
+      type: "work_complete",
+      requestIds: ["request-1"],
+      outcome: "completed",
+    });
+  });
+
+  test("an aborted assigned batch is cancelled and never completed", async () => {
+    let runs = 0;
+    const brain = {
+      run: async (_input: BrainInput, _callbacks: unknown, options?: { signal?: AbortSignal }) => {
+        runs += 1;
+        if (runs > 1) return "interrupt acknowledged";
+        return new Promise<string>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      },
+    } as unknown as Brain;
+    const { runner, sent } = await makeProtocolRunner(brain);
+
+    runner.enqueueAssignment(assignment("request-2"));
+    await waitFor(() => sent.find((event) => event.type === "trace_start"), "run start");
+    runner.interruptWith({ authorName: "dana", content: "stop", channel: "general" });
+    const cancelled = await waitFor(
+      () => sent.find(
+        (event): event is Extract<ClientEvent, { type: "work_complete" }> =>
+          event.type === "work_complete" && event.outcome === "cancelled",
+      ),
+      "work cancellation",
+    );
+    assert.deepEqual(cancelled.requestIds, ["request-2"]);
+    assert.equal(
+      sent.some(
+        (event) =>
+          event.type === "work_complete" &&
+          event.outcome === "completed" &&
+          event.requestIds.includes("request-2"),
+      ),
+      false,
+    );
   });
 });

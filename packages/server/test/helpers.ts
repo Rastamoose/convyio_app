@@ -9,8 +9,10 @@ import { WebSocket } from "ws";
 import type { Actor, BoardEventEnvelope } from "@workspace/shared";
 import type { WorkspaceDb } from "../src/db";
 import { Attachments } from "../src/chat/Attachments";
+import { AgentWorkStore } from "../src/chat/AgentWorkStore";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
+import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
 import { AgentInvites } from "../src/auth/AgentInvites";
@@ -73,6 +75,8 @@ export interface Env {
   sessions: Sessions;
   channels: Channels;
   messages: MessageStore;
+  agentWork: AgentWorkStore;
+  threadEvents: ThreadEventStore;
   attachments: Attachments;
   baseUrl: string;
   envelopes: BoardEventEnvelope[];
@@ -90,16 +94,30 @@ export interface Env {
 /** An isolated Postgres schema + board + HTTP API on an ephemeral port, shared by every suite. */
 export async function createEnv(): Promise<Env> {
   const { db, drop } = await createTestDb();
-  const service = new BoardService(db);
+  const threadEvents = new ThreadEventStore(db);
+  const service = new BoardService(db, threadEvents);
   const sessions = new Sessions();
   const channels = new Channels(db);
   await channels.seed([{ name: "general", isDemo: false }]);
   const envelopes: BoardEventEnvelope[] = [];
   service.onEvent = (e) => envelopes.push(e);
   const attachments = new Attachments(db, supabaseAdmin());
-  const messages = new MessageStore(db);
+  const messages = new MessageStore(db, threadEvents);
+  const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const agentInvites = new AgentInvites(db);
-  const handler = createApiHandler(db, service, sessions, messages, channels, attachments, "*", null, agentInvites, null);
+  const handler = createApiHandler(
+    db,
+    service,
+    sessions,
+    messages,
+    threadEvents,
+    channels,
+    attachments,
+    "*",
+    null,
+    agentInvites,
+    null,
+  );
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
@@ -110,6 +128,8 @@ export async function createEnv(): Promise<Env> {
     sessions,
     channels,
     messages,
+    agentWork,
+    threadEvents,
     attachments,
     baseUrl,
     envelopes,
@@ -164,6 +184,8 @@ export interface WsEnv {
   service: BoardService;
   sessions: Sessions;
   messages: MessageStore;
+  agentWork: AgentWorkStore;
+  threadEvents: ThreadEventStore;
   channels: Channels;
   attachments: Attachments;
   hub: Hub;
@@ -191,7 +213,8 @@ export interface WsAuthOptions {
 /** The full hub + HTTP stack on an ephemeral port, for websocket suites. */
 export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
   const { db, drop } = await createTestDb();
-  const service = new BoardService(db);
+  const threadEvents = new ThreadEventStore(db);
+  const service = new BoardService(db, threadEvents);
   const sessions = new Sessions();
   const auth = options.auth ? new Auth(db, fakeSupabase(options.auth.users)) : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
@@ -199,7 +222,8 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   await toolman.init();
   const channels = new Channels(db);
   await channels.seed([{ name: "general", isDemo: false }]);
-  const messages = new MessageStore(db);
+  const messages = new MessageStore(db, threadEvents);
+  const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const attachments = new Attachments(db, supabaseAdmin());
   const agentInvites = new AgentInvites(db);
   // Auth-enabled envs expose /api/auth/* through the SAME Auth instance the
@@ -213,6 +237,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     service,
     sessions,
     messages,
+    threadEvents,
     channels,
     attachments,
     "localhost-dev",
@@ -223,12 +248,12 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   );
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
-  const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
+  const hub = new Hub(server, roster, messages, agentWork, channels, attachments, sessions, toolman, {
     workspace: { id: db.workspaceId, name: db.workspaceName },
     demoChannels: [],
     authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites) : undefined,
   });
-  channels.onCreated = (name) => hub.broadcastChannelCreated(name);
+  channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
   channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
@@ -242,6 +267,8 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     service,
     sessions,
     messages,
+    agentWork,
+    threadEvents,
     channels,
     attachments,
     hub,
@@ -310,9 +337,9 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       // Truncate all mutable tables, keep the workspaces row so
       // db.workspaceId stays valid.
       await db.sql`
-        TRUNCATE TABLE actors, workspace_members, board_items, board_events,
-          ref_counters, channels, messages, message_reactions, attachments,
-          agent_invites
+        TRUNCATE TABLE agent_run_requests, agent_conversations, thread_events,
+          message_reactions, messages, board_events, board_items, attachments,
+          agent_invites, workspace_members, actors, ref_counters, channels
         RESTART IDENTITY CASCADE
       `;
       await db.sql`

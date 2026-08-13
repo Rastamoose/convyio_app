@@ -107,7 +107,7 @@ export function BoardView({
           className={`ml-auto rounded px-2 py-1 text-xs font-semibold ${
             showDenied
               ? "bg-input text-body"
-              : "text-muted hover:bg-input/50 hover:text-body"
+              : "text-muted hover:bg-mention-bg hover:text-body"
           }`}
         >
           {showDenied ? "Hide denied" : "Show denied"}
@@ -132,8 +132,8 @@ export function BoardView({
           return (
             <div
               key={status}
-              className={`flex max-h-full w-72 shrink-0 flex-col self-start rounded-lg bg-sidebar/50 ${
-                proposed ? "border border-dead/30" : ""
+              className={`flex max-h-full w-72 shrink-0 flex-col self-start rounded-lg ${
+                proposed ? "border-l-4 border-dead bg-sidebar" : "bg-sidebar"
               }`}
             >
               <div className="flex shrink-0 items-center gap-2 px-3 py-2">

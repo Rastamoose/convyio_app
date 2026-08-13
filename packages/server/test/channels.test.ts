@@ -80,15 +80,34 @@ describe("channel management over the API", async () => {
   const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
-  test("rename: 200, messages follow, old name gone", async () => {
+  test("rename: messages follow while their stable channel id stays fixed", async () => {
     await env.api("POST", "/api/channels", human.token, { name: "old-name" });
+    const before = (await env.channels.get("old-name"))!;
+    await env.messages.append({
+      id: "rename-message",
+      authorId: human.actor.id,
+      authorName: human.actor.displayName,
+      authorKind: human.actor.kind,
+      content: "keep identity",
+      channelId: before.id,
+      channel: before.name,
+      timestamp: Date.now(),
+    });
     const res = await env.api("PATCH", "/api/channels/old-name", human.token, {
       name: "New Name",
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.channel.name, "new-name");
     assert.deepEqual((await env.channels.list()).includes("old-name"), false);
-    assert.ok(await env.channels.exists("new-name"));
+    const after = (await env.channels.get("new-name"))!;
+    assert.equal(after.id, before.id);
+    const message = (await env.messages.get("rename-message"))!;
+    assert.equal(message.channel, "new-name");
+    assert.equal(message.channelId, before.id);
+    const [event] = await env.db.sql<{ channel_id: string }[]>`
+      SELECT channel_id FROM thread_events WHERE subject_id = 'rename-message'
+    `;
+    assert.equal(event.channel_id, before.id);
   });
 
   test("rename to an existing name → 409", async () => {
@@ -144,21 +163,36 @@ describe("channel management over the API", async () => {
     assert.ok(list.indexOf("z-room") < list.indexOf("unpinned-room"));
   });
 
-  test("delete removes the channel and its messages", async () => {
+  test("delete removes messages but preserves canonical channel identity and clear event", async () => {
     await env.api("POST", "/api/channels", human.token, { name: "doomed" });
-    env.messages.append({
+    const channel = (await env.channels.get("doomed"))!;
+    await env.messages.append({
       id: "m1",
       authorId: human.actor.id,
       authorName: human.actor.displayName,
       authorKind: "human",
       content: "bye",
       timestamp: Date.now(),
-      channel: "doomed",
+      channelId: channel.id,
+      channel: channel.name,
     });
     const res = await env.api("DELETE", "/api/channels/doomed", human.token);
     assert.equal(res.status, 200);
     assert.equal(await env.channels.exists("doomed"), false);
     assert.equal((await env.messages.list()).filter((m) => m.channel === "doomed").length, 0);
+    const events = await env.db.sql<
+      { kind: string; channel_id: string; payload: Record<string, unknown> }[]
+    >`
+      SELECT kind, channel_id, payload FROM thread_events
+      WHERE channel_id = ${channel.id}
+      ORDER BY seq
+    `;
+    assert.deepEqual(events.map((event) => event.kind), [
+      "message.created",
+      "message.channel_cleared",
+    ]);
+    assert.ok(events.every((event) => event.channel_id === channel.id));
+    assert.deepEqual(events[1].payload, { channelId: channel.id, channel: channel.name });
   });
 
   test("agents cannot rename, archive, pin, or delete", async () => {
@@ -184,6 +218,8 @@ describe("channels on the websocket", async () => {
     const env = await createWsEnv();
     const human = await env.connect("dana", "human");
     assert.deepEqual(human.welcome.channels, ["general"]);
+    assert.deepEqual(human.welcome.channelInfos.map((channel: any) => channel.name), ["general"]);
+    assert.ok(human.welcome.channelInfos[0].id);
 
     // A message to a channel that does not exist is refused and dropped.
     human.ws.send(JSON.stringify({ type: "message", content: "hello?", channel: "ghost" }));
@@ -200,10 +236,14 @@ describe("channels on the websocket", async () => {
     assert.equal(res.status, 201);
     const frame = await human.next((e) => e.type === "channel_created");
     assert.equal(frame.channel, "design");
+    assert.deepEqual(frame.channelInfo, { id: frame.channelInfo.id, name: "design" });
 
-    // Messages to the new channel now land.
+    // Messages to the new channel now land with the stable id.
     human.ws.send(JSON.stringify({ type: "message", content: "hi", channel: "design" }));
-    await human.next((e) => e.type === "message" && e.message.channel === "design");
+    const message = await human.next(
+      (e) => e.type === "message" && e.message.channel === "design",
+    );
+    assert.equal(message.message.channelId, frame.channelInfo.id);
     assert.equal((await env.messages.list()).length, 1);
 
     await env.close();

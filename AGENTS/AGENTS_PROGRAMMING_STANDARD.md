@@ -410,6 +410,11 @@ Minimalism is about structure, not correctness:
   `*`, no auth check left as a TODO, no secrets or PII in logs. Security checks in CI
   must pass and must not be disabled.
 - Accessibility basics on anything a person interacts with.
+- **No AI UI tinted-box pattern.** An element may not use a coloured border
+  paired with the same colour at lower opacity as its background fill. Boxes are
+  solid, transparent, unfilled, or otherwise intentionally styled — never a
+  tinted outline with a washed-out version of itself inside. This is a hard UX
+  prohibition; do not introduce it, and remove it where found.
 - Anything the user explicitly asked for. If the request is over-built by these
   standards, say so in one line — then build what was asked.
 - **Tests that can fail.** Non-trivial logic leaves one runnable check behind: the

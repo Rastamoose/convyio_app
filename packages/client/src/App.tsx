@@ -13,6 +13,7 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
 import { supabase } from "./lib/supabase";
+import { useTheme } from "./hooks/useTheme";
 
 const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
@@ -179,7 +180,11 @@ export default function App() {
 
   if (usernameStatus === "needs_username") {
     return (
-      <UsernameStep accessToken={session.access_token} onDone={() => setUsernameStatus("ok")} />
+      <UsernameStep
+        accessToken={session.access_token}
+        onDone={() => setUsernameStatus("ok")}
+        onBack={() => void supabase.auth.signOut()}
+      />
     );
   }
 
@@ -210,7 +215,16 @@ export default function App() {
 
 /** First sign-in only (either provider): bind the one permanent username to
  *  the new Supabase account. */
-function UsernameStep({ accessToken, onDone }: { accessToken: string; onDone: () => void }) {
+function UsernameStep({
+  accessToken,
+  onDone,
+  onBack,
+}: {
+  accessToken: string;
+  onDone: () => void;
+  onBack: () => void;
+}) {
+  const { theme } = useTheme();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -241,7 +255,19 @@ function UsernameStep({ accessToken, onDone }: { accessToken: string; onDone: ()
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-chat">
+    <div className="relative flex h-full items-center justify-center bg-chat">
+      <button
+        onClick={onBack}
+        aria-label="Back to sign in"
+        title="Back to sign in"
+        className="absolute top-4 left-4 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg transition select-none hover:bg-input"
+      >
+        <img
+          src={theme === "dark" ? "/mark-yellow.svg" : "/mark-black.svg"}
+          alt=""
+          className="h-6 w-6"
+        />
+      </button>
       <div className="w-96 animate-fade-in rounded-lg bg-sidebar p-8 shadow-2xl">
         <h1 className="mb-1 text-2xl font-semibold text-body">Pick a username</h1>
         <p className="mb-6 text-muted">

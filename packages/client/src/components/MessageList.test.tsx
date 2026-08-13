@@ -271,4 +271,18 @@ describe("MessageList", () => {
     fireEvent.click(screen.getByText("Delete"));
     expect(discardMessage).toHaveBeenCalledWith("n1");
   });
+
+  it("pins an unpinned message and unpins a pinned message", () => {
+    messages = [
+      msg({ id: "m1", content: "one" }),
+      msg({ id: "m2", content: "two", pinnedAt: 100, pinnedBy: "bea" }),
+    ];
+    render(<Harness />);
+
+    fireEvent.click(screen.getByTitle("Pin message"));
+    expect(pinMessage).toHaveBeenCalledWith("m1", true);
+
+    fireEvent.click(screen.getByTitle("Unpin message"));
+    expect(pinMessage).toHaveBeenCalledWith("m2", false);
+  });
 });

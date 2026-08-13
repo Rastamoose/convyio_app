@@ -5,6 +5,8 @@ import { clientEventSchema, type ChatMessage } from "@workspace/shared";
 import { createWsEnv } from "./helpers";
 
 let env: Awaited<ReturnType<typeof createWsEnv>>;
+let seedActor: { id: string; displayName: string } | null = null;
+const seedChannels = new Map<string, { id: string; name: string }>();
 
 before(async () => {
   env = await createWsEnv();
@@ -12,6 +14,8 @@ before(async () => {
 
 afterEach(async () => {
   await env.reset();
+  seedActor = null;
+  seedChannels.clear();
 });
 
 after(async () => {
@@ -27,14 +31,23 @@ async function seedMessage(
   content: string,
   timestamp: number,
 ): Promise<ChatMessage> {
+  let channelInfo = seedChannels.get(channel);
+  if (!channelInfo) {
+    await env.channels.seed([{ name: channel, isDemo: false }]);
+    channelInfo = (await env.channels.get(channel))!;
+    seedChannels.set(channel, channelInfo);
+  }
+  seedActor ??= await env.db.upsertActor("human", "seed");
+  const actor = seedActor;
   const message: ChatMessage = {
     id: randomUUID(),
-    authorId: "seed-author",
-    authorName: "seed",
+    authorId: actor.id,
+    authorName: actor.displayName,
     authorKind: "human",
     content,
     timestamp,
-    channel,
+    channelId: channelInfo.id,
+    channel: channelInfo.name,
   };
   await env.messages.append(message);
   return message;
@@ -261,6 +274,134 @@ describe("reactions", () => {
     assert.equal(refusal.error, `unknown message: ${ghost}`);
   });
 
+});
+
+describe("canonical message events", () => {
+  test("each actual mutation appends exactly one event and reaction no-ops append none", async () => {
+    const dana = await env.connect("dana", "human");
+    dana.ws.send(JSON.stringify({ type: "message", content: "eventful" }));
+    const posted = await dana.next((e) => e.type === "message");
+    const messageId = posted.message.id;
+
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: true }));
+    await dana.next((e) => e.type === "message_updated" && e.message.pinnedAt);
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: false }));
+    await dana.next(
+      (e) => e.type === "message_updated" && e.message.id === messageId && !e.message.pinnedAt,
+    );
+    dana.ws.send(JSON.stringify({ type: "message_edit", messageId, content: "edited" }));
+    await dana.next((e) => e.type === "message_updated" && e.message.content === "edited");
+    dana.ws.send(JSON.stringify({ type: "message_react", messageId, emoji: "+1", op: "add" }));
+    await dana.next((e) => e.type === "message_updated" && e.message.reactions?.length === 1);
+    const erik = await env.connect("erik", "human");
+    dana.ws.send(JSON.stringify({ type: "message_react", messageId, emoji: "+1", op: "add" }));
+    dana.ws.send(JSON.stringify({ type: "message_react", messageId, emoji: "ghost", op: "remove" }));
+    dana.ws.send(JSON.stringify({ type: "message_react", messageId, emoji: "+1", op: "remove" }));
+    await erik.next(
+      (e) => e.type === "message_updated" && e.message.id === messageId && !e.message.reactions,
+    );
+    dana.ws.send(JSON.stringify({ type: "message_delete", messageId }));
+    await dana.next((e) => e.type === "message_deleted" && e.messageId === messageId);
+
+    const events = await env.db.sql<{ kind: string }[]>`
+      SELECT kind FROM thread_events WHERE subject_id = ${messageId} ORDER BY seq
+    `;
+    assert.deepEqual(events.map((event) => event.kind), [
+      "message.created",
+      "message.pinned",
+      "message.unpinned",
+      "message.edited",
+      "message.reaction_added",
+      "message.reaction_removed",
+      "message.deleted",
+    ]);
+
+    const channel = dana.welcome.channelInfos[0];
+    const [{ count: messagesBefore }] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM messages
+    `;
+    const [{ count: eventsBefore }] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM thread_events
+    `;
+    await assert.rejects(env.messages.append({
+      id: "rolled-back-message",
+      authorId: "missing-actor",
+      authorName: "ghost",
+      authorKind: "human",
+      content: "must not land",
+      channelId: channel.id,
+      channel: channel.name,
+      timestamp: Date.now(),
+    }));
+    const [{ count: messagesAfter }] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM messages
+    `;
+    const [{ count: eventsAfter }] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM thread_events
+    `;
+    assert.equal(messagesAfter, messagesBefore);
+    assert.equal(eventsAfter, eventsBefore);
+    assert.equal(await env.messages.get("rolled-back-message"), null);
+  });
+
+  test("repeating the same pin state broadcasts the message but appends no event", async () => {
+    const dana = await env.connect("dana", "human");
+    dana.ws.send(JSON.stringify({ type: "message", content: "pin once" }));
+    const posted = await dana.next((event) => event.type === "message");
+    const messageId = posted.message.id;
+
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: true }));
+    const pinned = await dana.next(
+      (event) => event.type === "message_updated" && event.message.id === messageId,
+    );
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: true }));
+    const stillPinned = await dana.next(
+      (event) => event.type === "message_updated" && event.message.id === messageId,
+    );
+    assert.equal(stillPinned.message.pinnedAt, pinned.message.pinnedAt);
+    assert.equal(stillPinned.message.pinnedBy, pinned.message.pinnedBy);
+
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: false }));
+    await dana.next(
+      (event) =>
+        event.type === "message_updated" && event.message.id === messageId && !event.message.pinnedAt,
+    );
+    dana.ws.send(JSON.stringify({ type: "pin", messageId, pinned: false }));
+    await dana.next(
+      (event) =>
+        event.type === "message_updated" && event.message.id === messageId && !event.message.pinnedAt,
+    );
+
+    const events = await env.db.sql<{ kind: string }[]>`
+      SELECT kind FROM thread_events WHERE subject_id = ${messageId} ORDER BY seq
+    `;
+    assert.deepEqual(events.map((event) => event.kind), [
+      "message.created",
+      "message.pinned",
+      "message.unpinned",
+    ]);
+  });
+
+  test("channel and workspace clears append one event each", async () => {
+    const dana = await env.connect("dana", "human");
+    const channel = dana.welcome.channelInfos[0];
+    dana.ws.send(JSON.stringify({ type: "message", content: "one" }));
+    await dana.next((e) => e.type === "message");
+    dana.ws.send(JSON.stringify({ type: "message", content: "two" }));
+    await dana.next((e) => e.type === "message" && e.message.content === "two");
+
+    await env.messages.clear(dana.welcome.self.id, channel);
+    await env.messages.clear(dana.welcome.self.id);
+    const events = await env.db.sql<{ kind: string; channel_id: string | null }[]>`
+      SELECT kind, channel_id FROM thread_events
+      WHERE kind IN ('message.channel_cleared', 'message.all_cleared')
+      ORDER BY seq
+    `;
+    assert.deepEqual([...events].map((event) => ({ ...event })), [
+      { kind: "message.channel_cleared", channel_id: channel.id },
+      { kind: "message.all_cleared", channel_id: null },
+    ]);
+  });
 });
 
 describe("typing indicator", () => {

@@ -28,9 +28,18 @@ export function createJoinGate(
         return join.name !== undefined ? { ok: true, name: join.name } : { ok: false };
       }
 
-      // User-created per-agent invite; the actor's stored name wins.
-      const resolved = await agentInvites.resolve(join.authToken);
-      return resolved ? { ok: true, name: resolved.actor.displayName } : { ok: false };
+      // User-created credentials; the stored actor identity and harness win.
+      const resolved =
+        (await agentInvites.resolveInstallation(join.authToken)) ??
+        (await agentInvites.resolve(join.authToken));
+      return resolved
+        ? {
+            ok: true,
+            name: resolved.actor.displayName,
+            actorId: resolved.actor.id,
+            harness: resolved.invite.provider,
+          }
+        : { ok: false };
     }
     const actor = join.authToken ? await auth.resolveSession(join.authToken) : null;
     return actor ? { ok: true, name: actor.displayName } : { ok: false };

@@ -48,7 +48,11 @@ export interface ChatMessage {
   authorKind: ParticipantKind;
   content: string;
   timestamp: number;
-  /** Channel the message belongs to. Absent = "general" (pre-channel messages). */
+  /** Stable identity of the channel that owns this message. */
+  channelId?: string;
+  /** Server-derived actor ids genuinely @mentioned by this message. */
+  mentions?: string[];
+  /** Channel name retained for display and phase-one compatibility. */
   channel?: string;
   /** Optional trace of agent reasoning that produced this message. */
   trace?: TraceChunk[];

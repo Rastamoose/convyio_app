@@ -74,7 +74,7 @@ export function PinnedMessages({
             {pinned.map((m) => (
               <div
                 key={m.id}
-                className="flex items-start gap-2 rounded bg-input/50 p-2 hover:bg-input"
+                className="flex items-start gap-2 rounded bg-mention-bg p-2 hover:bg-mention-bg-hover"
               >
                 <button
                   onClick={() => {

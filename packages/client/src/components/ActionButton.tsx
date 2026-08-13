@@ -12,7 +12,7 @@ const TONE_CLASSES: Record<ActionTone, string> = {
   deny: "bg-dead text-mention-text hover:opacity-90",
   neutral: "bg-popup text-body hover:bg-mention-bg-hover",
   primary: "bg-blurple text-mention-text hover:opacity-90",
-  destructive: "border border-dead/50 bg-transparent text-dead hover:bg-dead/10",
+  destructive: "border border-dead bg-transparent text-dead hover:bg-dead hover:text-mention-text",
 };
 
 /** One button style for board item actions (approve/deny/start/…). */

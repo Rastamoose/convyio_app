@@ -40,7 +40,7 @@ export class DemoOrchestrator {
     private seedRoot: string,
     private scripts: Map<string, DemoScript>,
   ) {
-    hub.onDemoStart = (channel) => void this.start(channel);
+    hub.onDemoStart = (channel, actorId) => void this.start(channel, actorId);
     hub.onMessagePosted = (message) => {
       if (message.authorKind === "agent") {
         this.agentReplyWaiter?.(message);
@@ -62,7 +62,7 @@ export class DemoOrchestrator {
   }
 
   /** Always restarts from the top: cancels any in-flight run and clears the channel. */
-  private async start(channel: string): Promise<void> {
+  private async start(channel: string, actorId: string): Promise<void> {
     const script = this.scripts.get(channel);
     if (!script) return;
 
@@ -79,7 +79,7 @@ export class DemoOrchestrator {
     console.log(`[demo] starting scripted demo in #${channel}`);
 
     try {
-      await this.hub.clearChannel(channel);
+      await this.hub.clearChannel(actorId, channel);
       await this.cleanupDemoItems(script.personas[0]);
       if (script.seedDir) await this.seedWorkspace(script.seedDir);
 

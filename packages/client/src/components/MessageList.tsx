@@ -197,7 +197,7 @@ function HoverRail({
         </RailButton>
       )}
       <RailButton title={pinned ? "Unpin message" : "Pin message"} onClick={onPin}>
-        <PinIcon className="h-3.5 w-3.5" />
+        <PinIcon className={`h-3.5 w-3.5 ${pinned ? "text-blurple" : ""}`} />
       </RailButton>
     </div>
   );
@@ -441,7 +441,7 @@ function ReactionsRow({
             onClick={() => onToggle(r.emoji, mine ? "remove" : "add")}
             className={`rounded-full border px-1.5 py-0.5 text-xs ${
               mine
-                ? "border-blurple bg-blurple/20 text-body"
+                ? "bg-blurple text-mention-text"
                 : "border-divider bg-input/50 text-muted hover:bg-input"
             }`}
           >
@@ -749,7 +749,7 @@ export function MessageList({
   };
 
   const rowClasses = (m: LocalMessage, base: string): string => {
-    if (m.failed) return `${base} border-l-2 border-dead bg-dead/5 pl-[14px] hover:bg-dead/10`;
+    if (m.failed) return `${base} border-l-2 border-dead bg-mention-bg pl-[14px] hover:bg-mention-bg-hover`;
     if (mentionsName(m.content, selfName)) {
       return `${base} border-l-2 border-mention-accent bg-mention-bg pl-[14px] hover:bg-mention-bg-hover`;
     }

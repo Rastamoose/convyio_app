@@ -22,10 +22,19 @@ const registeredTools: RegisteredServer[] = [];
 
 function stubbedBrain(
   messages: unknown[],
+  model: string | null = "fake-model",
 ): { brain: ClaudeBrain; requests: RecordedRequest[] } {
-  const brain = new ClaudeBrain("fake-model", "/fake/cwd");
+  return stubbedBrainRuns([messages], model);
+}
+
+function stubbedBrainRuns(
+  runs: unknown[][],
+  model: string | null = "fake-model",
+): { brain: ClaudeBrain; requests: RecordedRequest[] } {
+  const brain = new ClaudeBrain(model ?? undefined, "/fake/cwd");
   const requests: RecordedRequest[] = [];
   const query = (request: RecordedRequest) => {
+    const messages = runs[requests.length] ?? [];
     requests.push(request);
     return (async function* () {
       for (const message of messages) yield message as SDKMessage;
@@ -165,18 +174,121 @@ describe("ClaudeBrain", () => {
     assert.equal(requests[0].options.maxTurns, CLAUDE_MAX_TURNS);
   });
 
-  test("canUseTool always allows (native-tool gating is deferred MVP debt)", async () => {
+  test("omits the model option when using the Claude harness default", async () => {
+    const { brain, requests } = stubbedBrain([resultMessage("ok")], null);
+
+    await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+
+    assert.equal(Object.hasOwn(requests[0].options, "model"), false);
+  });
+
+  test("retries a recognized unavailable configured model once with the harness default", async () => {
+    const { brain, requests } = stubbedBrainRuns([
+      [errorResult("error_during_execution", ["Model fake-model not found"])],
+      [resultMessage("fallback reply")],
+    ]);
+
+    const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+
+    assert.equal(reply, "fallback reply");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.model, "fake-model");
+    assert.equal(Object.hasOwn(requests[1].options, "model"), false);
+  });
+
+  test("does not retry auth, rate, network, or general errors", async () => {
+    for (const error of [
+      "authentication_failed",
+      "rate limit exceeded",
+      "ECONNRESET while contacting API",
+      "unexpected execution failure",
+    ]) {
+      const { brain, requests } = stubbedBrain([errorResult("error_during_execution", [error])]);
+
+      await assert.rejects(() => brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks));
+
+      assert.equal(requests.length, 1, error);
+    }
+  });
+
+  test("does not retry an unavailable model after streamed output", async () => {
+    const { brain, requests } = stubbedBrain([
+      textDelta("Already emitted."),
+      errorResult("error_during_execution", ["Model fake-model not found"]),
+    ]);
+
+    const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+
+    assert.equal(reply, "Already emitted.");
+    assert.equal(requests.length, 1);
+  });
+
+  test("does not retry an unavailable model after a board tool side effect", async () => {
+    const { brain, requests } = stubbedBrain([]);
+    let calls = 0;
+    const query = (request: RecordedRequest) => {
+      requests.push(request);
+      return (async function* () {
+        await registeredTools.at(-1)!.tools[0].handler({}, undefined);
+        yield errorResult("error_during_execution", ["Model fake-model not found"]) as SDKMessage;
+      })();
+    };
+    (brain as unknown as { query: typeof query }).query = query;
+
+    await assert.rejects(() =>
+      brain.run(
+        {
+          system: "sys",
+          context: "ctx",
+          prompt: "hi",
+          tools: [{ name: "board_propose", description: "Propose", parameters: { type: "object", properties: {} } }],
+        },
+        noopCallbacks,
+        {
+          onToolCall: async () => {
+            calls += 1;
+            return { ok: true };
+          },
+        },
+      ),
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(requests.length, 1);
+  });
+
+  test("only exposes and approves safe native read tools", async () => {
+    const { brain, requests } = stubbedBrain([resultMessage("ok")]);
+
+    await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+
+    assert.deepEqual(requests[0].options.tools, ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]);
+    const canUseTool = requests[0].options.canUseTool as CanUseTool;
+    for (const toolName of ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]) {
+      const result = await canUseTool(toolName, {}, {
+        signal: new AbortController().signal,
+        toolUseID: `tool-${toolName}`,
+        requestId: `request-${toolName}`,
+      });
+      assert.deepEqual(result, { behavior: "allow" });
+    }
+  });
+
+  test("denies native mutation tools and unknown tools", async () => {
     const { brain, requests } = stubbedBrain([resultMessage("ok")]);
 
     await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
 
     const canUseTool = requests[0].options.canUseTool as CanUseTool;
-    const result = await canUseTool("Bash", {}, {
-      signal: new AbortController().signal,
-      toolUseID: "tool-1",
-      requestId: "req-1",
-    });
-    assert.deepEqual(result, { behavior: "allow" });
+    for (const toolName of ["Bash", "Write", "Edit", "NotebookEdit", "DeleteEverything", "mcp__other__write"]) {
+      const result = await canUseTool(toolName, {}, {
+        signal: new AbortController().signal,
+        toolUseID: `tool-${toolName}`,
+        requestId: `request-${toolName}`,
+      });
+      assert.equal(result?.behavior, "deny");
+      if (result?.behavior === "deny") assert.match(result.message, /not approved/);
+    }
   });
 
   test("board tool calls are bridged through onToolCall and results returned as MCP content", async () => {
@@ -202,6 +314,13 @@ describe("ClaudeBrain", () => {
       | Record<string, { instance?: unknown }>
       | undefined;
     assert.ok(mcpServers?.board, "expected a 'board' MCP server to be registered");
+    const canUseTool = requests[0].options.canUseTool as CanUseTool;
+    const permission = await canUseTool("mcp__board__board_list", {}, {
+      signal: new AbortController().signal,
+      toolUseID: "tool-board-list",
+      requestId: "request-board-list",
+    });
+    assert.deepEqual(permission, { behavior: "allow" });
 
     const registered = registeredTools.at(-1);
     assert.ok(registered, "expected createSdkMcpServer to have been called");

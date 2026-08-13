@@ -5,7 +5,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { after, describe, test } from "node:test";
 import type { ChatMessage } from "@workspace/shared";
+import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
+import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { createTestDb } from "./pgSchema";
 import { Sessions } from "../src/board/sessions";
 import { authorizeMutation } from "../src/board/Toolman";
@@ -197,9 +199,15 @@ describe("message store", () => {
   test("append/list round-trips messages in order, traces included", async () => {
     const { db, drop } = await createTestDb();
     try {
-      const store = new MessageStore(db);
-      const first = message({ timestamp: 1000 });
+      const store = new MessageStore(db, new ThreadEventStore(db));
+      const channels = new Channels(db);
+      await channels.seed([{ name: "general", isDemo: false }]);
+      const channel = (await channels.get("general"))!;
+      const actor = await db.upsertActor("human", "dana");
+      const first = message({ authorId: actor.id, channelId: channel.id, timestamp: 1000 });
       const second = message({
+        authorId: actor.id,
+        channelId: channel.id,
         timestamp: 2000,
         trace: [{ kind: "thought", content: "hmm" }],
         runId: "run-1",
@@ -216,13 +224,21 @@ describe("message store", () => {
   test("clear removes one channel or everything", async () => {
     const { db, drop } = await createTestDb();
     try {
-      const store = new MessageStore(db);
-      await store.append(message({ channel: "general" }));
-      await store.append(message({ channel: "demo" }));
-      await store.clear("demo");
+      const store = new MessageStore(db, new ThreadEventStore(db));
+      const channels = new Channels(db);
+      await channels.seed([
+        { name: "general", isDemo: false },
+        { name: "demo", isDemo: true },
+      ]);
+      const general = (await channels.get("general"))!;
+      const demo = (await channels.get("demo"))!;
+      const actor = await db.upsertActor("human", "dana");
+      await store.append(message({ authorId: actor.id, channelId: general.id, channel: general.name }));
+      await store.append(message({ authorId: actor.id, channelId: demo.id, channel: demo.name }));
+      await store.clear(actor.id, demo);
       assert.equal((await store.list()).length, 1);
       assert.equal((await store.list())[0].channel, "general");
-      await store.clear();
+      await store.clear(actor.id);
       assert.equal((await store.list()).length, 0);
     } finally {
       await drop();

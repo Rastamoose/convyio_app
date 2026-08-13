@@ -26,11 +26,23 @@ export const AGENT_PROVIDER: "gemini" | "claude" | "codex" =
 /** No default on purpose: a missing key must fail loudly at startup (index.ts). Gemini provider only. */
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-export const AGENT_MODEL =
-  process.env.AGENT_MODEL ?? (AGENT_PROVIDER === "claude" ? "claude-sonnet-5" : "gemini-2.5-flash");
+export function modelForProvider(
+  provider: "gemini" | "claude" | "codex",
+  configuredModel: string | undefined,
+): string | undefined {
+  if (provider === "claude") {
+    return configuredModel?.startsWith("gemini-") ? undefined : configuredModel;
+  }
+  if (provider === "gemini") {
+    return configuredModel?.startsWith("claude-") ? "gemini-2.5-flash" : configuredModel ?? "gemini-2.5-flash";
+  }
+  return configuredModel;
+}
+
+export const AGENT_MODEL = modelForProvider(AGENT_PROVIDER, process.env.AGENT_MODEL);
 
 /**
- * cwd Claude Code's native tools (Bash, Write, Edit, ...) operate in.
+ * cwd Claude Code's allowed native read tools operate in.
  * Mirrors the server's Toolman sandbox root (packages/server/src/index.ts's
  * `path.join(config.dataDir, "workspace")`, server DATA_DIR defaulting to
  * `<repo root>/data`) — not this process's own DATA_DIR below (this agent's

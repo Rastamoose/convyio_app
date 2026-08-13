@@ -6,6 +6,7 @@ import { after, describe, test } from "node:test";
 import type { Actor } from "@workspace/shared";
 import { BoardService } from "../src/board/BoardService";
 import { Toolman } from "../src/board/Toolman";
+import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { createEnv, PROPOSAL } from "./helpers";
 import { createTestDb } from "./pgSchema";
 
@@ -172,7 +173,7 @@ describe("pressure: HTTP edges", async () => {
 
 describe("pressure: toolman sandbox", async () => {
   const { db, drop } = await createTestDb();
-  const service = new BoardService(db);
+  const service = new BoardService(db, new ThreadEventStore(db));
   const root = path.join("/tmp", `toolman-pressure-${randomUUID()}`);
   const toolman = new Toolman(service, root);
   await toolman.init();

@@ -10,7 +10,9 @@ import { Roster } from "./roster";
 import { WorkspaceDb } from "./db";
 import { Attachments } from "./chat/Attachments";
 import { Channels } from "./chat/Channels";
+import { AgentWorkStore } from "./chat/AgentWorkStore";
 import { MessageStore } from "./chat/MessageStore";
+import { ThreadEventStore } from "./chat/ThreadEventStore";
 import { Auth } from "./auth/Auth";
 import { AgentInvites } from "./auth/AgentInvites";
 import { createJoinGate } from "./auth/joinPolicy";
@@ -25,8 +27,10 @@ const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 
 async function main() {
   const db = await WorkspaceDb.create(config.supabaseDbUrl);
-  const messages = new MessageStore(db);
-  const service = new BoardService(db);
+  const threadEvents = new ThreadEventStore(db);
+  const messages = new MessageStore(db, threadEvents);
+  const agentWork = new AgentWorkStore(db, threadEvents, messages);
+  const service = new BoardService(db, threadEvents);
   const sessions = new Sessions();
   const workspaceDir = path.join(config.dataDir, "workspace");
   const toolman = new Toolman(service, workspaceDir);
@@ -67,6 +71,7 @@ async function main() {
     service,
     sessions,
     messages,
+    threadEvents,
     channels,
     attachments,
     config.corsOrigin,
@@ -91,7 +96,7 @@ async function main() {
   });
 
   const roster = await Roster.create(db, agentInvites);
-  const hub = new Hub(server, roster, messages, channels, attachments, sessions, toolman, {
+  const hub = new Hub(server, roster, messages, agentWork, channels, attachments, sessions, toolman, {
     workspace: { id: db.workspaceId, name: db.workspaceName },
     demoChannels,
     // Unconfigured is not guest mode here: refuse every join rather than
@@ -104,7 +109,7 @@ async function main() {
   agentRevoker.close = (actorId) => hub.closeAgentConnection(actorId);
   memberRemover.close = (actorId) => hub.closeHumanConnection(actorId);
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
-  channels.onCreated = (name) => hub.broadcastChannelCreated(name);
+  channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
   channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);

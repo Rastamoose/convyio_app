@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Actor } from "@workspace/shared";
+import type { Actor, ChannelInfo } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { WorkspaceDb } from "../db";
 
@@ -13,7 +13,7 @@ const MAX_CHANNELS = 100;
  */
 export class Channels {
   /** Fan-out hooks; the composition root wires them to hub broadcasts. */
-  onCreated: ((name: string) => void) | null = null;
+  onCreated: ((channel: ChannelInfo) => void) | null = null;
   onRenamed: ((oldName: string, newName: string) => void) | null = null;
   onArchived: ((name: string, archived: boolean) => void) | null = null;
   onPinned: ((name: string, pinned: boolean) => void) | null = null;
@@ -35,12 +35,16 @@ export class Channels {
   /** Active (unarchived) channel names: pinned first (by pin order), then
    *  general, then creation order. */
   async list(): Promise<string[]> {
-    const rows = await this.store.sql<{ name: string }[]>`
-      SELECT name FROM channels WHERE archived_at IS NULL
+    return (await this.listInfo()).map((channel) => channel.name);
+  }
+
+  /** Active channels with stable ids, in the same display order as list(). */
+  async listInfo(): Promise<ChannelInfo[]> {
+    return this.store.sql<ChannelInfo[]>`
+      SELECT id, name FROM channels WHERE archived_at IS NULL
       ORDER BY pinned_at IS NULL ASC, pinned_at ASC,
                name = 'general' DESC, created_at ASC, seq ASC
     `;
-    return rows.map((row) => row.name);
   }
 
   /** Archived channel names, most recently archived first. */
@@ -59,13 +63,19 @@ export class Channels {
     return rows.map((row) => row.name);
   }
 
+  async get(name: string): Promise<ChannelInfo | null> {
+    const [channel] = await this.store.sql<ChannelInfo[]>`
+      SELECT id, name FROM channels WHERE name = ${name}
+    `;
+    return channel ?? null;
+  }
+
   async exists(name: string): Promise<boolean> {
-    const rows = await this.store.sql`SELECT 1 FROM channels WHERE name = ${name}`;
-    return rows.length > 0;
+    return (await this.get(name)) !== null;
   }
 
   /** Normalize and validate a requested name, record it, and fan out. */
-  async create(actor: Actor, rawName: string): Promise<string> {
+  async create(actor: Actor, rawName: string): Promise<ChannelInfo> {
     this.requireHuman(actor);
     const name = this.normalize(rawName);
     if (await this.exists(name)) {
@@ -75,12 +85,13 @@ export class Channels {
     if (c >= MAX_CHANNELS) {
       throw new ApiError(409, "CHANNEL_LIMIT", `channel cap of ${MAX_CHANNELS} reached`);
     }
+    const channel = { id: randomUUID(), name };
     await this.store.sql`
       INSERT INTO channels (id, name, created_by, is_demo, created_at)
-      VALUES (${randomUUID()}, ${name}, ${actor.id}, false, ${Date.now()})
+      VALUES (${channel.id}, ${channel.name}, ${actor.id}, false, ${Date.now()})
     `;
-    this.onCreated?.(name);
-    return name;
+    this.onCreated?.(channel);
+    return channel;
   }
 
   /** Rename a channel; messages keep pointing at it under the new name.

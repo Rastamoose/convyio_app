@@ -56,4 +56,45 @@ describe("client event validation", () => {
     const event = clientEventSchema.parse({ type: "run_end", runId: "r1" });
     assert.equal(event.type === "run_end" && event.reason, "completed");
   });
+
+  test("work frames require unique bounded request ids and a terminal outcome", () => {
+    assert.equal(
+      clientEventSchema.parse({ type: "work_claim", requestIds: ["request-1"] }).type,
+      "work_claim",
+    );
+    assert.throws(() => clientEventSchema.parse({ type: "work_claim", requestIds: [] }));
+    assert.throws(() =>
+      clientEventSchema.parse({ type: "work_claim", requestIds: ["request-1", "request-1"] }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "work_claim",
+        requestIds: Array.from({ length: 51 }, (_, index) => `request-${index}`),
+      }),
+    );
+    assert.equal(
+      clientEventSchema.parse({
+        type: "work_complete",
+        requestIds: ["request-1"],
+        outcome: "cancelled",
+      }).type,
+      "work_complete",
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "work_complete",
+        requestIds: ["request-1"],
+        outcome: "failed",
+      }),
+    );
+  });
+
+  test("message mentions cannot be supplied by a client", () => {
+    const event = clientEventSchema.parse({
+      type: "message",
+      content: "@agent hello",
+      mentions: ["forged-agent-id"],
+    });
+    assert.equal(event.type === "message" && "mentions" in event, false);
+  });
 });

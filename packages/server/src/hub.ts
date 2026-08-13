@@ -4,8 +4,10 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   clientEventSchema,
   type ActionRequestEvent,
+  type AgentProvider,
   type Attachment,
   type BoardEventEnvelope,
+  type ChannelInfo,
   type ChatMessage,
   type ClientEvent,
   type JoinEvent,
@@ -19,15 +21,19 @@ import {
   type StatusUpdateEvent,
   type SummaryEvent,
   type TraceChunk,
+  type WorkClaimEvent,
+  type WorkCompleteEvent,
   type WorkspaceInfo,
 } from "@workspace/shared";
 import { ApiError } from "./board/BoardService";
+import { RunRequestAccessError, type AgentWorkStore } from "./chat/AgentWorkStore";
 import type { Attachments } from "./chat/Attachments";
 import type { Channels } from "./chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, type MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
 import type { Toolman } from "./board/Toolman";
+import { requestOrigin } from "./requestOrigin";
 
 interface Connection {
   socket: WebSocket;
@@ -40,8 +46,10 @@ interface Connection {
   queue: Promise<void>;
 }
 
-/** Verdict from the join gate: whether a join stands, and as what name. */
-export type JoinDecision = { ok: true; name: string } | { ok: false };
+/** Verdict from the join gate: whether a join stands, and as what stored identity. */
+export type JoinDecision =
+  | { ok: true; name: string; actorId?: string; harness?: AgentProvider }
+  | { ok: false };
 
 export interface HubOptions {
   workspace: WorkspaceInfo;
@@ -71,7 +79,7 @@ export class Hub {
   /** Optional hook fired for every message posted to the channel. */
   onMessagePosted: ((message: ChatMessage) => void) | null = null;
   /** Optional hook fired when a client requests the scripted demo. */
-  onDemoStart: ((channel: string) => void) | null = null;
+  onDemoStart: ((channel: string, actorId: string) => void) | null = null;
   /** Optional hook fired for every board event fanned out to clients. */
   onBoardEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
 
@@ -79,6 +87,7 @@ export class Hub {
     server: HttpServer,
     private roster: Roster,
     private messages: MessageStore,
+    private agentWork: AgentWorkStore,
     private channels: Channels,
     private attachments: Attachments,
     private sessions: Sessions,
@@ -94,8 +103,8 @@ export class Hub {
     this.onBoardEvent?.(envelope);
   }
 
-  broadcastChannelCreated(name: string): void {
-    this.broadcast({ type: "channel_created", channel: name });
+  broadcastChannelCreated(channel: ChannelInfo): void {
+    this.broadcast({ type: "channel_created", channel: channel.name, channelInfo: channel });
   }
 
   broadcastChannelRenamed(oldName: string, newName: string): void {
@@ -134,6 +143,9 @@ export class Hub {
     } = {},
   ): Promise<void> {
     const { id = randomUUID(), nonce, ...rest } = extras;
+    const channelInfo = await this.channels.get(channel);
+    if (!channelInfo) throw new Error(`unknown channel: ${channel}`);
+    const mentionedAgents = deriveMentionedAgents(author, content, this.roster.list());
     const message: ChatMessage = {
       id,
       authorId: author.id,
@@ -141,20 +153,32 @@ export class Hub {
       authorKind: author.kind,
       content,
       timestamp: Date.now(),
-      channel,
+      channelId: channelInfo.id,
+      mentions: mentionedAgents.map((agent) => agent.id),
+      channel: channelInfo.name,
       ...rest,
     };
-    await this.messages.append(message);
+    const requests = await this.messages.appendAtomically(message, (sql) =>
+      this.agentWork.queue(sql, message, message.mentions ?? []),
+    );
     this.broadcast(
       nonce === undefined ? { type: "message", message } : { type: "message", message, nonce },
     );
+    for (const agent of mentionedAgents) {
+      this.notifyWork(
+        agent.id,
+        requests.filter((request) => request.agentId === agent.id).map((request) => request.id),
+      );
+    }
     this.onMessagePosted?.(message);
   }
 
   /** Clear one channel's messages (or all) and tell clients. */
-  async clearChannel(channel?: string): Promise<void> {
-    await this.messages.clear(channel);
-    this.broadcast(channel ? { type: "clear", channel } : { type: "clear" });
+  async clearChannel(actorId: string, channelName?: string): Promise<void> {
+    const channel = channelName ? await this.channels.get(channelName) : undefined;
+    if (channelName && !channel) throw new Error(`unknown channel: ${channelName}`);
+    await this.messages.clear(actorId, channel ?? undefined);
+    this.broadcast(channel ? { type: "clear", channel: channel.name } : { type: "clear" });
   }
 
   broadcastPresence(): void {
@@ -162,7 +186,7 @@ export class Hub {
   }
 
   private onConnection(socket: WebSocket, request: IncomingMessage): void {
-    const conn: Connection = { socket, participant: null, apiUrl: apiUrlFor(request), queue: Promise.resolve() };
+    const conn: Connection = { socket, participant: null, apiUrl: requestOrigin(request), queue: Promise.resolve() };
     this.connections.add(conn);
 
     socket.on("message", (raw) => {
@@ -244,10 +268,10 @@ export class Hub {
         break;
       }
       case "demo_start":
-        this.onDemoStart?.(event.channel);
+        this.onDemoStart?.(event.channel, participant.id);
         break;
       case "clear":
-        await this.clearChannel();
+        await this.clearChannel(participant.id);
         break;
       case "pin":
         await this.handlePin(conn, event);
@@ -293,6 +317,12 @@ export class Hub {
       case "run_end":
         await this.agentOnly(conn, () => this.handleRunEnd(event));
         break;
+      case "work_claim":
+        await this.agentOnly(conn, () => this.handleWorkClaim(conn, event));
+        break;
+      case "work_complete":
+        await this.agentOnly(conn, () => this.handleWorkComplete(conn, event));
+        break;
       case "action_request":
         await this.handleActionRequest(conn, event);
         break;
@@ -325,7 +355,7 @@ export class Hub {
       return;
     }
     const { kind } = join;
-    const participant = await this.roster.join(kind, decision.name);
+    const participant = await this.roster.join(kind, decision.name, decision.actorId);
 
     // Agents are singletons: a new connection for the same agent identity
     // displaces any previous one so duplicates can never double-reply.
@@ -333,16 +363,19 @@ export class Hub {
       for (const other of this.connections) {
         if (other !== conn && other.participant?.id === participant.id) {
           this.send(other, { type: "error", error: "displaced by newer agent connection" });
+          other.participant = null;
           other.socket.close();
         }
       }
     }
     conn.participant = participant;
+    if (kind === "agent") await this.agentWork.requeueClaimed(participant.id);
 
     // Bounded per channel (not "last N overall"): clients filter history by
     // channel client-side, so a flat cap would leave quiet channels empty.
     // Older messages page in via GET /api/messages.
-    const channelList = await this.channels.list();
+    const channelInfos = await this.channels.listInfo();
+    const channelList = channelInfos.map((channel) => channel.name);
     const [history, archivedChannels, pinnedChannels] = await Promise.all([
       this.messages.recentByChannel(channelList, DEFAULT_HISTORY_LIMIT),
       this.channels.listArchived(),
@@ -355,12 +388,17 @@ export class Hub {
       history,
       participants: this.roster.list(),
       channels: channelList,
+      channelInfos,
       archivedChannels,
       pinnedChannels,
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: conn.apiUrl,
     });
+    if (kind === "agent") {
+      const pending = await this.agentWork.listPending(participant.id);
+      this.sendWorkAvailable(conn, pending.map((request) => request.id));
+    }
     this.broadcastPresence();
   }
 
@@ -373,7 +411,8 @@ export class Hub {
     }
     const message = await this.messages.setPinned(
       event.messageId,
-      event.pinned ? participant.name : null,
+      { id: participant.id, name: participant.name },
+      event.pinned,
     );
     if (!message) {
       this.send(conn, { type: "error", error: `unknown message: ${event.messageId}` });
@@ -399,7 +438,11 @@ export class Hub {
 
   private async handleMessageEdit(conn: Connection, event: MessageEditEvent): Promise<void> {
     if (!(await this.authoredMessage(conn, event.messageId))) return;
-    const message = (await this.messages.edit(event.messageId, event.content))!;
+    const message = (await this.messages.edit(
+      event.messageId,
+      event.content,
+      conn.participant!.id,
+    ))!;
     this.broadcast({ type: "message_updated", message });
   }
 
@@ -457,6 +500,25 @@ export class Hub {
         authorName: participant.name,
         content,
       });
+    }
+  }
+
+  private async handleWorkClaim(conn: Connection, event: WorkClaimEvent): Promise<void> {
+    try {
+      const assignments = await this.agentWork.claim(conn.participant!.id, event.requestIds);
+      this.send(conn, { type: "work_assigned", assignments });
+    } catch (err) {
+      if (!(err instanceof RunRequestAccessError)) throw err;
+      this.send(conn, { type: "error", error: "work request unavailable" });
+    }
+  }
+
+  private async handleWorkComplete(conn: Connection, event: WorkCompleteEvent): Promise<void> {
+    try {
+      await this.agentWork.finish(conn.participant!.id, event.requestIds, event.outcome);
+    } catch (err) {
+      if (!(err instanceof RunRequestAccessError)) throw err;
+      this.send(conn, { type: "error", error: "work request unavailable" });
     }
   }
 
@@ -558,6 +620,19 @@ export class Hub {
     }
   }
 
+  private notifyWork(agentId: string, requestIds: string[]): void {
+    if (requestIds.length === 0) return;
+    for (const conn of this.connections) {
+      if (conn.participant?.id === agentId) this.sendWorkAvailable(conn, requestIds);
+    }
+  }
+
+  private sendWorkAvailable(conn: Connection, requestIds: string[]): void {
+    for (let index = 0; index < requestIds.length; index += 50) {
+      this.send(conn, { type: "work_available", requestIds: requestIds.slice(index, index + 50) });
+    }
+  }
+
   /** Disconnect a user-created agent and remove it from the live roster. */
   closeAgentConnection(actorId: string): void {
     for (const conn of this.connections) {
@@ -599,19 +674,24 @@ export class Hub {
   }
 }
 
-/**
- * The HTTP API lives at whatever origin the client reached us through, so
- * derive it from the upgrade request rather than baking a URL in at boot —
- * a boot-time value breaks behind any real domain or reverse proxy. A TLS
- * proxy announces itself via X-Forwarded-Proto (first value wins: proxies
- * append); anything else is plain http.
- */
-function apiUrlFor(request: IncomingMessage): string {
-  const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "")
-    .split(",")[0]
-    .trim();
-  const scheme = forwardedProto === "https" ? "https" : "http";
-  // Host is mandatory since HTTP/1.1; the fallback covers ancient clients.
-  const host = request.headers.host ?? `localhost:${request.socket.localPort}`;
-  return `${scheme}://${host}`;
+function deriveMentionedAgents(
+  author: Participant,
+  content: string,
+  participants: Participant[],
+): Participant[] {
+  if (
+    author.kind !== "human" ||
+    content.trimStart().toLowerCase().startsWith("/interrupt")
+  ) {
+    return [];
+  }
+  return participants.filter((participant) => {
+    if (participant.kind !== "agent") return false;
+    const escapedName = participant.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const mention = new RegExp(
+      `(?<![\\p{L}\\p{N}_])@${escapedName}(?![\\p{L}\\p{N}_-])`,
+      "iu",
+    );
+    return mention.test(content);
+  });
 }

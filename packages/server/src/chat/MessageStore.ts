@@ -1,5 +1,14 @@
-import type { Attachment, ChatMessage, MessageReaction, TraceChunk } from "@workspace/shared";
-import type { WorkspaceDb } from "../db";
+import type {
+  Attachment,
+  ChannelInfo,
+  ChatMessage,
+  MessageReaction,
+  ThreadEventKind,
+  ThreadEventPayload,
+  TraceChunk,
+} from "@workspace/shared";
+import type { Sql, WorkspaceDb } from "../db";
+import type { ThreadEventStore } from "./ThreadEventStore";
 
 /** Discord's cap: a message holds at most this many distinct reaction emoji. */
 export const MAX_REACTION_EMOJI = 20;
@@ -14,7 +23,10 @@ export const MAX_HISTORY_LIMIT = 100;
 
 /** Chat history persistence. Exists so the hub never touches SQL. */
 export class MessageStore {
-  constructor(private store: WorkspaceDb) {}
+  constructor(
+    private store: WorkspaceDb,
+    private threadEvents: ThreadEventStore,
+  ) {}
 
   /** Unbounded: every message, every channel. Kept for callers (admin/debug)
    *  that genuinely want the whole table; the welcome frame uses
@@ -96,38 +108,92 @@ export class MessageStore {
 
   /** Single-message read, reactions included; null result = unknown id. */
   async get(id: string): Promise<ChatMessage | null> {
-    const rows = await this.store.sql<MessageRow[]>`SELECT * FROM messages WHERE id = ${id}`;
-    return rows[0] ? toMessage(rows[0], await this.reactionsFor(id)) : null;
+    return (await this.getManyInTransaction(this.store.sql, [id]))[0] ?? null;
+  }
+
+  /** Hydrate messages through the caller's transaction for a consistent work claim. */
+  async getManyInTransaction(sql: Sql, ids: string[]): Promise<ChatMessage[]> {
+    if (ids.length === 0) return [];
+    const rows = await sql<MessageRow[]>`
+      SELECT * FROM messages WHERE id IN ${sql(ids)}
+    `;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const reactions = await this.reactionsForIds(ids, sql);
+    return ids.flatMap((id) => {
+      const row = byId.get(id);
+      return row ? [toMessage(row, reactions.get(id))] : [];
+    });
   }
 
   async append(message: ChatMessage): Promise<void> {
-    await this.store.sql`
-      INSERT INTO messages
-        (id, author_id, author_name, author_kind, content, channel, run_id, trace, attachments, reply_to_id, created_at)
-      VALUES (
-        ${message.id}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
-        ${message.content}, ${message.channel ?? "general"}, ${message.runId ?? null},
-        ${message.trace ? JSON.stringify(message.trace) : null},
-        ${message.attachments ? JSON.stringify(message.attachments) : null},
-        ${message.replyToId ?? null}, ${message.timestamp}
-      )
-    `;
+    await this.appendAtomically(message, async () => undefined);
+  }
+
+  /** Append a message and caller-owned projections in one database transaction. */
+  async appendAtomically<T>(message: ChatMessage, project: (sql: Sql) => Promise<T>): Promise<T> {
+    const channelId = message.channelId;
+    if (!channelId) throw new Error("message channelId is required");
+    return this.store.transaction(async (sql) => {
+      await sql`
+        INSERT INTO messages
+          (id, author_id, author_name, author_kind, content, channel, channel_id,
+           mentions, run_id, trace, attachments, reply_to_id, created_at)
+        VALUES (
+          ${message.id}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
+          ${message.content}, ${message.channel ?? "general"}, ${channelId},
+          ${sql.json(message.mentions ?? [])}, ${message.runId ?? null},
+          ${message.trace ? JSON.stringify(message.trace) : null},
+          ${message.attachments ? JSON.stringify(message.attachments) : null},
+          ${message.replyToId ?? null}, ${message.timestamp}
+        )
+      `;
+      await this.threadEvents.append(sql, {
+        workspaceId: this.store.workspaceId,
+        channelId,
+        actorId: message.authorId,
+        kind: "message.created",
+        runId: message.runId,
+        subjectId: message.id,
+        parentId: message.replyToId,
+        payload: JSON.parse(JSON.stringify(message)) as ThreadEventPayload,
+        createdAt: message.timestamp,
+      });
+      return project(sql);
+    });
   }
 
   /** Replace content and stamp edited_at; null result = unknown id. The
    *  author-only rule lives in the hub, which resolves the message first. */
-  async edit(id: string, content: string): Promise<ChatMessage | null> {
-    const rows = await this.store.sql<MessageRow[]>`
-      UPDATE messages SET content = ${content}, edited_at = ${Date.now()} WHERE id = ${id} RETURNING *
-    `;
-    return rows[0] ? toMessage(rows[0], await this.reactionsFor(id)) : null;
+  async edit(id: string, content: string, actorId: string): Promise<ChatMessage | null> {
+    const row = await this.store.transaction(async (sql) => {
+      const editedAt = Date.now();
+      const [updated] = await sql<MessageRow[]>`
+        UPDATE messages SET content = ${content}, edited_at = ${editedAt}
+        WHERE id = ${id} RETURNING *
+      `;
+      if (!updated) return null;
+      await this.appendMutationEvent(sql, updated, actorId, "message.edited", {
+        messageId: id,
+        content,
+        editedAt,
+      });
+      return updated;
+    });
+    return row ? toMessage(row, await this.reactionsFor(id)) : null;
   }
 
-  /** Hard delete: the row and its reactions go together. */
+  /** Hard delete: the row, its reactions, and its canonical event are atomic. */
   async delete(id: string): Promise<void> {
     await this.store.transaction(async (sql) => {
+      const [message] = await sql<MessageRow[]>`
+        SELECT * FROM messages WHERE id = ${id} FOR UPDATE
+      `;
+      if (!message) return;
       await sql`DELETE FROM message_reactions WHERE message_id = ${id}`;
       await sql`DELETE FROM messages WHERE id = ${id}`;
+      await this.appendMutationEvent(sql, message, message.author_id, "message.deleted", {
+        messageId: id,
+      });
     });
   }
 
@@ -138,29 +204,59 @@ export class MessageStore {
     emoji: string,
     actor: { id: string; name: string },
   ): Promise<"added" | "noop" | "capped"> {
-    const [emojiPresent] = await this.store.sql`
-      SELECT 1 FROM message_reactions WHERE message_id = ${messageId} AND emoji = ${emoji} LIMIT 1
-    `;
-    if (!emojiPresent) {
-      const [{ n }] = await this.store.sql<{ n: number }[]>`
-        SELECT COUNT(DISTINCT emoji)::int AS n FROM message_reactions WHERE message_id = ${messageId}
+    return this.store.transaction(async (sql) => {
+      const [message] = await sql<MessageRow[]>`
+        SELECT * FROM messages WHERE id = ${messageId} FOR UPDATE
       `;
-      if (n >= MAX_REACTION_EMOJI) return "capped";
-    }
-    const result = await this.store.sql`
-      INSERT INTO message_reactions (message_id, emoji, actor_id, actor_name, created_at)
-      VALUES (${messageId}, ${emoji}, ${actor.id}, ${actor.name}, ${Date.now()})
-      ON CONFLICT (message_id, emoji, actor_id) DO NOTHING
-    `;
-    return result.count > 0 ? "added" : "noop";
+      if (!message) return "noop";
+      const [emojiPresent] = await sql`
+        SELECT 1 FROM message_reactions
+        WHERE message_id = ${messageId} AND emoji = ${emoji} LIMIT 1
+      `;
+      if (!emojiPresent) {
+        const [{ n }] = await sql<{ n: number }[]>`
+          SELECT COUNT(DISTINCT emoji)::int AS n
+          FROM message_reactions WHERE message_id = ${messageId}
+        `;
+        if (n >= MAX_REACTION_EMOJI) return "capped";
+      }
+      const [inserted] = await sql`
+        INSERT INTO message_reactions (message_id, emoji, actor_id, actor_name, created_at)
+        VALUES (${messageId}, ${emoji}, ${actor.id}, ${actor.name}, ${Date.now()})
+        ON CONFLICT (message_id, emoji, actor_id) DO NOTHING
+        RETURNING message_id
+      `;
+      if (!inserted) return "noop";
+      await this.appendMutationEvent(sql, message, actor.id, "message.reaction_added", {
+        messageId,
+        emoji,
+        actorId: actor.id,
+        actorName: actor.name,
+      });
+      return "added";
+    });
   }
 
   /** Idempotent removal; false = there was nothing to remove. */
   async removeReaction(messageId: string, emoji: string, actorId: string): Promise<boolean> {
-    const result = await this.store.sql`
-      DELETE FROM message_reactions WHERE message_id = ${messageId} AND emoji = ${emoji} AND actor_id = ${actorId}
-    `;
-    return result.count > 0;
+    return this.store.transaction(async (sql) => {
+      const [message] = await sql<MessageRow[]>`
+        SELECT * FROM messages WHERE id = ${messageId} FOR UPDATE
+      `;
+      if (!message) return false;
+      const [removed] = await sql`
+        DELETE FROM message_reactions
+        WHERE message_id = ${messageId} AND emoji = ${emoji} AND actor_id = ${actorId}
+        RETURNING message_id
+      `;
+      if (!removed) return false;
+      await this.appendMutationEvent(sql, message, actorId, "message.reaction_removed", {
+        messageId,
+        emoji,
+        actorId,
+      });
+      return true;
+    });
   }
 
   private async reactionsFor(messageId: string): Promise<MessageReaction[] | undefined> {
@@ -180,37 +276,89 @@ export class MessageStore {
 
   /** Reactions for exactly these messages, one query — what recentByChannel
    *  and olderPage use so a bounded read never goes N+1 either. */
-  private async reactionsForIds(ids: string[]): Promise<Map<string, MessageReaction[]>> {
+  private async reactionsForIds(
+    ids: string[],
+    sql: Sql = this.store.sql,
+  ): Promise<Map<string, MessageReaction[]>> {
     if (ids.length === 0) return new Map();
-    const rows = await this.store.sql<ReactionRow[]>`
-      SELECT * FROM message_reactions WHERE message_id IN ${this.store.sql(ids)}
+    const rows = await sql<ReactionRow[]>`
+      SELECT * FROM message_reactions WHERE message_id IN ${sql(ids)}
       ORDER BY created_at ASC, seq ASC
     `;
     return groupByMessage(rows);
   }
 
-  /** Pin (recording the pinner's display name) or unpin (null); null result = unknown id. */
-  async setPinned(id: string, pinnedBy: string | null): Promise<ChatMessage | null> {
-    const rows = await this.store.sql<MessageRow[]>`
-      UPDATE messages SET pinned_at = ${pinnedBy ? Date.now() : null}, pinned_by = ${pinnedBy}
-      WHERE id = ${id} RETURNING *
-    `;
-    return rows[0] ? toMessage(rows[0], await this.reactionsFor(id)) : null;
+  /** Pin or unpin a message; null result = unknown id. */
+  async setPinned(
+    id: string,
+    actor: { id: string; name: string },
+    pinned: boolean,
+  ): Promise<ChatMessage | null> {
+    const row = await this.store.transaction(async (sql) => {
+      const [current] = await sql<MessageRow[]>`
+        SELECT * FROM messages WHERE id = ${id} FOR UPDATE
+      `;
+      if (!current) return null;
+      if ((current.pinned_at !== null) === pinned) return current;
+
+      const pinnedAt = pinned ? Date.now() : null;
+      const [updated] = await sql<MessageRow[]>`
+        UPDATE messages SET pinned_at = ${pinnedAt}, pinned_by = ${pinned ? actor.name : null}
+        WHERE id = ${id} RETURNING *
+      `;
+      await this.appendMutationEvent(
+        sql,
+        updated,
+        actor.id,
+        pinned ? "message.pinned" : "message.unpinned",
+        { messageId: id, pinnedAt, pinnedBy: pinned ? actor.name : null },
+      );
+      return updated;
+    });
+    return row ? toMessage(row, await this.reactionsFor(id)) : null;
   }
 
-  /** Delete all messages, or only those in the given channel. Reactions go with them. */
-  async clear(channel?: string): Promise<void> {
+  /** Delete all messages, or one stable channel's messages, with one event. */
+  async clear(actorId: string, channel?: ChannelInfo): Promise<void> {
     await this.store.transaction(async (sql) => {
       if (channel) {
         await sql`
           DELETE FROM message_reactions
-          WHERE message_id IN (SELECT id FROM messages WHERE channel = ${channel})
+          WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ${channel.id})
         `;
-        await sql`DELETE FROM messages WHERE channel = ${channel}`;
+        await sql`DELETE FROM messages WHERE channel_id = ${channel.id}`;
       } else {
         await sql`DELETE FROM message_reactions`;
         await sql`DELETE FROM messages`;
       }
+      await this.threadEvents.append(sql, {
+        workspaceId: this.store.workspaceId,
+        channelId: channel?.id,
+        actorId,
+        kind: channel ? "message.channel_cleared" : "message.all_cleared",
+        payload: channel
+          ? { channelId: channel.id, channel: channel.name }
+          : {},
+      });
+    });
+  }
+
+  private async appendMutationEvent(
+    sql: Sql,
+    message: MessageRow,
+    actorId: string,
+    kind: ThreadEventKind,
+    payload: ThreadEventPayload,
+  ): Promise<void> {
+    await this.threadEvents.append(sql, {
+      workspaceId: this.store.workspaceId,
+      channelId: message.channel_id,
+      actorId,
+      kind,
+      runId: message.run_id,
+      subjectId: message.id,
+      parentId: message.reply_to_id,
+      payload,
     });
   }
 }
@@ -222,6 +370,8 @@ interface MessageRow {
   author_kind: ChatMessage["authorKind"];
   content: string;
   channel: string;
+  channel_id: string;
+  mentions: string[];
   run_id: string | null;
   trace: string | null;
   attachments: string | null;
@@ -270,6 +420,8 @@ function toMessage(row: MessageRow, reactions?: MessageReaction[]): ChatMessage 
     authorKind: row.author_kind,
     content: row.content,
     timestamp: row.created_at,
+    channelId: row.channel_id,
+    mentions: row.mentions,
     channel: row.channel,
   };
   if (row.run_id) message.runId = row.run_id;

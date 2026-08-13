@@ -29,8 +29,8 @@ export function BoardCard({
     <div
       id={`board-item-${item.ref}`}
       onClick={() => onOpen(item.id)}
-      className={`cursor-pointer rounded bg-input p-3 transition duration-150 hover:ring-1 hover:ring-blurple/60 ${
-        highlighted ? "bg-blurple/20 ring-1 ring-blurple" : ""
+      className={`cursor-pointer rounded bg-input p-3 transition duration-150 hover:ring-1 hover:ring-blurple ${
+        highlighted ? "bg-mention-bg ring-1 ring-blurple" : ""
       }`}
     >
       <div className="mb-1.5 flex items-center gap-2">

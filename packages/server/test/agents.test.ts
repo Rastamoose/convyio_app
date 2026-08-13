@@ -4,6 +4,15 @@ import { createEnv, createWsEnv } from "./helpers";
 
 const PROVIDER = "claude";
 
+async function exchange(baseUrl: string, pairingCode: string) {
+  const response = await fetch(`${baseUrl}/api/agent-pairings/exchange`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pairingCode }),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
 describe("agent HTTP invites", async () => {
   const env = await createEnv();
   after(() => env.close());
@@ -27,6 +36,142 @@ describe("agent HTTP invites", async () => {
 
     const list2 = await env.api("GET", "/api/agents", human.token);
     assert.equal(list2.body.agents.length, 0);
+  });
+
+  test("new profiles have bounded defaults and list responses contain no secrets", async () => {
+    const human = await env.actor("human", "profile-owner");
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "default-profile",
+      provider: PROVIDER,
+    });
+    assert.equal(created.status, 201, created.body.message);
+    assert.equal(created.body.instructions, "");
+    assert.equal(created.body.requestedModel, null);
+    assert.deepEqual(created.body.access, { mode: "workspace", selectedActorIds: [] });
+    assert.equal(created.body.configRevision, 1);
+    assert.equal(created.body.pairing.expiresAt - created.body.pairing.createdAt, 10 * 60 * 1000);
+    assert.equal(created.body.token.length, 64);
+    assert.equal(created.body.pairingCode.length, 64);
+
+    const listed = await env.api("GET", "/api/agents", human.token);
+    const profile = listed.body.agents.find((agent: { id: string }) => agent.id === created.body.id);
+    assert.ok(profile);
+    const serialized = JSON.stringify(profile);
+    assert.equal(serialized.includes(created.body.token), false);
+    assert.equal(serialized.includes(created.body.pairingCode), false);
+    assert.equal("token" in profile, false);
+    assert.equal("pairingCode" in profile, false);
+
+    const [inviteSecret] = await env.db.sql<{ token_hash: string }[]>`
+      SELECT token_hash FROM agent_invites WHERE id = ${created.body.id}
+    `;
+    const [pairingSecret] = await env.db.sql<{ token_hash: string }[]>`
+      SELECT token_hash FROM agent_pairings WHERE id = ${created.body.pairing.id}
+    `;
+    assert.notEqual(inviteSecret.token_hash, created.body.token);
+    assert.notEqual(pairingSecret.token_hash, created.body.pairingCode);
+  });
+
+  test("profile validation and updates increment revision exactly once", async () => {
+    const human = await env.actor("human", "profile-editor");
+    const tooLong = await env.api("POST", "/api/agents", human.token, {
+      name: "invalid-profile",
+      provider: PROVIDER,
+      instructions: "x".repeat(20001),
+    });
+    assert.equal(tooLong.status, 400);
+
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "editable-profile",
+      provider: PROVIDER,
+    });
+    const invalidAccess = await env.api("PATCH", `/api/agents/${created.body.id}`, human.token, {
+      access: { mode: "selected", selectedActorIds: [] },
+    });
+    assert.equal(invalidAccess.status, 400);
+    assert.equal(invalidAccess.body.error, "BAD_ACCESS");
+
+    const patched = await env.api("PATCH", `/api/agents/${created.body.id}`, human.token, {
+      instructions: "Follow workspace policy.",
+      model: "claude-sonnet",
+      access: { mode: "creator", selectedActorIds: [] },
+      createdBy: "body-must-not-win",
+      actorId: "body-must-not-win",
+    });
+    assert.equal(patched.status, 200, patched.body.message);
+    assert.equal(patched.body.instructions, "Follow workspace policy.");
+    assert.equal(patched.body.requestedModel, "claude-sonnet");
+    assert.deepEqual(patched.body.access, { mode: "creator", selectedActorIds: [] });
+    assert.equal(patched.body.configRevision, 2);
+    assert.equal(patched.body.createdBy, human.actor.id);
+    assert.equal(patched.body.actorId, created.body.actorId);
+  });
+
+  test("pairings expire, are replaced, and can only be exchanged once under a race", async () => {
+    const human = await env.actor("human", "pairing-owner");
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "pairing-agent",
+      provider: PROVIDER,
+    });
+    const replacement = await env.api(
+      "POST",
+      `/api/agents/${created.body.id}/pairings`,
+      human.token,
+    );
+    assert.equal(replacement.status, 201);
+    assert.equal((await exchange(env.baseUrl, created.body.pairingCode)).status, 401);
+
+    const raced = await Promise.all([
+      exchange(env.baseUrl, replacement.body.pairingCode),
+      exchange(env.baseUrl, replacement.body.pairingCode),
+    ]);
+    assert.deepEqual(raced.map((result) => result.status).sort(), [200, 401]);
+    const success = raced.find((result) => result.status === 200)!;
+    assert.equal(success.body.installationToken.length, 64);
+    assert.equal(success.body.agent.id, created.body.id);
+    assert.equal(success.body.workspace.id, env.db.workspaceId);
+    assert.equal(success.body.apiUrl, env.baseUrl);
+    assert.equal(success.body.wsUrl, env.baseUrl.replace("http", "ws"));
+    const [installationCount] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*) AS count FROM agent_installations WHERE invite_id = ${created.body.id}
+    `;
+    assert.equal(installationCount.count, 1);
+    const [stored] = await env.db.sql<{ token_hash: string }[]>`
+      SELECT token_hash FROM agent_installations WHERE id = ${success.body.installation.id}
+    `;
+    assert.notEqual(stored.token_hash, success.body.installationToken);
+  });
+
+  test("expired and agent-revoked pairings are rejected", async () => {
+    const human = await env.actor("human", "pairing-revoker");
+    const expired = await env.api("POST", "/api/agents", human.token, {
+      name: "expired-pairing",
+      provider: PROVIDER,
+    });
+    await env.db.sql`
+      UPDATE agent_pairings SET expires_at = ${Date.now() - 1} WHERE id = ${expired.body.pairing.id}
+    `;
+    assert.equal((await exchange(env.baseUrl, expired.body.pairingCode)).status, 401);
+
+    const revoked = await env.api("POST", "/api/agents", human.token, {
+      name: "revoked-pairing",
+      provider: PROVIDER,
+    });
+    await env.api("DELETE", `/api/agents/${revoked.body.id}`, human.token);
+    assert.equal((await exchange(env.baseUrl, revoked.body.pairingCode)).status, 401);
+  });
+
+  test("the profile credential tables have deny-all RLS enabled", async () => {
+    const rows = await env.db.sql<{ relname: string; relrowsecurity: boolean }[]>`
+      SELECT relname, relrowsecurity
+      FROM pg_class
+      WHERE oid IN ('agent_pairings'::regclass, 'agent_installations'::regclass)
+      ORDER BY relname
+    `;
+    assert.deepEqual(Array.from(rows), [
+      { relname: "agent_installations", relrowsecurity: true },
+      { relname: "agent_pairings", relrowsecurity: true },
+    ]);
   });
 
   test("agent names must be unique", async () => {
@@ -101,6 +246,39 @@ describe("agent invite websocket joins", async () => {
     assert.equal(joined.welcome, null);
     assert.equal(joined.error, "unauthenticated");
     assert.equal(joined.closed, true);
+  });
+
+  test("an exchanged durable installation credential joins as its stored agent", async () => {
+    const humanActor = await env.db.upsertActor("human", "installer");
+    const { invite } = await env.agentInvites.create("installed-agent", "codex", humanActor, {
+      instructions: "Use the stored profile.",
+      requestedModel: null,
+      access: { mode: "creator", selectedActorIds: [] },
+    });
+    const pairing = await env.agentInvites.createPairing(invite.id, humanActor);
+    assert.ok(pairing);
+    const installed = await env.agentInvites.exchangePairing(pairing.pairingCode);
+    assert.ok(installed);
+
+    const joined = await env.join({
+      type: "join",
+      kind: "agent",
+      authToken: installed.installationToken,
+      name: "spoofed-name",
+    });
+    assert.equal(joined.welcome?.self.id, invite.actorId);
+    assert.equal(joined.welcome?.self.name, "installed-agent");
+    assert.equal(joined.error, null);
+
+    await env.agentInvites.revoke(invite.id);
+    const rejected = await env.join({
+      type: "join",
+      kind: "agent",
+      authToken: installed.installationToken,
+      name: "installed-agent",
+    });
+    assert.equal(rejected.welcome, null);
+    assert.equal(rejected.error, "unauthenticated");
   });
 });
 

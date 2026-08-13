@@ -2,6 +2,7 @@ import {
   query as claudeQuery,
   tool,
   createSdkMcpServer as claudeCreateSdkMcpServer,
+  type CanUseTool,
   type Options,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -22,42 +23,86 @@ import {
 // reusing that constant.
 export const CLAUDE_MAX_TURNS = 40;
 
+const SAFE_NATIVE_TOOLS = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"];
+
 export class ClaudeBrain implements Brain {
   private query = claudeQuery;
   private createSdkMcpServer = claudeCreateSdkMcpServer;
 
   constructor(
-    private model: string,
+    private model: string | undefined,
     private cwd: string,
   ) {}
 
   async run(input: BrainInput, callbacks: BrainCallbacks, options?: BrainRunOptions): Promise<string> {
+    const activity = { happened: false };
+    const trackedCallbacks: BrainCallbacks = {
+      onThought: (thought) => {
+        activity.happened = true;
+        callbacks.onThought(thought);
+      },
+      onText: (text) => {
+        activity.happened = true;
+        callbacks.onText(text);
+      },
+    };
+
+    try {
+      return await this.runQuery(input, trackedCallbacks, options, this.model, activity);
+    } catch (err) {
+      if (this.model === undefined || activity.happened || !isModelUnavailable(err)) throw err;
+      return this.runQuery(input, trackedCallbacks, options, undefined, activity);
+    }
+  }
+
+  private async runQuery(
+    input: BrainInput,
+    callbacks: BrainCallbacks,
+    options: BrainRunOptions | undefined,
+    model: string | undefined,
+    activity: { happened: boolean },
+  ): Promise<string> {
     const abortController = new AbortController();
     if (options?.signal) {
       if (options.signal.aborted) abortController.abort();
-      options.signal.addEventListener("abort", () => abortController.abort());
+      options.signal.addEventListener("abort", () => abortController.abort(), { once: true });
     }
 
+    const boardToolNames = new Set(
+      input.tools?.length && options?.onToolCall
+        ? input.tools.map((decl) => `mcp__board__${decl.name}`)
+        : [],
+    );
     const boardServer =
       input.tools?.length && options?.onToolCall
         ? this.createSdkMcpServer({
             name: "board",
             version: "1.0.0",
-            tools: input.tools.map((decl) => toSdkTool(decl, options.onToolCall!)),
+            tools: input.tools.map((decl) =>
+              toSdkTool(decl, async (name, args) => {
+                activity.happened = true;
+                return options.onToolCall!(name, args);
+              }),
+            ),
           })
         : undefined;
 
+    const canUseTool: CanUseTool = async (toolName) => {
+      activity.happened = true;
+      if (SAFE_NATIVE_TOOLS.includes(toolName) || boardToolNames.has(toolName)) {
+        return { behavior: "allow" };
+      }
+      return { behavior: "deny", message: `Tool ${toolName} is not approved for native execution.` };
+    };
     const claudeOptions: Options = {
-      model: this.model,
+      ...(model ? { model } : {}),
       cwd: this.cwd,
       systemPrompt: input.system,
       abortController,
       includePartialMessages: true,
       maxTurns: CLAUDE_MAX_TURNS,
-      // ponytail: always-allow stub. Native Claude Code tools (Bash, Write,
-      // Edit, ...) run ungated for MVP — board-approval routing for them is
-      // deferred debt, see ARCHITECTURE.md's 2026-08-09 decision log entry.
-      canUseTool: async () => ({ behavior: "allow" }),
+      tools: SAFE_NATIVE_TOOLS,
+      canUseTool,
       ...(boardServer ? { mcpServers: { board: boardServer } } : {}),
     };
 
@@ -79,8 +124,6 @@ export class ClaudeBrain implements Brain {
         if (message.subtype === "success") {
           finalText = message.result;
         } else if (finalText.trim()) {
-          // Real output already streamed (e.g. hit error_max_turns after
-          // useful work) — surface what we have instead of discarding it.
           break;
         } else {
           throw new Error(
@@ -92,6 +135,12 @@ export class ClaudeBrain implements Brain {
 
     return finalText.trim() || "(no response)";
   }
+}
+
+function isModelUnavailable(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  const unavailable = "not found|does not exist|unavailable|not available|unsupported|invalid|unknown";
+  return new RegExp(`model[^.\\n]*(?:${unavailable})|(?:${unavailable})[^.\\n]*model`, "i").test(message);
 }
 
 function buildClaudePrompt(input: BrainInput): string | AsyncIterable<SDKUserMessage> {

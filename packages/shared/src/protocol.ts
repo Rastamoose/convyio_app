@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ChatMessage, Participant, TraceChunk } from "./participant";
 import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
+import type { AgentWorkAssignment } from "./agentWork";
+import type { ChannelInfo } from "./thread";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -107,6 +109,23 @@ export const runEndEventSchema = z.object({
   reason: z.enum(["completed", "aborted"]).default("completed"),
 });
 
+const requestIdsSchema = z
+  .array(z.string().min(1).max(128))
+  .min(1)
+  .max(50)
+  .refine((ids) => new Set(ids).size === ids.length, "request ids must be unique");
+
+export const workClaimEventSchema = z.object({
+  type: z.literal("work_claim"),
+  requestIds: requestIdsSchema,
+});
+
+export const workCompleteEventSchema = z.object({
+  type: z.literal("work_complete"),
+  requestIds: requestIdsSchema,
+  outcome: z.enum(["completed", "cancelled"]),
+});
+
 export const pinEventSchema = z.object({
   type: z.literal("pin"),
   messageId: z.string(),
@@ -168,6 +187,8 @@ export const clientEventSchema = z
     interruptEventSchema,
     demoStartEventSchema,
     runEndEventSchema,
+    workClaimEventSchema,
+    workCompleteEventSchema,
     pinEventSchema,
     messageEditEventSchema,
     messageDeleteEventSchema,
@@ -193,6 +214,8 @@ export type ClearEvent = z.infer<typeof clearEventSchema>;
 export type InterruptEvent = z.infer<typeof interruptEventSchema>;
 export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
+export type WorkClaimEvent = z.infer<typeof workClaimEventSchema>;
+export type WorkCompleteEvent = z.infer<typeof workCompleteEventSchema>;
 export type PinEvent = z.infer<typeof pinEventSchema>;
 export type MessageEditEvent = z.infer<typeof messageEditEventSchema>;
 export type MessageDeleteEvent = z.infer<typeof messageDeleteEventSchema>;
@@ -219,6 +242,8 @@ export interface WelcomeEvent {
   participants: Participant[];
   /** Channels this server exposes, in display order. */
   channels: string[];
+  /** Stable identities for the active channel names above. */
+  channelInfos: ChannelInfo[];
   /** Archived channels, hidden from the main list until unarchived. */
   archivedChannels: string[];
   /** Subset of `channels` currently pinned to the top of the list. */
@@ -240,6 +265,16 @@ export interface ActionResultEvent {
   code?: AuthzDenyCode;
   error?: string;
   output?: string;
+}
+
+export interface WorkAvailableEvent {
+  type: "work_available";
+  requestIds: string[];
+}
+
+export interface WorkAssignedEvent {
+  type: "work_assigned";
+  assignments: AgentWorkAssignment[];
 }
 
 export interface MessageBroadcast {
@@ -305,6 +340,7 @@ export interface ClearBroadcast {
 export interface ChannelCreatedEvent {
   type: "channel_created";
   channel: string;
+  channelInfo: ChannelInfo;
 }
 
 export interface ChannelRenamedEvent {
@@ -345,6 +381,8 @@ export interface RunEndBroadcast {
 
 export type ServerEvent =
   | WelcomeEvent
+  | WorkAvailableEvent
+  | WorkAssignedEvent
   | MessageBroadcast
   | MessageUpdatedBroadcast
   | MessageDeletedBroadcast

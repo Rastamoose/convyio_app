@@ -1,10 +1,16 @@
-import { useState } from "react";
-import type { AgentInvite, AgentProvider } from "@workspace/shared";
+import { useEffect, useState } from "react";
+import type { AgentProvider } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 
 const NAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
-interface CreatedAgent extends AgentInvite {
+/** The one-time secret for a just-created invite. Kept separate from the
+ *  invite list itself (agentInvites, the source of truth) and only ever
+ *  read back through it by id, so a revoked agent can never keep showing
+ *  its secret: once the id drops out of agentInvites there is nothing left
+ *  to join it to and the banner has nothing to render. */
+interface CreatedSecret {
+  id: string;
   token: string;
   command: string;
 }
@@ -20,24 +26,42 @@ export function AddAgentModal({
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<AgentProvider>("claude");
   const [creating, setCreating] = useState(false);
-  const [created, setCreated] = useState<CreatedAgent | null>(null);
+  const [createdSecret, setCreatedSecret] = useState<CreatedSecret | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<"token" | "command" | null>(null);
+
+  // The modal stays mounted (Sidebar just toggles `open`), so each fresh
+  // open should start from a clean slate rather than showing whatever was
+  // left over from the last time it was open.
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setError(null);
+      setCreatedSecret(null);
+      setCopied(null);
+    }
+  }, [open]);
 
   if (!open) return null;
 
   const trimmed = name.trim();
   const valid = NAME_PATTERN.test(trimmed);
+  // Only ever shown for an invite that's still actually in the list -
+  // revoking it (locally, or the row disappearing after a refetch) takes
+  // the banner with it automatically, no separate cleanup required.
+  const createdInvite = createdSecret
+    ? agentInvites.find((a) => a.id === createdSecret.id)
+    : undefined;
 
   const submit = async () => {
     if (!valid || creating) return;
     setCreating(true);
     setError(null);
-    setCreated(null);
+    setCreatedSecret(null);
     const result = await createAgent(trimmed, provider);
     setCreating(false);
     if (result) {
-      setCreated(result);
+      setCreatedSecret({ id: result.id, token: result.token, command: result.command });
       setName("");
     } else {
       setError("Could not create the agent. The name may be taken or invalid.");
@@ -115,7 +139,7 @@ export function AddAgentModal({
               onChange={(e) => {
                 setName(e.target.value);
                 setError(null);
-                setCreated(null);
+                setCreatedSecret(null);
               }}
               onKeyDown={(e) => e.key === "Enter" && void submit()}
               maxLength={32}
@@ -128,30 +152,30 @@ export function AddAgentModal({
           </div>
 
           {error && (
-            <p className="mb-4 rounded bg-dead/10 px-3 py-2 text-sm text-dead" role="alert">
+            <p className="mb-4 rounded border-l-4 border-dead bg-mention-bg px-3 py-2 text-sm text-dead" role="alert">
               {error}
             </p>
           )}
 
-          {created && (
-            <div className="mb-4 rounded-lg border border-working/30 bg-working/5 p-3">
+          {createdSecret && createdInvite && (
+            <div className="mb-4 rounded-lg border-l-4 border-working bg-mention-bg p-3">
               <p className="mb-2 text-sm font-medium text-working">
-                {created.provider === "claude" ? "Claude" : "Codex"} agent
-                <span className="text-body"> {created.name}</span> created.
+                {createdInvite.provider === "claude" ? "Claude" : "Codex"} agent
+                <span className="text-body"> {createdInvite.name}</span> created.
               </p>
               <CopyField
                 label="Token"
-                value={created.token}
+                value={createdSecret.token}
                 copied={copied === "token"}
-                onCopy={() => void copy(created.token, "token")}
+                onCopy={() => void copy(createdSecret.token, "token")}
               />
               <CopyField
                 label="Run command"
-                value={created.command}
+                value={createdSecret.command}
                 copied={copied === "command"}
-                onCopy={() => void copy(created.command, "command")}
+                onCopy={() => void copy(createdSecret.command, "command")}
               />
-              {created.provider === "codex" && (
+              {createdInvite.provider === "codex" && (
                 <p className="mt-2 text-xs text-muted">
                   Codex support is not yet available; save the token and command
                   for when it lands.
@@ -189,7 +213,7 @@ export function AddAgentModal({
                     </div>
                     <button
                       onClick={() => void remove(invite.id)}
-                      className="ml-2 shrink-0 cursor-pointer rounded px-2 py-1 text-xs font-medium text-dead hover:bg-dead/10"
+                      className="ml-2 shrink-0 cursor-pointer rounded px-2 py-1 text-xs font-medium text-dead hover:bg-dead hover:text-mention-text"
                     >
                       Remove
                     </button>
@@ -218,10 +242,10 @@ function ProviderButton({
   return (
     <button
       onClick={onClick}
-      className={`flex-1 cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium transition ${
+      className={`flex-1 cursor-pointer rounded-lg px-3 py-2 text-sm font-medium transition ${
         selected
-          ? "border-blurple bg-blurple/10 text-body"
-          : "border-divider bg-input text-muted hover:border-body hover:text-body"
+          ? "bg-blurple text-mention-text"
+          : "border border-divider bg-input text-muted hover:border-body hover:text-body"
       }`}
     >
       {label}
@@ -254,7 +278,7 @@ function CopyField({
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <div className="break-all rounded bg-input px-2 py-1.5 font-mono text-xs text-body">
+      <div className="break-all rounded border border-divider bg-input px-2 py-1.5 font-mono text-xs text-body">
         {value}
       </div>
     </div>

@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import type { Attachment, BoardItem } from "@workspace/shared";
+import type { AgentWorkAssignment, Attachment, BoardItem } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
 import type { Brain } from "./brain";
 import type { Memory } from "./memory";
 import type { BoardClient } from "./boardClient";
 import type { PendingWork } from "./pendingWork";
 import type { Presence } from "./presence";
+import type { ConversationSessions } from "./conversationSessions";
 import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
 
 export interface WorkItem {
   authorName: string;
   content: string;
   channel: string;
+  /** Durable request identity; absent for proposal-resume and interrupt flows. */
+  requestId?: string;
+  conversationId?: string;
+  channelId?: string;
+  triggerMessageId?: string;
   /** Files the triggering message carried; images are shown to the model. */
   attachments?: Attachment[];
   /** Set when this work resumes an approved board item. */
@@ -32,6 +38,10 @@ export class AgentRunner {
   private abortController: AbortController | null = null;
   /** The board item the agent is actively executing against, if any. */
   private activeTask: BoardItem | null = null;
+  private pendingClaims = new Set<string>();
+  private claimedRequests = new Set<string>();
+  private seenRequests = new Set<string>();
+  private finishedRequests = new Map<string, "completed" | "cancelled">();
 
   constructor(
     private socket: AgentSocket,
@@ -39,9 +49,49 @@ export class AgentRunner {
     private memory: Memory,
     private board: BoardClient,
     private pendingWork: PendingWork,
+    private conversationSessions: ConversationSessions,
     private presence: Presence,
     private systemPrompt: string,
   ) {}
+
+  /** A reconnect invalidates server claims, but not local queued/running work. */
+  onWelcome(): void {
+    this.pendingClaims.clear();
+    this.claimedRequests.clear();
+  }
+
+  claimAvailable(requestIds: string[]): void {
+    const claimable = requestIds.filter(
+      (id) => !this.pendingClaims.has(id) && !this.claimedRequests.has(id),
+    );
+    if (claimable.length === 0) return;
+    for (const id of claimable) this.pendingClaims.add(id);
+    for (let index = 0; index < claimable.length; index += 50) {
+      this.socket.send({ type: "work_claim", requestIds: claimable.slice(index, index + 50) });
+    }
+  }
+
+  enqueueAssignment(assignment: AgentWorkAssignment): void {
+    const { request, conversation, trigger } = assignment;
+    this.pendingClaims.delete(request.id);
+    this.claimedRequests.add(request.id);
+    if (this.seenRequests.has(request.id)) {
+      const outcome = this.finishedRequests.get(request.id);
+      if (outcome) this.finishRequests([request.id], outcome);
+      return;
+    }
+    this.seenRequests.add(request.id);
+    this.enqueue({
+      requestId: request.id,
+      conversationId: conversation.id,
+      channelId: request.channelId,
+      triggerMessageId: trigger.id,
+      authorName: trigger.authorName,
+      content: trigger.content,
+      channel: trigger.channel ?? "general",
+      attachments: trigger.attachments,
+    });
+  }
 
   enqueue(work: WorkItem): void {
     this.queue.push(work);
@@ -51,6 +101,7 @@ export class AgentRunner {
   /** Abort the current run, drop all queued work, and start over on this. */
   interruptWith(work: WorkItem): void {
     this.abortController?.abort();
+    this.finishRequests(this.queue.flatMap((item) => item.requestId ?? []), "cancelled");
     this.queue.length = 0;
     this.enqueue(work);
   }
@@ -85,10 +136,10 @@ export class AgentRunner {
    * asked; remaining channels are handled on the next loop pass.
    */
   private nextBatch(): WorkItem[] {
-    const channel = this.queue[0].channel;
+    const channel = this.queue[0].channelId ?? this.queue[0].channel;
     const batch: WorkItem[] = [];
     for (let i = this.queue.length - 1; i >= 0; i--) {
-      if (this.queue[i].channel === channel) {
+      if ((this.queue[i].channelId ?? this.queue[i].channel) === channel) {
         batch.unshift(...this.queue.splice(i, 1));
       }
     }
@@ -174,14 +225,35 @@ export class AgentRunner {
       this.abortController = null;
     }
 
+    const requestIds = batch.flatMap((item) => item.requestId ?? []);
     if (!aborted) {
       this.socket.send({ type: "summary", runId, content: finalText, channel });
+      this.finishRequests(requestIds, "completed");
       console.log(`[agent] run ${runId.slice(0, 8)} summary sent (${finalText.length} chars)`);
     } else {
       this.socket.send({ type: "run_end", runId, reason: "aborted" });
+      this.finishRequests(requestIds, "cancelled");
       console.log(`[agent] run ${runId.slice(0, 8)} aborted`);
     }
     this.activeTask = null;
+  }
+
+  private finishRequests(
+    requestIds: string[],
+    outcome: "completed" | "cancelled",
+  ): void {
+    if (requestIds.length === 0) return;
+    for (const id of requestIds) {
+      this.finishedRequests.set(id, outcome);
+      this.claimedRequests.delete(id);
+    }
+    for (let index = 0; index < requestIds.length; index += 50) {
+      this.socket.send({
+        type: "work_complete",
+        requestIds: requestIds.slice(index, index + 50),
+        outcome,
+      });
+    }
   }
 
   private buildContext(): string {
