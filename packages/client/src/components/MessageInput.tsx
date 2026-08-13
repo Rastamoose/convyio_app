@@ -619,7 +619,7 @@ export function MessageInput({
               <button
                 onClick={() => removeAttachment(channel, a.localId)}
                 aria-label={`Remove ${a.name}`}
-                className="absolute top-0.5 right-0.5 rounded bg-sidebar-dark/80 p-0.5 text-chat/70 hover:text-chat"
+                className="absolute top-0.5 right-0.5 rounded bg-sidebar-dark/80 p-0.5 text-overlay-ink/70 hover:text-overlay-ink"
               >
                 <svg
                   className="h-3 w-3"

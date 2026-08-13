@@ -1,4 +1,5 @@
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { ThemeToggle } from "./ThemeToggle";
 
 export type WorkspaceView = "chat" | "board";
 
@@ -44,18 +45,21 @@ export function TopBar({
           </span>
         </>
       )}
-      {demoChannels.includes(channel) && (
-        <button
-          onClick={() => startDemo(channel)}
-          className="ml-auto flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-blurple px-3 py-1 text-sm font-semibold text-mention-text transition select-none hover:bg-working"
-          title="Play the scripted demo conversation"
-        >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          Run demo
-        </button>
-      )}
+      <div className="ml-auto flex shrink-0 items-center gap-2.5">
+        {demoChannels.includes(channel) && (
+          <button
+            onClick={() => startDemo(channel)}
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-blurple px-3 py-1 text-sm font-semibold text-mention-text transition select-none hover:bg-working"
+            title="Play the scripted demo conversation"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Run demo
+          </button>
+        )}
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

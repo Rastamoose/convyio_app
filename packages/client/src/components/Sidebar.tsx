@@ -267,7 +267,7 @@ function StatusRow({
   const offline = !participant.online;
   return (
     <div
-      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-black/5 ${
+      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-mention-bg-hover ${
         offline ? "opacity-40 hover:opacity-100" : ""
       }`}
       onMouseDown={(e) => e.stopPropagation()}
@@ -674,7 +674,7 @@ export function Sidebar({
             {signOut && (
               <button
                 onClick={signOut}
-                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-black/5 hover:text-body"
+                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-mention-bg-hover hover:text-body"
               >
                 Sign out
               </button>

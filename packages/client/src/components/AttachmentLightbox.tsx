@@ -18,7 +18,7 @@ function NavButton({
         onClick();
       }}
       aria-label={direction === "prev" ? "Previous image" : "Next image"}
-      className={`absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-sidebar-dark/60 p-2 text-chat transition hover:bg-sidebar-dark/90 ${
+      className={`absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-sidebar-dark/60 p-2 text-overlay-ink transition hover:bg-sidebar-dark/90 ${
         direction === "prev" ? "left-4" : "right-4"
       }`}
     >
@@ -111,14 +111,14 @@ export function AttachmentLightbox({
           href={url}
           target="_blank"
           rel="noreferrer"
-          className="text-sm text-chat/70 transition duration-150 hover:text-chat hover:underline"
+          className="text-sm text-overlay-ink/70 transition duration-150 hover:text-overlay-ink hover:underline"
         >
           Open original
         </a>
         <a
           href={url}
           download={current.name}
-          className="text-sm text-chat/70 transition duration-150 hover:text-chat hover:underline"
+          className="text-sm text-overlay-ink/70 transition duration-150 hover:text-overlay-ink hover:underline"
         >
           Download
         </a>

@@ -32,6 +32,11 @@
   --color-dead: #c0392b;
   --color-working: #d9a441;
   --color-away: #d9730d;
+  /* Ink on top of a dimmed backdrop (lightbox, drag overlay): the backdrop is
+     dark in both themes, so this one stays put while the rest rotate. */
+  --color-overlay-ink: #ffffff;
+  --color-scrollbar: #d4d4d1;
+  --color-scrollbar-hover: #bfbfbb;
 
   --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
@@ -74,6 +79,40 @@
   }
 }
 
+/* Dark theme: the same palette rotated onto dark surfaces. Every surface/ink
+   token above is re-pointed here so components keep addressing colors by
+   semantic name and never branch on the active theme. Toggled by the `dark`
+   class on <html> (see hooks/useTheme.ts); `html.dark` outweighs the `:root`
+   block Tailwind emits for @theme. */
+html.dark {
+  --color-sidebar: #131315;
+  --color-sidebar-dark: #08080a;
+  --color-userpanel: #131315;
+  --color-chat: #1a1a1d;
+  --color-chat-hover: #242428;
+  --color-input: #242428;
+  --color-body: #ececea;
+  --color-muted: #9b9b97;
+  --color-faint: #6f6f6b;
+  --color-blurple: #f0a83c;
+  --color-online: #7cb342;
+  --color-offline: #6f6f6b;
+  --color-divider: #2c2c30;
+  --color-mention-accent: #f0a83c;
+  --color-mention-bg: #26262a;
+  --color-mention-bg-hover: #303036;
+  --color-mention-pill: #f0a83c;
+  /* Unchanged: still ink on an amber pill/button, dark in both themes. */
+  --color-mention-text: #18181a;
+  --color-popup: #212125;
+  --color-composer: #242428;
+  --color-dead: #e2584a;
+  --color-working: #e0b455;
+  --color-away: #ea8a33;
+  --color-scrollbar: #3a3a3f;
+  --color-scrollbar-hover: #4d4d54;
+}
+
 html,
 body,
 #root {
@@ -87,7 +126,7 @@ body {
 /* Thin scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #d4d4d1 transparent;
+  scrollbar-color: var(--color-scrollbar) transparent;
 }
 
 /* Same look for WebKit browsers that ignore scrollbar-color (Safari);
@@ -100,11 +139,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d4d4d1;
+  background: var(--color-scrollbar);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #bfbfbb;
+  background: var(--color-scrollbar-hover);
 }
 
 ::selection {
