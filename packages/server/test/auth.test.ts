@@ -111,6 +111,21 @@ describe("Auth", () => {
     await assert.rejects(auth.resolveSession("tok-out"), (err) => err instanceof ApiError && err.status === 503);
   });
 
+  test("session() reports removed for a bound actor whose membership was revoked", async () => {
+    const auth = new Auth(db, fakeSupabase({ "tok-12": { id: "user-12", email: null } }));
+    await auth.claimUsername("tok-12", "Jules");
+    await db.removeMember("user-12");
+    assert.deepEqual(await auth.session("tok-12"), { status: "removed" });
+  });
+
+  test("resolveSession() returns null for a bound actor whose membership was revoked", async () => {
+    const auth = new Auth(db, fakeSupabase({ "tok-13": { id: "user-13", email: null } }));
+    await auth.claimUsername("tok-13", "Kian");
+    assert.ok(await auth.resolveSession("tok-13"));
+    await db.removeMember("user-13");
+    assert.equal(await auth.resolveSession("tok-13"), null);
+  });
+
   test("a verified token survives a Supabase outage via the verify cache", async () => {
     const users: Parameters<typeof fakeSupabase>[0] = {
       "tok-11": { id: "user-11", email: null, user_metadata: { desired_username: "Iris" } },
@@ -179,6 +194,19 @@ describe("ws join gating with auth enabled", async () => {
     assert.ok(outcome.welcome, "expected a welcome");
     assert.equal(outcome.welcome.self.name, "dana");
     assert.equal(outcome.welcome.self.id, (await env.db.getActor("user-dana"))!.id);
+  });
+
+  test("a human whose membership was revoked cannot rejoin", async () => {
+    const authToken = await signIn();
+    const first = await env.join({ type: "join", kind: "human", authToken });
+    assert.ok(first.welcome, "expected a welcome before removal");
+
+    await env.db.removeMember(first.welcome!.self.id);
+
+    const second = await env.join({ type: "join", kind: "human", authToken });
+    assert.equal(second.welcome, null);
+    assert.equal(second.error, "unauthenticated");
+    assert.equal(second.closed, true);
   });
 
   test("agents need the exact shared secret", async () => {

@@ -195,6 +195,19 @@ describe("App boot decision", () => {
       }),
     );
   });
+
+  it("a removed member sees a dead-end screen instead of the workspace", async () => {
+    authState.session = { access_token: "tok-1" };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "removed" }));
+
+    render(<App />);
+
+    expect(await screen.findByText("No workspaces here")).toBeInTheDocument();
+    expect(screen.queryByText("Pick a username")).not.toBeInTheDocument();
+  });
 });
 
 describe("Workspace composer", () => {

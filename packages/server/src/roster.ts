@@ -96,8 +96,10 @@ export class Roster {
     }
   }
 
-  /** Remove a scripted demo persona from the live roster after a demo run
-   *  (real humans persist as offline; their actor rows stay either way). */
+  /** Drop a human from the live roster: after a scripted demo run (personas
+   *  are not workspace members) or after a real member is removed from the
+   *  workspace. An ordinary disconnect never calls this — it just goes
+   *  offline via setOnline, staying in the roster. */
   removeHuman(id: string): void {
     for (const [key, p] of this.known) {
       if (p.id === id && p.kind === "human") this.known.delete(key);

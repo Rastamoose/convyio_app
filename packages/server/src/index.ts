@@ -61,6 +61,7 @@ async function main() {
   const attachments = new Attachments(db, supabase);
   const agentInvites = new AgentInvites(db);
   const agentRevoker: { close?: (actorId: string) => void } = {};
+  const memberRemover: { close?: (actorId: string) => void } = {};
   const handleApi = createApiHandler(
     db,
     service,
@@ -72,6 +73,7 @@ async function main() {
     authGate,
     agentInvites,
     (actorId) => agentRevoker.close?.(actorId),
+    (actorId) => memberRemover.close?.(actorId),
   );
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -100,6 +102,7 @@ async function main() {
       : async () => ({ ok: false }),
   });
   agentRevoker.close = (actorId) => hub.closeAgentConnection(actorId);
+  memberRemover.close = (actorId) => hub.closeHumanConnection(actorId);
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
   channels.onCreated = (name) => hub.broadcastChannelCreated(name);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);

@@ -7,7 +7,10 @@ import type { WorkspaceDb } from "../db";
 // can never be only whitespace.
 export const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
-export type SessionResult = { status: "ok"; username: string } | { status: "needs_username" };
+export type SessionResult =
+  | { status: "ok"; username: string }
+  | { status: "needs_username" }
+  | { status: "removed" };
 
 /**
  * Auth owns the bridge from a verified Supabase session to a workspace
@@ -30,7 +33,13 @@ export class Auth {
   async resolveSession(jwt: string): Promise<Actor | null> {
     const user = await this.verify(jwt);
     if (!user) return null;
-    return this.store.getActor(user.id);
+    const actor = await this.store.getActor(user.id);
+    if (!actor) return null;
+    // A removed member keeps their actor row (attribution) but loses
+    // membership; treat them the same as an invalid token so they can't
+    // rejoin the workspace over the socket.
+    if (!(await this.store.isMember(actor.id))) return null;
+    return actor;
   }
 
   /** Same verification, framed as ok/needs_username for the HTTP front
@@ -45,7 +54,10 @@ export class Auth {
     const user = await this.verify(jwt);
     if (!user) throw new ApiError(401, "BAD_CREDENTIAL", "sign-in could not be verified");
     const actor = await this.store.getActor(user.id);
-    if (actor) return { status: "ok", username: actor.displayName };
+    if (actor) {
+      if (!(await this.store.isMember(actor.id))) return { status: "removed" };
+      return { status: "ok", username: actor.displayName };
+    }
     if (user.desiredUsername) {
       const name = user.desiredUsername.trim();
       if (

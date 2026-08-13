@@ -20,6 +20,7 @@ const pinChannel = vi.fn();
 const deleteChannel = vi.fn();
 const markRead = vi.fn();
 const revokeAgent = vi.fn();
+const removeMember = vi.fn();
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     workspace: { id: "ws-1", name: "test_space" },
@@ -42,6 +43,7 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     markRead,
     agentInvites,
     revokeAgent,
+    removeMember,
   }),
 }));
 
@@ -324,7 +326,7 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByText("helper"));
     const menu = screen.getByRole("menu", { name: "Member actions for helper" });
-    const remove = within(menu).getByText("Remove from workspace");
+    const remove = within(menu).getByText("Remove");
     expect(remove).toHaveClass("text-dead");
     expect(remove).toBeEnabled();
 
@@ -333,16 +335,33 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("disables Remove from workspace for humans and token-joined agents", () => {
+  it("right-clicking another human offers a red Remove that calls removeMember", async () => {
+    const user = userEvent.setup();
+    // self is always participants[0] in this mock (see the vi.mock above).
+    participants = [human("h1", "al", true), human("h2", "bea", true)];
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByText("bea"));
+    const menu = screen.getByRole("menu", { name: "Member actions for bea" });
+    const remove = within(menu).getByText("Remove");
+    expect(remove).toHaveClass("text-dead");
+    expect(remove).toBeEnabled();
+
+    await user.click(remove);
+    expect(removeMember).toHaveBeenCalledWith("h2");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("disables Remove on yourself and on token-joined agents (no invite)", () => {
     participants = [human("h1", "al", true), agent("a1", "noodle", true)];
     renderSidebar();
 
     fireEvent.contextMenu(screen.getAllByText("al")[0]);
-    expect(screen.getByText("Remove from workspace")).toBeDisabled();
+    expect(screen.getByText("Remove")).toBeDisabled();
 
     fireEvent.contextMenu(screen.getByText("noodle"));
     const menu = screen.getByRole("menu", { name: "Member actions for noodle" });
-    expect(within(menu).getByText("Remove from workspace")).toBeDisabled();
+    expect(within(menu).getByText("Remove")).toBeDisabled();
   });
 
   it("Rename opens an inline input pre-filled with the current name, submits on Enter", async () => {

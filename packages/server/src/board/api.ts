@@ -67,6 +67,7 @@ export function createApiHandler(
   authGate: AuthGate | null = null,
   agentInvites: AgentInvites | null = null,
   onRevokeAgent: ((actorId: string) => void) | null = null,
+  onRemoveMember: ((actorId: string) => void) | null = null,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -114,7 +115,7 @@ export function createApiHandler(
         await serveUpload(res, attachments, parts[2], method === "HEAD");
       } else {
         const actor = await authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, service, db, messages, channels, attachments, agentInvites, onRevokeAgent);
+        await route(req, res, parts, url, actor, service, db, messages, channels, attachments, agentInvites, onRevokeAgent, onRemoveMember);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -143,12 +144,28 @@ async function route(
   attachments: Attachments,
   agentInvites: AgentInvites | null,
   onRevokeAgent: ((actorId: string) => void) | null,
+  onRemoveMember: ((actorId: string) => void) | null,
 ): Promise<void> {
   const method = req.method ?? "GET";
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
     return json(res, 200, { actors: await db.listMembers() });
+  }
+
+  // DELETE /api/actors/:id — remove a human from the workspace (humans
+  // only; a human cannot remove themselves). Agent removal has its own
+  // flow (DELETE /api/agents/:id) because it also revokes an invite token.
+  if (parts[1] === "actors" && parts.length === 3 && method === "DELETE") {
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove members");
+    const targetId = parts[2];
+    if (targetId === actor.id) throw new ApiError(400, "CANNOT_REMOVE_SELF", "you cannot remove yourself");
+    const target = await db.getActor(targetId);
+    if (!target || target.kind !== "human") throw new ApiError(404, "NOT_FOUND", "no such human member");
+    const removed = await db.removeMember(targetId);
+    if (!removed) throw new ApiError(404, "NOT_FOUND", "not a workspace member");
+    if (onRemoveMember) onRemoveMember(targetId);
+    return json(res, 200, { ok: true });
   }
 
   // GET /api/agents — user-created agents that are still invited.

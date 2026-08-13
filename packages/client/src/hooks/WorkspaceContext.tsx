@@ -108,6 +108,8 @@ export interface WorkspaceState {
   ) => Promise<(AgentInvite & { token: string; command: string }) | null>;
   /** Revoke a user-added agent. */
   revokeAgent: (id: string) => Promise<boolean>;
+  /** Remove a human from the workspace (humans only; not self). */
+  removeMember: (actorId: string) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -380,6 +382,24 @@ export function WorkspaceProvider({
     }
   };
 
+  const removeMember = async (actorId: string): Promise<boolean> => {
+    const request = api.fetch(`/api/actors/${encodeURIComponent(actorId)}`, {
+      method: "DELETE",
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not remove them from the workspace: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      pushToast(`Could not remove them from the workspace: ${String(err)}`);
+      return false;
+    }
+  };
+
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
@@ -477,6 +497,7 @@ export function WorkspaceProvider({
     agentInvites,
     createAgent,
     revokeAgent,
+    removeMember,
   };
 
   return (

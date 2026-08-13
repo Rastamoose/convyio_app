@@ -44,6 +44,15 @@ describe("WorkspaceDb", () => {
     assert.equal(await db.findActorByName("agent", "nope"), null);
   });
 
+  test("removeMember drops membership but keeps the actor row; a second call reports no-op", async () => {
+    const actor = await db.upsertActor("agent", "Removable Bot");
+    assert.equal(await db.isMember(actor.id), true);
+    assert.equal(await db.removeMember(actor.id), true);
+    assert.equal(await db.isMember(actor.id), false);
+    assert.ok(await db.getActor(actor.id), "actor row survives removal");
+    assert.equal(await db.removeMember(actor.id), false);
+  });
+
   test("createHuman uses the given id, stores email, and registers membership", async () => {
     const actor = await db.createHuman("11111111-1111-1111-1111-111111111111", "Harris", "h@example.com");
     assert.equal(actor.id, "11111111-1111-1111-1111-111111111111");

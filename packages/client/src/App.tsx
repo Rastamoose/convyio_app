@@ -36,9 +36,9 @@ export default function App() {
   // "unknown" = still checking whether this session has a bound actor yet —
   // see the race note above for why WorkspaceProvider must never render
   // until this resolves to "ok".
-  const [usernameStatus, setUsernameStatus] = useState<"unknown" | "ok" | "needs_username">(
-    "unknown",
-  );
+  const [usernameStatus, setUsernameStatus] = useState<
+    "unknown" | "ok" | "needs_username" | "removed"
+  >("unknown");
   // Set when the user arrives from a password-reset email; gates the whole
   // app behind ResetPasswordScreen until a new password is saved.
   const [recovering, setRecovering] = useState(false);
@@ -87,7 +87,7 @@ export default function App() {
         });
         if (cancelled) return;
         if (res.ok) {
-          const data = (await res.json()) as { status: "ok" | "needs_username" };
+          const data = (await res.json()) as { status: "ok" | "needs_username" | "removed" };
           setUsernameStatus(data.status);
           return;
         }
@@ -180,6 +180,20 @@ export default function App() {
   if (usernameStatus === "needs_username") {
     return (
       <UsernameStep accessToken={session.access_token} onDone={() => setUsernameStatus("ok")} />
+    );
+  }
+
+  if (usernameStatus === "removed") {
+    return (
+      <div className="flex h-full items-center justify-center bg-chat">
+        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+          <h1 className="mb-2 text-2xl font-semibold text-body">No workspaces here</h1>
+          <p className="text-muted">
+            You've been removed from this workspace, so there's nothing to show you.
+            Contact whoever removed you if you think this is a mistake.
+          </p>
+        </div>
+      </div>
     );
   }
 

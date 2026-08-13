@@ -208,7 +208,7 @@ function MemberContextMenu({
       className="fixed z-50 w-48 rounded-lg border border-divider bg-popup p-1 shadow-lg"
     >
       <ContextMenuItem
-        label="Remove from workspace"
+        label="Remove"
         danger
         disabled={!removable}
         title={
@@ -334,6 +334,7 @@ export function Sidebar({
     markRead,
     agentInvites,
     revokeAgent,
+    removeMember,
   } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -467,11 +468,17 @@ export function Sidebar({
   const menuMember = memberMenu
     ? (participants.find((p) => p.id === memberMenu.participantId) ?? null)
     : null;
-  // "Remove from workspace" is really "revoke the agent's invite" for now, so
-  // it only works for members that have one (see MemberContextMenu.removable).
+  // Agent removal only works for invite-created agents (server-wide-token
+  // agents like the demo "noodle" have no invite to revoke); human removal
+  // works for any other human, but never for yourself.
   const menuMemberInvite = menuMember
     ? (agentInvites.find((i) => i.actorId === menuMember.id) ?? null)
     : null;
+  const menuMemberRemovable = menuMember
+    ? menuMember.kind === "agent"
+      ? menuMemberInvite !== null
+      : menuMember.id !== self?.id
+    : false;
 
   const discuss = (item: BoardItem) => {
     setQueueOpen(false);
@@ -720,9 +727,14 @@ export function Sidebar({
           x={memberMenu.x}
           y={memberMenu.y}
           name={menuMember.name}
-          removable={menuMemberInvite !== null}
+          removable={menuMemberRemovable}
           onRemove={() => {
-            if (menuMemberInvite) void revokeAgent(menuMemberInvite.id);
+            if (!menuMemberRemovable) return;
+            if (menuMember.kind === "agent") {
+              if (menuMemberInvite) void revokeAgent(menuMemberInvite.id);
+            } else {
+              void removeMember(menuMember.id);
+            }
           }}
           onClose={() => setMemberMenu(null)}
         />

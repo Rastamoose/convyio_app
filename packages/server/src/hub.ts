@@ -571,6 +571,21 @@ export class Hub {
     this.broadcastPresence();
   }
 
+  /** Disconnect a human whose workspace membership was just revoked and
+   *  remove them from the live roster (their next join attempt is refused
+   *  by Auth.resolveSession's membership check). */
+  closeHumanConnection(actorId: string): void {
+    for (const conn of this.connections) {
+      if (conn.participant?.id === actorId) {
+        this.send(conn, { type: "error", error: "removed from workspace" });
+        conn.socket.close();
+      }
+    }
+    this.roster.removeHuman(actorId);
+    this.sessions.revokeFor(actorId);
+    this.broadcastPresence();
+  }
+
   /** Close the WebSocket server and sever every active connection. */
   async close(): Promise<void> {
     // Let in-flight message handlers finish before we yank the sockets, so

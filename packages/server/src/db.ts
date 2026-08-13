@@ -178,6 +178,19 @@ export class WorkspaceDb {
     return rows.length > 0;
   }
 
+  /** Remove a member's workspace_members row ("remove from workspace"). The
+   *  actor row stays for message/board attribution, so this only affects
+   *  isMember/listMembers and anything gated on them (join, roster reload).
+   *  Returns false if the actor was not a member to begin with. */
+  async removeMember(actorId: string): Promise<boolean> {
+    const rows = await this.sql`
+      DELETE FROM workspace_members
+      WHERE workspace_id = ${this.workspaceId} AND actor_id = ${actorId}
+      RETURNING actor_id
+    `;
+    return rows.length > 0;
+  }
+
   async close(): Promise<void> {
     await this.sql.end();
   }
