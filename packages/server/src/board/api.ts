@@ -1,7 +1,8 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { Actor, AgentProvider, ItemStatus } from "@workspace/shared";
+import type { Actor, AgentInvite, AgentProvider, ItemStatus, WorkCapability } from "@workspace/shared";
+import { WORK_CAPABILITIES } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { Sessions } from "./sessions";
 import type { AgentInvites } from "../auth/AgentInvites";
@@ -16,8 +17,10 @@ import {
 } from "../chat/ThreadEventStore";
 import type { WorkspaceDb } from "../db";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
+import type { RunnerRuntime } from "../RunnerRuntime";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
+const capabilitiesSchema = z.array(z.enum(WORK_CAPABILITIES as [WorkCapability, ...WorkCapability[]])).max(3);
 
 const createBodySchema = z.object({
   title: z.string().min(1).max(200),
@@ -25,6 +28,7 @@ const createBodySchema = z.object({
   why: z.string().max(1000).optional(),
   effect: z.string().max(1000).optional(),
   scopePaths: scopePathsSchema.optional(),
+  capabilities: capabilitiesSchema.optional(),
   // I2: any supplied status is ignored; parsed here only so it is dropped.
   status: z.unknown().optional(),
 });
@@ -88,6 +92,8 @@ export function createApiHandler(
   corsOrigin: string,
   authGate: AuthGate | null = null,
   agentInvites: AgentInvites | null = null,
+  runnerRuntime: RunnerRuntime | null = null,
+  onUpdateAgent: ((profile: AgentInvite) => void) | null = null,
   onRevokeAgent: ((actorId: string) => void) | null = null,
   onRemoveMember: ((actorId: string) => void) | null = null,
 ) {
@@ -156,7 +162,24 @@ export function createApiHandler(
         });
       } else {
         const actor = await authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, service, db, messages, threadEvents, channels, attachments, agentInvites, onRevokeAgent, onRemoveMember);
+        await route(
+          req,
+          res,
+          parts,
+          url,
+          actor,
+          service,
+          db,
+          messages,
+          threadEvents,
+          channels,
+          attachments,
+          agentInvites,
+          runnerRuntime,
+          onUpdateAgent,
+          onRevokeAgent,
+          onRemoveMember,
+        );
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -185,6 +208,8 @@ async function route(
   channels: Channels,
   attachments: Attachments,
   agentInvites: AgentInvites | null,
+  runnerRuntime: RunnerRuntime | null,
+  onUpdateAgent: ((profile: AgentInvite) => void) | null,
   onRevokeAgent: ((actorId: string) => void) | null,
   onRemoveMember: ((actorId: string) => void) | null,
 ): Promise<void> {
@@ -213,7 +238,18 @@ async function route(
   // GET /api/agents — user-created agents that are still invited.
   if (parts[1] === "agents" && parts.length === 2 && method === "GET") {
     if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
-    return json(res, 200, { agents: await agentInvites.list() });
+    const agents = await agentInvites.list();
+    return json(res, 200, {
+      agents: agents.map((agent) => ({
+        ...agent,
+        runtime: runnerRuntime?.summary(agent.actorId, agent.configRevision) ?? {
+          connected: false,
+          health: "checking",
+          configRevision: agent.configRevision,
+          options: [],
+        },
+      })),
+    });
   }
 
   // POST /api/agents — create a new user-created agent invite (humans only).
@@ -242,6 +278,7 @@ async function route(
       access: body.access,
     });
     if (!updated) throw new ApiError(404, "NOT_FOUND", "no such agent invite");
+    onUpdateAgent?.(updated);
     return json(res, 200, updated);
   }
 

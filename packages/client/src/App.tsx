@@ -27,6 +27,42 @@ const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
  * yet picked a username sees UsernameStep before the workspace, for either
  * sign-in provider alike.
  */
+/** Retries before "Connecting…" stops being an honest description (~10s). */
+const STARTUP_PATIENCE = 5;
+
+/**
+ * The pre-workspace screen. Startup retries forever by design — a dev server
+ * restart should heal itself — but a loop that never succeeds has to say so
+ * rather than spin indefinitely with no explanation.
+ */
+function StartupScreen({ error }: { error: string | null }) {
+  return (
+    <div className="flex h-full items-center justify-center bg-chat">
+      {error ? (
+        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+          <h1 className="mb-2 text-lg font-semibold text-body">Can't start</h1>
+          <p className="mb-4 text-sm text-muted">{error}</p>
+          <p className="mb-4 text-xs text-faint">
+            Still retrying every 2 seconds. In local development this usually
+            means the server process is not running or crashed on boot — check
+            the server pane of <code className="font-mono">npm run dev</code>.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="cursor-pointer rounded bg-blurple px-3 py-1.5 text-sm font-medium text-mention-text hover:opacity-90"
+          >
+            Reload
+          </button>
+        </div>
+      ) : (
+        <p role="status" className="text-muted">
+          Connecting…
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [authMode, setAuthMode] = useState<{
     googleAuthEnabled: boolean;
@@ -40,6 +76,10 @@ export default function App() {
   const [usernameStatus, setUsernameStatus] = useState<
     "unknown" | "ok" | "needs_username" | "removed"
   >("unknown");
+  // Why startup is not finishing, once it has been failing long enough that
+  // "Connecting…" is a lie. Retries continue underneath; this only stops the
+  // spinner from hiding a server that is never going to answer.
+  const [startupError, setStartupError] = useState<string | null>(null);
   // Set when the user arrives from a password-reset email; gates the whole
   // app behind ResetPasswordScreen until a new password is saved.
   const [recovering, setRecovering] = useState(false);
@@ -47,15 +87,33 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let retry: number | undefined;
+    let attempts = 0;
     const load = async () => {
+      attempts += 1;
       try {
         const res = await fetch(`${apiBaseUrl()}/api/auth/config`);
+        // A non-OK response still parses as JSON (`{error: "INTERNAL"}`), and
+        // accepting it would silently claim sign-in is unconfigured. Only a
+        // 200 describes the auth setup.
+        if (!res.ok) throw new Error(`server returned ${res.status}`);
         const data = (await res.json()) as { googleAuthEnabled: boolean; emailAuthEnabled: boolean };
-        if (!cancelled) setAuthMode(data);
-      } catch {
-        // Server not up yet (dev restarts): keep asking, it decides the flow.
-        if (!cancelled) retry = window.setTimeout(() => void load(), 2000);
+        if (!cancelled) {
+          setAuthMode(data);
+          setStartupError(null);
+        }
+        return;
+      } catch (err) {
+        if (cancelled) return;
+        if (attempts >= STARTUP_PATIENCE) {
+          setStartupError(
+            err instanceof Error && err.message.startsWith("server returned")
+              ? `The server is up but not answering correctly (${err.message}).`
+              : "Cannot reach the server.",
+          );
+        }
       }
+      // Server not up yet (dev restarts): keep asking, it decides the flow.
+      if (!cancelled) retry = window.setTimeout(() => void load(), 2000);
     };
     void load();
     return () => {
@@ -81,7 +139,10 @@ export default function App() {
     setUsernameStatus("unknown");
     let cancelled = false;
     let retry: number | undefined;
+    let attempts = 0;
     const load = async () => {
+      attempts += 1;
+      let failure = "Cannot reach the server.";
       try {
         const res = await fetch(`${apiBaseUrl()}/api/auth/session`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
@@ -90,6 +151,7 @@ export default function App() {
         if (res.ok) {
           const data = (await res.json()) as { status: "ok" | "needs_username" | "removed" };
           setUsernameStatus(data.status);
+          setStartupError(null);
           return;
         }
         if (res.status === 401) {
@@ -97,12 +159,16 @@ export default function App() {
           void supabase.auth.signOut();
           return;
         }
+        failure = `The server could not resolve this session (HTTP ${res.status}).`;
       } catch {
         // Server unreachable — fall through to the retry below.
       }
+      if (cancelled) return;
       // 503 (Supabase hiccup) or a dev-server restart: the token is not at
-      // fault, so keep asking instead of wedging on "Connecting…".
-      if (!cancelled) retry = window.setTimeout(() => void load(), 2000);
+      // fault, so keep asking. But a retry loop that never succeeds must not
+      // masquerade as "Connecting…" forever — after a while, say what broke.
+      if (attempts >= STARTUP_PATIENCE) setStartupError(failure);
+      retry = window.setTimeout(() => void load(), 2000);
     };
     void load();
     return () => {
@@ -127,13 +193,7 @@ export default function App() {
   };
 
   if (!authMode || session === undefined) {
-    return (
-      <div className="flex h-full items-center justify-center bg-chat">
-        <p role="status" className="text-muted">
-          Connecting…
-        </p>
-      </div>
-    );
+    return <StartupScreen error={startupError} />;
   }
 
   const authEnabled = authMode.googleAuthEnabled || authMode.emailAuthEnabled;
@@ -169,13 +229,7 @@ export default function App() {
   }
 
   if (usernameStatus === "unknown") {
-    return (
-      <div className="flex h-full items-center justify-center bg-chat">
-        <p role="status" className="text-muted">
-          Connecting…
-        </p>
-      </div>
-    );
+    return <StartupScreen error={startupError} />;
   }
 
   if (usernameStatus === "needs_username") {

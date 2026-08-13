@@ -8,7 +8,7 @@ import { Presence } from "../src/presence";
 import { ConversationSessions } from "../src/conversationSessions";
 import type { AgentSocket } from "../src/socket";
 import type { BoardClient } from "../src/boardClient";
-import type { Brain, BrainInput } from "../src/brain";
+import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions } from "../src/brain";
 import { tempDir, waitFor } from "./helpers";
 
 // The brain (Gemini) and socket (server) are the runner's network
@@ -35,7 +35,7 @@ describe("AgentRunner", () => {
     const brain = {
       run: async (input: { prompt: string }) => {
         prompts.push(input.prompt);
-        return `reply ${prompts.length}`;
+        return { text: `reply ${prompts.length}`, providerSessionId: null };
       },
     } as unknown as Brain;
     const { socket, sent } = fakeSocket();
@@ -56,12 +56,12 @@ describe("AgentRunner", () => {
     runner.enqueue({ authorName: "sam", content: "random question", channel: "random" });
     runner.enqueue({ authorName: "dana", content: "second general", channel: "general" });
 
-    const summaries = await waitFor(() => {
+    const finishes = await waitFor(() => {
       const got = sent.filter(
-        (e): e is Extract<ClientEvent, { type: "summary" }> => e.type === "summary",
+        (e): e is Extract<ClientEvent, { type: "agent_run_finish" }> => e.type === "agent_run_finish",
       );
       return got.length === 2 ? got : undefined;
-    }, "one summary per channel");
+    }, "one finish per channel");
 
     // Both #general messages ran as one batch, in arrival order…
     assert.equal(prompts.length, 2);
@@ -74,10 +74,10 @@ describe("AgentRunner", () => {
 
     // Each reply lands in the channel that asked.
     assert.deepEqual(
-      summaries.map((s) => ({ channel: s.channel, content: s.content })),
+      finishes.map((event) => ({ channelId: event.channelId, content: event.finalContent })),
       [
-        { channel: "general", content: "reply 1" },
-        { channel: "random", content: "reply 2" },
+        { channelId: "general", content: "reply 1" },
+        { channelId: "random", content: "reply 2" },
       ],
     );
   });
@@ -99,7 +99,7 @@ describe("AgentRunner attachments", () => {
     const brain = {
       run: async (input: BrainInput) => {
         inputs.push(input);
-        return "ok";
+        return { text: "ok", providerSessionId: null };
       },
     } as unknown as Brain;
     const { socket, sent } = fakeSocket();
@@ -124,7 +124,7 @@ describe("AgentRunner attachments", () => {
     work: Parameters<AgentRunner["enqueue"]>[0][],
   ): Promise<BrainInput> {
     for (const item of work) runner.enqueue(item);
-    await waitFor(() => sent.find((e) => e.type === "summary"), "summary");
+    await waitFor(() => sent.find((e) => e.type === "agent_run_finish"), "run finish");
     assert.equal(inputs.length, 1);
     return inputs[0];
   }
@@ -215,8 +215,10 @@ describe("AgentRunner attachments", () => {
 
     assert.deepEqual(input.images?.map((i) => i.data), [good.url]);
     assert.match(input.prompt, /\[image broken\.png unavailable\]/);
-    const summary = sent.find((e): e is Extract<ClientEvent, { type: "summary" }> => e.type === "summary");
-    assert.equal(summary?.content, "ok");
+    const finish = sent.find(
+      (e): e is Extract<ClientEvent, { type: "agent_run_finish" }> => e.type === "agent_run_finish",
+    );
+    assert.equal(finish?.finalContent, "ok");
   });
 });
 
@@ -264,58 +266,171 @@ describe("AgentRunner durable work protocol", () => {
     const { socket, sent } = fakeSocket();
     const board = fakeBoard();
     const dir = await tempDir();
+    const sessions = await ConversationSessions.load(dir);
     const runner = new AgentRunner(
       socket,
       brain,
       await Memory.load(dir),
       board,
       await PendingWork.load(dir),
-      await ConversationSessions.load(dir),
+      sessions,
       new Presence(socket, board),
       "system prompt",
     );
-    return { runner, sent };
+    return { runner, sent, sessions };
   }
 
-  test("claims notifications once per connection and completes only after its summary", async () => {
-    const brain = { run: async () => "done" } as unknown as Brain;
-    const { runner, sent } = await makeProtocolRunner(brain);
+  test("resumes a session, emits bounded ordered activity, and finishes after output", async () => {
+    let options: BrainRunOptions | undefined;
+    const secretSession = "provider-secret-session";
+    const brain = {
+      run: async (_input: BrainInput, callbacks: BrainCallbacks, runOptions?: BrainRunOptions) => {
+        options = runOptions;
+        callbacks.onEvent({ type: "thought.delta", text: "thinking" });
+        callbacks.onEvent({ type: "output.delta", text: "streamed" });
+        callbacks.onEvent({
+          type: "tool.started",
+          toolCallId: "tool-1",
+          name: "read_file",
+          source: "native",
+          input: { password: "do-not-expose" },
+        });
+        callbacks.onEvent({
+          type: "tool.completed",
+          toolCallId: "tool-1",
+          name: "read_file",
+          output: { token: "do-not-expose", content: "also-secret" },
+        });
+        callbacks.onEvent({ type: "usage.reported", usage: { inputTokens: 3, outputTokens: 2 } });
+        callbacks.onEvent({ type: "provider.session", providerSessionId: secretSession });
+        return {
+          text: "final answer",
+          providerSessionId: secretSession,
+          usage: { inputTokens: 3, outputTokens: 2 },
+        };
+      },
+    } as Brain;
+    const { runner, sent, sessions } = await makeProtocolRunner(brain);
+    await sessions.set("conversation-1", {
+      providerSessionId: "persisted-session",
+      permissionMode: "plan",
+    });
+    const work = assignment("request-1");
+    work.conversation.permissionMode = "plan";
+    runner.enqueueAssignment(work);
 
-    runner.claimAvailable(["request-1"]);
-    runner.claimAvailable(["request-1"]);
-    assert.equal(sent.filter((event) => event.type === "work_claim").length, 1);
-    runner.onWelcome();
-    runner.claimAvailable(["request-1"]);
-    assert.equal(sent.filter((event) => event.type === "work_claim").length, 2);
-
-    runner.enqueueAssignment(assignment("request-1"));
-    await waitFor(
-      () => sent.find((event) => event.type === "work_complete"),
-      "work completion",
+    const finish = await waitFor(
+      () => sent.find(
+        (event): event is Extract<ClientEvent, { type: "agent_run_finish" }> =>
+          event.type === "agent_run_finish",
+      ),
+      "durable run finish",
     );
-    const summaryIndex = sent.findIndex((event) => event.type === "summary");
-    const completionIndex = sent.findIndex((event) => event.type === "work_complete");
-    assert.ok(summaryIndex >= 0 && completionIndex > summaryIndex);
-    assert.deepEqual(sent[completionIndex], {
-      type: "work_complete",
+    assert.equal(options?.providerSessionId, "persisted-session");
+    assert.equal(options?.permissionMode, "plan");
+    assert.deepEqual(sessions.get("conversation-1"), {
+      providerSessionId: secretSession,
+      permissionMode: "plan",
+    });
+    const activity = sent.flatMap((event) => event.type === "activity_batch" ? event.events : []);
+    assert.deepEqual(activity.map((event) => event.kind), [
+      "agent.thought.delta",
+      "agent.output.delta",
+      "agent.tool.started",
+      "agent.tool.completed",
+      "agent.usage.reported",
+      "agent.provider.session",
+    ]);
+    assert.deepEqual(
+      activity.find((event) => event.kind === "agent.provider.session")?.payload,
+      { captured: true },
+    );
+    assert.ok(sent.findIndex((event) => event.type === "activity_batch") < sent.indexOf(finish));
+    assert.ok(sent.findIndex((event) => event.type === "conversation_session_set") < sent.indexOf(finish));
+    assert.equal(JSON.stringify(activity).includes("do-not-expose"), false);
+    assert.equal(JSON.stringify(activity).includes(secretSession), false);
+    assert.deepEqual(finish, {
+      type: "agent_run_finish",
+      runId: finish.runId,
+      channelId: "channel-1",
+      conversationId: "conversation-1",
       requestIds: ["request-1"],
       outcome: "completed",
+      finalContent: "final answer",
+      usage: { inputTokens: 3, outputTokens: 2 },
     });
+    assert.equal(sent.some((event) => event.type === "work_complete"), false);
+    assert.equal(sent.some((event) => event.type === "summary"), false);
+
+    runner.enqueueAssignment(work);
+    await waitFor(
+      () => sent.filter((event) => event.type === "agent_run_finish").length === 2,
+      "idempotent finish replay",
+    );
+    assert.deepEqual(
+      sent.filter((event) => event.type === "agent_run_finish")[1],
+      finish,
+    );
   });
 
-  test("an aborted assigned batch is cancelled and never completed", async () => {
+  test("does not resend a conversation session the server already assigned", async () => {
+    let options: BrainRunOptions | undefined;
+    const providerSessionId = "server-provider-session";
+    const brain = {
+      run: async (_input: BrainInput, callbacks: BrainCallbacks, runOptions?: BrainRunOptions) => {
+        options = runOptions;
+        callbacks.onEvent({ type: "provider.session", providerSessionId });
+        return { text: "done", providerSessionId };
+      },
+    } as Brain;
+    const { runner, sent, sessions } = await makeProtocolRunner(brain);
+    const work = assignment("request-session-match");
+    work.conversation.providerSessionId = providerSessionId;
+    work.conversation.permissionMode = "plan";
+
+    runner.enqueueAssignment(work);
+    await waitFor(
+      () => sent.find((event) => event.type === "agent_run_finish"),
+      "matching-session run finish",
+    );
+
+    assert.equal(options?.providerSessionId, providerSessionId);
+    assert.equal(options?.permissionMode, "plan");
+    assert.deepEqual(sessions.get("conversation-1"), {
+      providerSessionId,
+      permissionMode: "plan",
+    });
+    assert.equal(sent.some((event) => event.type === "conversation_session_set"), false);
+  });
+
+  test("reports a failed assigned run once with safe error detail", async () => {
+    const brain = { run: async () => { throw new Error("token=do-not-expose"); } } as Brain;
+    const { runner, sent } = await makeProtocolRunner(brain);
+    runner.enqueueAssignment(assignment("request-failed"));
+    const finish = await waitFor(
+      () => sent.find(
+        (event): event is Extract<ClientEvent, { type: "agent_run_finish" }> =>
+          event.type === "agent_run_finish",
+      ),
+      "failed run finish",
+    );
+    assert.equal(finish.outcome, "failed");
+    assert.equal(finish.error, "Brain run failed");
+    assert.equal(JSON.stringify(finish).includes("do-not-expose"), false);
+    assert.equal(sent.filter((event) => event.type === "agent_run_finish").length, 1);
+  });
+
+  test("an aborted assigned batch is cancelled while the interrupt still completes", async () => {
     let runs = 0;
     const brain = {
-      run: async (_input: BrainInput, _callbacks: unknown, options?: { signal?: AbortSignal }) => {
+      run: async (_input: BrainInput, _callbacks: BrainCallbacks, options?: BrainRunOptions) => {
         runs += 1;
-        if (runs > 1) return "interrupt acknowledged";
-        return new Promise<string>((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-            once: true,
-          });
+        if (runs > 1) return { text: "interrupt acknowledged", providerSessionId: null };
+        return new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
         });
       },
-    } as unknown as Brain;
+    } as Brain;
     const { runner, sent } = await makeProtocolRunner(brain);
 
     runner.enqueueAssignment(assignment("request-2"));
@@ -323,20 +438,42 @@ describe("AgentRunner durable work protocol", () => {
     runner.interruptWith({ authorName: "dana", content: "stop", channel: "general" });
     const cancelled = await waitFor(
       () => sent.find(
-        (event): event is Extract<ClientEvent, { type: "work_complete" }> =>
-          event.type === "work_complete" && event.outcome === "cancelled",
+        (event): event is Extract<ClientEvent, { type: "agent_run_finish" }> =>
+          event.type === "agent_run_finish" && event.outcome === "cancelled",
       ),
       "work cancellation",
     );
     assert.deepEqual(cancelled.requestIds, ["request-2"]);
-    assert.equal(
-      sent.some(
-        (event) =>
-          event.type === "work_complete" &&
-          event.outcome === "completed" &&
-          event.requestIds.includes("request-2"),
+    assert.equal(cancelled.finalContent, "");
+    await waitFor(
+      () => sent.find(
+        (event) => event.type === "agent_run_finish" && event.outcome === "completed",
       ),
-      false,
+      "interrupt finish",
     );
+    assert.equal(sent.some((event) => event.type === "work_complete"), false);
+    assert.equal(sent.some((event) => event.type === "summary"), false);
+  });
+
+  test("profile prompt updates apply to the next run without changing an active input", async () => {
+    const prompts: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const brain = {
+      run: async (input: BrainInput) => {
+        prompts.push(input.system);
+        if (prompts.length === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        return { text: "ok", providerSessionId: null };
+      },
+    } as Brain;
+    const { runner, sent } = await makeProtocolRunner(brain);
+    runner.enqueueAssignment(assignment("prompt-1"));
+    await waitFor(() => prompts.length === 1 ? true : undefined, "first prompt");
+    runner.updateSystemPrompt("updated profile");
+    assert.deepEqual(prompts, ["system prompt"]);
+    releaseFirst?.();
+    await waitFor(() => sent.some((event) => event.type === "agent_run_finish"), "first finish");
+    runner.enqueueAssignment(assignment("prompt-2"));
+    await waitFor(() => prompts.length === 2 ? true : undefined, "second prompt");
+    assert.deepEqual(prompts, ["system prompt", "updated profile"]);
   });
 });

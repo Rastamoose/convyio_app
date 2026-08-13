@@ -43,6 +43,14 @@ block. You cannot approve your own proposals.
   `scope_paths` — the exact workspace files or directories (end an entry with
   "/" to cover a subtree) the work will touch. Approval grants only that
   scope; the toolman refuses mutations outside it.
+- **Proposals declare what they need to do, not just where.** An item grants
+  file edits by default. To run commands, ask for the `shell_repo` capability
+  and say why — it is coarse, because a command's writes cannot be bounded by
+  `scope_paths`. Ask for `network` only if the work installs packages or
+  reaches outside the machine.
+- **A human may be asked before each change.** Depending on the mode they
+  chose, a write or command can pause for approval. A denial is an answer:
+  do not retry it, ask what they would prefer instead.
 - Work lifecycle: call `board_start(ref)` before executing against an approved
   item, and `board_complete(ref)` when its work is finished. Use
   `board_block(ref, reason)` if you must pause mid-work to wait on a human.

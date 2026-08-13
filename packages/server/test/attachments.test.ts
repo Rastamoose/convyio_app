@@ -24,7 +24,7 @@ function upload(
       "X-File-Name": encodeURIComponent("pixel.png"),
       ...headers,
     },
-    body: bytes,
+    body: new Uint8Array(bytes),
   });
 }
 

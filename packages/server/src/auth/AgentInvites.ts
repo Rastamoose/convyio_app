@@ -349,6 +349,15 @@ export class AgentInvites {
     return rows[0] ? toInvite(rows[0]) : null;
   }
 
+  async allowsAuthor(agentId: string, authorId: string): Promise<boolean> {
+    const invite = await this.findByActorId(agentId);
+    if (!invite) return true;
+    if (invite.access.mode === "creator") return authorId === invite.createdBy;
+    if (invite.access.mode === "selected") return invite.access.selectedActorIds.includes(authorId);
+    const actor = await this.db.getActor(authorId);
+    return actor?.kind === "human" && (await this.db.isMember(authorId));
+  }
+
   private async resolved(row: InviteRow | undefined): Promise<{ actor: Actor; invite: AgentInvite } | null> {
     if (!row) return null;
     const actor = await this.db.getActor(row.actor_id);
@@ -378,12 +387,15 @@ export class AgentInvites {
     }
     if (uniqueIds.size === 0) return;
     const rows = await this.db.sql<{ actor_id: string }[]>`
-      SELECT actor_id FROM workspace_members
-      WHERE workspace_id = ${this.db.workspaceId}
-        AND actor_id IN ${this.db.sql([...uniqueIds])}
+      SELECT m.actor_id
+      FROM workspace_members m
+      JOIN actors a ON a.id = m.actor_id
+      WHERE m.workspace_id = ${this.db.workspaceId}
+        AND m.actor_id IN ${this.db.sql([...uniqueIds])}
+        AND a.kind = 'human'
     `;
     if (rows.length !== uniqueIds.size) {
-      throw new ApiError(400, "BAD_ACCESS", "selected actors must be workspace members");
+      throw new ApiError(400, "BAD_ACCESS", "selected actors must be human workspace members");
     }
   }
 }

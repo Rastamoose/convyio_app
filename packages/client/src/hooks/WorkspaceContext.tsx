@@ -8,6 +8,8 @@ import type {
   BoardItemEvent,
   ChatMessage,
   ClientEvent,
+  InteractionRequest,
+  PermissionMode,
   Participant,
   WorkspaceInfo,
 } from "@workspace/shared";
@@ -26,6 +28,7 @@ import { useBoard, type BoardItemEdit, type BoardLine } from "./useBoard";
 import { useToasts, type Toast } from "./useToasts";
 import { useTyping, type Typist } from "./useTyping";
 import { useUnreads } from "./useUnreads";
+import { useInteractions } from "./useInteractions";
 
 export interface WorkspaceState {
   /** Workspace identity from the welcome frame; null until connected. */
@@ -40,6 +43,10 @@ export interface WorkspaceState {
   messages: LocalMessage[];
   activeRuns: ActiveRun[];
   runDurations: Map<string, number>;
+  /** Permission prompts waiting on a human; the same ids every surface shows. */
+  pendingInteractions: InteractionRequest[];
+  resolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
+  setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
   board: BoardItem[];
   boardLines: BoardLine[];
   toasts: Toast[];
@@ -144,6 +151,7 @@ export function WorkspaceProvider({
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const chat = useChatMessages();
   const traces = useAgentTraces();
+  const interactions = useInteractions();
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
@@ -171,6 +179,7 @@ export function WorkspaceProvider({
       case "welcome":
         chat.replaceAll(event.history);
         traces.reset();
+        interactions.reset();
         // The session must be bound before the board loads its snapshot.
         api.start(event.apiUrl, event.token);
         board.startSession();
@@ -192,13 +201,19 @@ export function WorkspaceProvider({
         typing.onTyping(event);
         break;
       case "trace_start":
-        traces.startRun(event.runId, event.agentName, event.timestamp);
+        traces.startRun(event.runId, event.agentId, event.agentName, event.timestamp);
         break;
       case "trace_chunk":
         traces.appendChunk(event.runId, event.chunk);
         break;
       case "run_end":
         traces.endRun(event.runId);
+        break;
+      case "interaction_request":
+        interactions.open(event.request);
+        break;
+      case "interaction_resolved":
+        interactions.close(event.request.id);
         break;
       case "clear":
         chat.clearChannel(event.channel);
@@ -473,6 +488,11 @@ export function WorkspaceProvider({
     removeAttachment: attachments.remove,
     takeReadyAttachmentIds: attachments.takeReadyIds,
     attachmentUrl: (attachment) => api.url(attachment.url),
+    pendingInteractions: interactions.pending,
+    resolveInteraction: (requestId, decision) =>
+      connection.send({ type: "interaction_resolve", requestId, decision }),
+    setPermissionMode: (agentId, channel, mode) =>
+      connection.send({ type: "conversation_mode_set", agentId, channel, mode }),
     setStatus: (status) => connection.send({ type: "status_set", status }),
     signOut: onSignOut ?? null,
     clearMessages: () => connection.send({ type: "clear" }),

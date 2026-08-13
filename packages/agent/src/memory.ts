@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChatMessage } from "@workspace/shared";
+import { atomicWriteStateFile, secureExistingStateFile, secureStateDirectory } from "./stateFile";
 
 const WINDOW_SIZE = 50;
 
@@ -21,7 +22,8 @@ export class Memory {
 
   static async load(dataDir: string): Promise<Memory> {
     const transcriptFile = path.join(dataDir, "transcript.json");
-    await fs.mkdir(path.dirname(transcriptFile), { recursive: true });
+    await secureStateDirectory(path.dirname(transcriptFile));
+    await secureExistingStateFile(transcriptFile);
     const stored = await readTranscript(transcriptFile);
     return new Memory(transcriptFile, stored.slice(-WINDOW_SIZE));
   }
@@ -57,7 +59,7 @@ export class Memory {
       .then(async () => {
         const current = await readTranscript(this.transcriptFile);
         current.push(item);
-        await fs.writeFile(this.transcriptFile, JSON.stringify(current, null, 2));
+        await atomicWriteStateFile(this.transcriptFile, JSON.stringify(current, null, 2));
       })
       .catch((err) => {
         console.warn("[agent] transcript write failed — message won't survive a restart:", err);

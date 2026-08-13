@@ -28,6 +28,7 @@ const makeItem = (overrides: Partial<BoardItem> = {}): BoardItem => ({
   proposalWhy: "Invoices round the wrong way",
   proposalEffect: "Totals match the ledger",
   scopePaths: ["billing/"],
+  capabilities: null,
   createdAt: Date.now() - 60_000,
   approvedAt: null,
   startedAt: null,

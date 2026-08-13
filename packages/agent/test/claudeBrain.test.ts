@@ -50,11 +50,11 @@ function stubbedBrainRuns(
   return { brain, requests };
 }
 
-function resultMessage(text: string): unknown {
+function resultMessage(text: string): Record<string, unknown> {
   return { type: "result", subtype: "success", result: text };
 }
 
-function errorResult(subtype: string, errors: string[]): unknown {
+function errorResult(subtype: string, errors: string[]): Record<string, unknown> {
   return { type: "result", subtype, errors };
 }
 
@@ -72,7 +72,7 @@ function thinkingDelta(thinking: string): unknown {
   };
 }
 
-const noopCallbacks: BrainCallbacks = { onThought: () => {}, onText: () => {} };
+const noopCallbacks: BrainCallbacks = { onEvent: () => {} };
 
 describe("ClaudeBrain", () => {
   test("returns the result message's text", async () => {
@@ -80,7 +80,7 @@ describe("ClaudeBrain", () => {
 
     const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
 
-    assert.equal(reply, "hello there");
+    assert.equal(reply.text, "hello there");
   });
 
   test("streams text and thinking deltas to their callbacks, in order", async () => {
@@ -90,18 +90,41 @@ describe("ClaudeBrain", () => {
       textDelta("lo"),
       resultMessage("hello"),
     ]);
-    const seen: { kind: string; content: string }[] = [];
+    const seen: { type: string; text: string }[] = [];
     const callbacks: BrainCallbacks = {
-      onThought: (t) => seen.push({ kind: "thought", content: t }),
-      onText: (t) => seen.push({ kind: "text", content: t }),
+      onEvent: (event) => {
+        if (event.type === "thought.delta" || event.type === "output.delta") seen.push(event);
+      },
     };
 
     await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, callbacks);
 
     assert.deepEqual(seen, [
-      { kind: "thought", content: "considering..." },
-      { kind: "text", content: "hel" },
-      { kind: "text", content: "lo" },
+      { type: "thought.delta", text: "considering..." },
+      { type: "output.delta", text: "hel" },
+      { type: "output.delta", text: "lo" },
+    ]);
+  });
+
+  test("resumes the exact provider session and captures the returned session", async () => {
+    const { brain, requests } = stubbedBrain([
+      { ...resultMessage("ok"), session_id: "session-returned" },
+    ]);
+    const events: unknown[] = [];
+
+    const result = await brain.run(
+      { system: "sys", context: "ctx", prompt: "hi" },
+      { onEvent: (event) => events.push(event) },
+      { providerSessionId: "session-exact", permissionMode: "plan" },
+    );
+
+    assert.equal(requests[0].options.resume, "session-exact");
+    assert.equal(Object.hasOwn(requests[0].options, "continue"), false);
+    assert.equal(requests[0].options.permissionMode, "plan");
+    assert.equal(Object.hasOwn(requests[0].options, "settingSources"), false);
+    assert.equal(result.providerSessionId, "session-returned");
+    assert.deepEqual(events, [
+      { type: "provider.session", providerSessionId: "session-returned" },
     ]);
   });
 
@@ -154,16 +177,17 @@ describe("ClaudeBrain", () => {
     );
   });
 
-  test("returns accumulated streamed text instead of throwing when output already streamed before an error result", async () => {
+  test("throws when an error result follows streamed output", async () => {
     const { brain } = stubbedBrain([
       textDelta("Partial progress before "),
       textDelta("hitting a limit."),
       errorResult("error_max_turns", ["exceeded maximum turns"]),
     ]);
 
-    const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
-
-    assert.equal(reply, "Partial progress before hitting a limit.");
+    await assert.rejects(
+      () => brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks),
+      /exceeded maximum turns/,
+    );
   });
 
   test("caps turns at CLAUDE_MAX_TURNS", async () => {
@@ -190,7 +214,7 @@ describe("ClaudeBrain", () => {
 
     const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
 
-    assert.equal(reply, "fallback reply");
+    assert.equal(reply.text, "fallback reply");
     assert.equal(requests.length, 2);
     assert.equal(requests[0].options.model, "fake-model");
     assert.equal(Object.hasOwn(requests[1].options, "model"), false);
@@ -217,9 +241,11 @@ describe("ClaudeBrain", () => {
       errorResult("error_during_execution", ["Model fake-model not found"]),
     ]);
 
-    const reply = await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+    await assert.rejects(
+      () => brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks),
+      /Model fake-model not found/,
+    );
 
-    assert.equal(reply, "Already emitted.");
     assert.equal(requests.length, 1);
   });
 
@@ -255,6 +281,97 @@ describe("ClaudeBrain", () => {
 
     assert.equal(calls, 1);
     assert.equal(requests.length, 1);
+  });
+
+  test("normalizes hook tool lifecycle, plan updates, and result usage", async () => {
+    const usage = {
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheReadInputTokens: 3,
+      cacheCreationInputTokens: 2,
+      webSearchRequests: 0,
+      costUSD: 0.01,
+      contextWindow: 200_000,
+      maxOutputTokens: 8_192,
+    };
+    const { brain, requests } = stubbedBrain([
+      { ...resultMessage("ok"), session_id: "session-1", modelUsage: { sonnet: usage } },
+    ]);
+    const events: any[] = [];
+
+    const result = await brain.run(
+      { system: "sys", context: "ctx", prompt: "hi" },
+      { onEvent: (event) => events.push(event) },
+    );
+    const hooks = requests[0].options.hooks as Record<
+      string,
+      { hooks: ((input: any, toolUseId?: string) => Promise<unknown>)[] }[]
+    >;
+    const base = { session_id: "session-1", transcript_path: "/tmp/transcript", cwd: "/tmp" };
+    await hooks.PreToolUse[0].hooks[0]({
+      ...base,
+      hook_event_name: "PreToolUse",
+      tool_name: "TodoWrite",
+      tool_input: { todos: [{ content: "ship", status: "pending" }] },
+      tool_use_id: "tool-plan",
+    });
+    await hooks.PreToolUse[0].hooks[0]({
+      ...base,
+      hook_event_name: "PreToolUse",
+      tool_name: "TodoWrite",
+      tool_input: {},
+      tool_use_id: "tool-plan",
+    });
+    await hooks.PostToolUse[0].hooks[0]({
+      ...base,
+      hook_event_name: "PostToolUse",
+      tool_name: "TodoWrite",
+      tool_input: {},
+      tool_response: { content: "large file contents must not leak" },
+      tool_use_id: "tool-plan",
+    });
+    await hooks.PostToolUseFailure[0].hooks[0]({
+      ...base,
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Read",
+      tool_input: { path: "README.md" },
+      tool_use_id: "tool-failed",
+      error: "not found",
+    });
+
+    assert.deepEqual(result.usage, {
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 2,
+      costUsd: 0.01,
+    });
+    assert.deepEqual(
+      events.filter((event) => event.type.startsWith("tool.") || event.type === "plan.updated").map((event) => event.type),
+      ["tool.started", "plan.updated", "tool.completed", "tool.started", "tool.failed"],
+    );
+    assert.deepEqual(events.find((event) => event.type === "tool.completed").output, {
+      content: "[string:33 chars]",
+    });
+  });
+
+  test("reports usage before throwing an error result", async () => {
+    const events: any[] = [];
+    const { brain } = stubbedBrain([{
+      ...errorResult("error_during_execution", ["provider failed"]),
+      usage: { input_tokens: 7, output_tokens: 1 },
+    }]);
+
+    await assert.rejects(() =>
+      brain.run(
+        { system: "sys", context: "ctx", prompt: "hi" },
+        { onEvent: (event) => events.push(event) },
+      ),
+    );
+    assert.deepEqual(events.find((event) => event.type === "usage.reported"), {
+      type: "usage.reported",
+      usage: { inputTokens: 7, outputTokens: 1 },
+    });
   });
 
   test("only exposes and approves safe native read tools", async () => {

@@ -7,21 +7,34 @@ import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { ProposalCard } from "./ProposalCard";
 
+/**
+ * How much of an item's board grant runs without asking. The grant is the
+ * ceiling either way — this only decides what pauses for a human.
+ */
+const MODES = [
+  { mode: "default", label: "Ask", hint: "Ask before every change" },
+  { mode: "acceptEdits", label: "Edits", hint: "Apply in-scope file edits; still ask for commands" },
+  { mode: "plan", label: "Plan", hint: "Read and plan only; change nothing" },
+] as const;
+
 export function MemberCard({
   participant,
+  channel,
   anchor,
   onDiscuss,
   onPrefill,
   onClose,
 }: {
   participant: Participant;
+  /** Channel the permission mode applies to; mode is per agent per channel. */
+  channel: string;
   /** Viewport rect of the sidebar row that opened the card. */
   anchor: DOMRect;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
   onClose: () => void;
 }) {
-  const { board, activeRuns, messages } = useWorkspace();
+  const { board, activeRuns, messages, setPermissionMode } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
   const [top, setTop] = useState(anchor.top);
@@ -107,6 +120,23 @@ export function MemberCard({
       </div>
       {isAgent && (
         <>
+          <div className="mb-3">
+            <div className="mb-1 text-[10px] font-bold tracking-wide text-muted uppercase">
+              Permissions in #{channel}
+            </div>
+            <div className="flex gap-1">
+              {MODES.map(({ mode, label, hint }) => (
+                <button
+                  key={mode}
+                  title={hint}
+                  onClick={() => setPermissionMode(participant.id, channel, mode)}
+                  className="flex-1 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-mention-bg-hover hover:text-body"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="mb-3">
             <div className="mb-1 text-[10px] font-bold tracking-wide text-muted uppercase">
               Current task

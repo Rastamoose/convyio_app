@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import {
+  ACTION_CAPABILITY,
   isBoardEnvelope,
   type ActionResultEvent,
   type BoardItem,
   type ToolmanAction,
+  type WorkCapability,
 } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
+
+/** Must exceed the server's approval timeout so an approved run still lands. */
+const APPROVAL_WAIT_MS = 11 * 60 * 1000;
 
 /**
  * The agent's view of the canonical board plus its channels to the server:
@@ -83,6 +88,7 @@ export class BoardClient {
     why: string;
     effect: string;
     scopePaths: string[];
+    capabilities?: WorkCapability[];
   }): Promise<BoardItem> {
     const { item } = (await this.api("POST", "/api/board/items", fields)) as { item: BoardItem };
     this.items.set(item.id, item);
@@ -148,18 +154,25 @@ export class BoardClient {
   // Toolman (websocket)
   // -------------------------------------------------------------------------
 
-  requestAction(action: ToolmanAction, boardItemRef: string | null): Promise<ActionResultEvent> {
+  requestAction(
+    action: ToolmanAction,
+    boardItemRef: string | null,
+    conversationId: string | null = null,
+  ): Promise<ActionResultEvent> {
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();
+      // A mutation may pause on a human decision, so the wait outlasts the
+      // server's own approval timeout rather than abandoning an approved run.
+      const timeout = ACTION_CAPABILITY[action.kind] ? APPROVAL_WAIT_MS : 15_000;
       const timer = setTimeout(() => {
         this.actionWaiters.delete(requestId);
         reject(new Error("toolman request timed out"));
-      }, 15_000);
+      }, timeout);
       this.actionWaiters.set(requestId, (result) => {
         clearTimeout(timer);
         resolve(result);
       });
-      this.socket.send({ type: "action_request", requestId, boardItemRef, action });
+      this.socket.send({ type: "action_request", requestId, boardItemRef, action, conversationId });
     });
   }
 

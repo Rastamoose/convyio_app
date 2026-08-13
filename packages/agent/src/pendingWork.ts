@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteStateFile, secureExistingStateFile, secureStateDirectory } from "./stateFile";
 
 export interface StashedWork {
   origin: string;
@@ -23,7 +24,8 @@ export class PendingWork {
 
   static async load(dataDir: string): Promise<PendingWork> {
     const file = path.join(dataDir, "pending-work.json");
-    await fs.mkdir(path.dirname(file), { recursive: true });
+    await secureStateDirectory(path.dirname(file));
+    await secureExistingStateFile(file);
     let map = new Map<string, StashedWork>();
     try {
       const raw = await fs.readFile(file, "utf-8");
@@ -63,7 +65,7 @@ export class PendingWork {
     // restart recovery would miss this snapshot (the next write re-snapshots
     // the whole map, so one lost write heals on the next change).
     this.writeQueue = this.writeQueue
-      .then(() => fs.writeFile(this.file, JSON.stringify(snapshot, null, 2)))
+      .then(() => atomicWriteStateFile(this.file, JSON.stringify(snapshot, null, 2)))
       .catch((err) => {
         console.warn("[agent] pending-work write failed — restart recovery may miss it:", err);
       });

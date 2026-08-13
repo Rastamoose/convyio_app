@@ -2,20 +2,29 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
+  ACTION_CAPABILITY,
   clientEventSchema,
   type ActionRequestEvent,
+  type ActivityBatchEvent,
+  type AgentInvite,
   type AgentProvider,
+  type AgentRunFinishEvent,
   type Attachment,
   type BoardEventEnvelope,
   type ChannelInfo,
   type ChatMessage,
   type ClientEvent,
+  type ConversationModeSetEvent,
+  type ConversationSessionSetEvent,
+  type InteractionResolveEvent,
   type JoinEvent,
   type MessageDeleteEvent,
   type MessageEditEvent,
   type MessageReactEvent,
   type Participant,
   type PinEvent,
+  type RunnerHelloEvent,
+  type RunnerStatusEvent,
   type RunEndEvent,
   type ServerEvent,
   type StatusUpdateEvent,
@@ -26,18 +35,21 @@ import {
   type WorkspaceInfo,
 } from "@workspace/shared";
 import { ApiError } from "./board/BoardService";
+import type { InteractionStore } from "./chat/InteractionStore";
 import { RunRequestAccessError, type AgentWorkStore } from "./chat/AgentWorkStore";
 import type { Attachments } from "./chat/Attachments";
 import type { Channels } from "./chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, type MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
-import type { Toolman } from "./board/Toolman";
+import type { Toolman, ToolmanResult } from "./board/Toolman";
 import { requestOrigin } from "./requestOrigin";
+import type { RunnerRuntime } from "./RunnerRuntime";
 
 interface Connection {
   socket: WebSocket;
   participant: Participant | null;
+  agentProfile: AgentInvite | null;
   /** Where this client can reach the HTTP API — the origin it connected to. */
   apiUrl: string;
   /** Serializes incoming socket messages so a single connection's handlers
@@ -48,7 +60,7 @@ interface Connection {
 
 /** Verdict from the join gate: whether a join stands, and as what stored identity. */
 export type JoinDecision =
-  | { ok: true; name: string; actorId?: string; harness?: AgentProvider }
+  | { ok: true; name: string; actorId?: string; profile?: AgentInvite }
   | { ok: false };
 
 export interface HubOptions {
@@ -63,6 +75,7 @@ export interface HubOptions {
    * to self-declare a name.
    */
   authorizeJoin?: (join: JoinEvent) => Promise<JoinDecision>;
+  authorizeAgentWork?: (agentId: string, authorId: string) => Promise<boolean>;
 }
 
 /**
@@ -83,6 +96,9 @@ export class Hub {
   /** Optional hook fired for every board event fanned out to clients. */
   onBoardEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
 
+  /** Runs paused on a human decision, keyed by interaction request id. */
+  private pendingApprovals = new Map<string, (verdict: "approved" | "denied" | "expired") => void>();
+
   constructor(
     server: HttpServer,
     private roster: Roster,
@@ -92,9 +108,21 @@ export class Hub {
     private attachments: Attachments,
     private sessions: Sessions,
     private toolman: Toolman,
+    private interactions: InteractionStore,
+    private runnerRuntime: RunnerRuntime,
     private options: HubOptions,
   ) {
     this.wss = new WebSocketServer({ server });
+    // ws re-emits the http server's 'error' on itself. Without a listener here
+    // that re-emit is an unhandled 'error' event, which kills the process
+    // before the http server's own handler can decide what to do — so a
+    // recoverable EADDRINUSE during a dev restart became a hard crash.
+    // Ownership of the verdict stays with whoever created the http server.
+    this.wss.on("error", (err: NodeJS.ErrnoException) => {
+      // Listen failures belong to whoever owns the http server; it reports and
+      // decides. Anything else is genuinely the websocket layer's to report.
+      if (err.code !== "EADDRINUSE") console.warn("[hub] websocket server error:", err.message);
+    });
     this.wss.on("connection", (socket, request) => this.onConnection(socket, request));
   }
 
@@ -145,7 +173,19 @@ export class Hub {
     const { id = randomUUID(), nonce, ...rest } = extras;
     const channelInfo = await this.channels.get(channel);
     if (!channelInfo) throw new Error(`unknown channel: ${channel}`);
-    const mentionedAgents = deriveMentionedAgents(author, content, this.roster.list());
+    const mentionCandidates = deriveMentionedAgents(author, content, this.roster.list());
+    const mentionedAgents = this.options.authorizeAgentWork
+      ? (
+          await Promise.all(
+            mentionCandidates.map(async (agent) => ({
+              agent,
+              allowed: await this.options.authorizeAgentWork!(agent.id, author.id),
+            })),
+          )
+        )
+          .filter(({ allowed }) => allowed)
+          .map(({ agent }) => agent)
+      : mentionCandidates;
     const message: ChatMessage = {
       id,
       authorId: author.id,
@@ -186,7 +226,13 @@ export class Hub {
   }
 
   private onConnection(socket: WebSocket, request: IncomingMessage): void {
-    const conn: Connection = { socket, participant: null, apiUrl: requestOrigin(request), queue: Promise.resolve() };
+    const conn: Connection = {
+      socket,
+      participant: null,
+      agentProfile: null,
+      apiUrl: requestOrigin(request),
+      queue: Promise.resolve(),
+    };
     this.connections.add(conn);
 
     socket.on("message", (raw) => {
@@ -217,8 +263,9 @@ export class Hub {
       if (!stillConnected) {
         this.sessions.revokeFor(id);
       }
-    } else if (conn.participant.runState === "working") {
-      conn.participant.runState = "dead";
+    } else {
+      if (conn.participant.runState === "working") conn.participant.runState = "dead";
+      if (!stillConnected) this.runnerRuntime.clear(id);
     }
     this.roster.setOnline(id, stillConnected);
     this.broadcastPresence();
@@ -323,8 +370,29 @@ export class Hub {
       case "work_complete":
         await this.agentOnly(conn, () => this.handleWorkComplete(conn, event));
         break;
+      case "activity_batch":
+        await this.agentOnly(conn, () => this.handleActivityBatch(conn, event));
+        break;
+      case "agent_run_finish":
+        await this.agentOnly(conn, () => this.handleAgentRunFinish(conn, event));
+        break;
+      case "conversation_session_set":
+        await this.agentOnly(conn, () => this.handleConversationSessionSet(conn, event));
+        break;
+      case "runner_hello":
+        await this.agentOnly(conn, () => this.handleRunnerHello(conn, event));
+        break;
+      case "runner_status":
+        await this.agentOnly(conn, () => this.handleRunnerStatus(conn, event));
+        break;
       case "action_request":
         await this.handleActionRequest(conn, event);
+        break;
+      case "interaction_resolve":
+        await this.handleInteractionResolve(conn.participant!, event);
+        break;
+      case "conversation_mode_set":
+        await this.handleConversationModeSet(conn.participant!, event);
         break;
     }
   }
@@ -364,12 +432,17 @@ export class Hub {
         if (other !== conn && other.participant?.id === participant.id) {
           this.send(other, { type: "error", error: "displaced by newer agent connection" });
           other.participant = null;
+          other.agentProfile = null;
           other.socket.close();
         }
       }
     }
     conn.participant = participant;
-    if (kind === "agent") await this.agentWork.requeueClaimed(participant.id);
+    conn.agentProfile = decision.profile ?? null;
+    if (kind === "agent") {
+      await this.agentWork.requeueClaimed(participant.id);
+      if (conn.agentProfile) this.runnerRuntime.connect(conn.agentProfile);
+    }
 
     // Bounded per channel (not "last N overall"): clients filter history by
     // channel client-side, so a flat cap would leave quiet channels empty.
@@ -394,10 +467,10 @@ export class Hub {
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: conn.apiUrl,
+      agentConfig: conn.agentProfile ?? undefined,
     });
-    if (kind === "agent") {
-      const pending = await this.agentWork.listPending(participant.id);
-      this.sendWorkAvailable(conn, pending.map((request) => request.id));
+    if (kind === "agent" && this.runnerRuntime.isAvailable(participant.id)) {
+      await this.sendPendingWork(conn);
     }
     this.broadcastPresence();
   }
@@ -504,6 +577,10 @@ export class Hub {
   }
 
   private async handleWorkClaim(conn: Connection, event: WorkClaimEvent): Promise<void> {
+    if (!this.runnerRuntime.isAvailable(conn.participant!.id)) {
+      this.send(conn, { type: "error", error: "runner is not ready" });
+      return;
+    }
     try {
       const assignments = await this.agentWork.claim(conn.participant!.id, event.requestIds);
       this.send(conn, { type: "work_assigned", assignments });
@@ -520,6 +597,65 @@ export class Hub {
       if (!(err instanceof RunRequestAccessError)) throw err;
       this.send(conn, { type: "error", error: "work request unavailable" });
     }
+  }
+
+  private async handleActivityBatch(conn: Connection, event: ActivityBatchEvent): Promise<void> {
+    try {
+      const committed = await this.agentWork.appendActivity(conn.participant!.id, event);
+      for (const threadEvent of committed) {
+        this.broadcast({ type: "thread_event", event: threadEvent });
+      }
+    } catch (err) {
+      if (!(err instanceof RunRequestAccessError)) throw err;
+      this.send(conn, { type: "error", error: "agent activity unavailable" });
+    }
+  }
+
+  private async handleAgentRunFinish(conn: Connection, event: AgentRunFinishEvent): Promise<void> {
+    try {
+      const trace = this.traceBuffers.get(event.runId) ?? [];
+      const result = await this.agentWork.finishRun(conn.participant!.id, event, trace);
+      this.traceBuffers.delete(event.runId);
+      if (result.message) {
+        this.broadcast({ type: "message", message: result.message });
+        this.onMessagePosted?.(result.message);
+      }
+      for (const threadEvent of result.events) {
+        this.broadcast({ type: "thread_event", event: threadEvent });
+      }
+      if (!result.message) {
+        this.broadcast({
+          type: "run_end",
+          runId: event.runId,
+          reason: event.outcome === "cancelled" ? "aborted" : "completed",
+        });
+      }
+    } catch (err) {
+      if (!(err instanceof RunRequestAccessError)) throw err;
+      this.send(conn, { type: "error", error: "agent run unavailable" });
+    }
+  }
+
+  private async handleConversationSessionSet(
+    conn: Connection,
+    event: ConversationSessionSetEvent,
+  ): Promise<void> {
+    try {
+      const updated = await this.agentWork.setConversationSession(conn.participant!.id, event);
+      if (updated.event) this.broadcast({ type: "thread_event", event: updated.event });
+      this.send(conn, { type: "conversation_updated", conversation: updated.conversation });
+    } catch (err) {
+      if (!(err instanceof RunRequestAccessError)) throw err;
+      this.send(conn, { type: "error", error: "conversation unavailable" });
+    }
+  }
+
+  private handleRunnerHello(conn: Connection, event: RunnerHelloEvent): void {
+    this.runnerRuntime.hello(conn.participant!.id, event);
+  }
+
+  private async handleRunnerStatus(conn: Connection, event: RunnerStatusEvent): Promise<void> {
+    if (this.runnerRuntime.status(conn.participant!.id, event)) await this.sendPendingWork(conn);
   }
 
   /**
@@ -540,8 +676,149 @@ export class Hub {
       displayName: p.name,
       workspaceId: this.options.workspace.id,
     };
+    // Layer 1 first: if the board refuses, no human is ever asked to approve
+    // something that could not run anyway.
+    const authz = await this.toolman.authorize(actor, event.action, event.boardItemRef ?? null);
+    if (!authz.allow) {
+      return this.send(conn, {
+        type: "action_result",
+        requestId: event.requestId,
+        ok: false,
+        code: authz.code,
+        error: authz.message,
+      });
+    }
+    const gate = await this.gateByMode(actor, event);
+    if (gate) {
+      return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+    }
     const result = await this.toolman.execute(actor, event.action, event.boardItemRef ?? null);
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
+  }
+
+  /**
+   * Layer 2 of the permission model. The board grant (layer 1, inside the
+   * toolman) is the hard ceiling; the conversation's mode decides how much of
+   * that ceiling runs without asking. Returns a denial to send back, or null to
+   * proceed to the toolman.
+   */
+  private async gateByMode(
+    actor: { id: string; workspaceId: string },
+    event: ActionRequestEvent,
+  ): Promise<ToolmanResult | null> {
+    const capability = ACTION_CAPABILITY[event.action.kind];
+    if (!capability) return null; // read-only; the toolman still has final say
+
+    const conversationId = event.conversationId ?? null;
+    const mode = conversationId
+      ? await this.agentWork.permissionMode(actor.id, conversationId)
+      : "default";
+
+    if (mode === "plan") {
+      return {
+        ok: false,
+        code: "PLAN_MODE",
+        error: "plan mode: propose the change and wait for the human to leave plan mode",
+      };
+    }
+    // acceptEdits pre-approves in-scope file writes only. Shell and network
+    // keep prompting because their blast radius is not bounded by scopePaths.
+    if (mode === "acceptEdits" && capability === "file_write") return null;
+
+    return await this.awaitApproval(actor, event, capability, conversationId);
+  }
+
+  private async awaitApproval(
+    actor: { id: string; workspaceId: string },
+    event: ActionRequestEvent,
+    capability: string,
+    conversationId: string | null,
+  ): Promise<ToolmanResult | null> {
+    let request;
+    try {
+      request = await this.interactions.open({
+        workspaceId: actor.workspaceId,
+        channelId: await this.channelOf(conversationId),
+        agentId: actor.id,
+        conversationId,
+        summary: describeAction(event.action),
+        capability,
+        boardItemRef: event.boardItemRef ?? null,
+      });
+    } catch (err) {
+      // If the decision cannot be recorded it cannot be audited, so nothing
+      // runs. Fail closed rather than executing an unlogged mutation.
+      console.warn("[hub] approval could not be recorded:", err instanceof Error ? err.message : err);
+      return {
+        ok: false,
+        code: "APPROVAL_UNAVAILABLE",
+        error: "permission could not be recorded; the action was not run",
+      };
+    }
+    this.broadcast({ type: "interaction_request", request });
+
+    const decision = await new Promise<"approved" | "denied" | "expired">((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingApprovals.delete(request.id);
+        void this.interactions.resolve(actor.workspaceId, request.id, "expired", null);
+        resolve("expired");
+      }, APPROVAL_TIMEOUT_MS);
+      this.pendingApprovals.set(request.id, (verdict) => {
+        clearTimeout(timer);
+        this.pendingApprovals.delete(request.id);
+        resolve(verdict);
+      });
+    });
+
+    if (decision === "approved") return null;
+    return {
+      ok: false,
+      code: "APPROVAL_DENIED",
+      error:
+        decision === "expired"
+          ? "nobody answered the permission request in time"
+          : "a human declined this action",
+    };
+  }
+
+  private async handleInteractionResolve(
+    participant: Participant,
+    event: InteractionResolveEvent,
+  ): Promise<void> {
+    // Approving is a human act: an agent must not clear its own prompt.
+    if (participant.kind !== "human") return;
+    const verdict = event.decision === "approve" ? "approved" : "denied";
+    const request = await this.interactions.resolve(
+      this.options.workspace.id,
+      event.requestId,
+      verdict,
+      participant.id,
+    );
+    if (!request) return; // already resolved elsewhere; first verdict stands
+    this.broadcast({ type: "interaction_resolved", request: { ...request, status: verdict } });
+    this.pendingApprovals.get(event.requestId)?.(verdict);
+  }
+
+  /** Choosing the mode is a human act; an agent cannot loosen its own leash. */
+  private async handleConversationModeSet(
+    participant: Participant,
+    event: ConversationModeSetEvent,
+  ): Promise<void> {
+    if (participant.kind !== "human") return;
+    const channel = await this.channels.get(event.channel);
+    if (!channel) return;
+    const conversation = await this.agentWork.setPermissionMode(
+      participant.id,
+      event.agentId,
+      channel.id,
+      event.mode,
+    );
+    this.broadcast({ type: "conversation_updated", conversation });
+  }
+
+  private async channelOf(conversationId: string | null): Promise<string> {
+    if (!conversationId) return "general";
+    return (await this.agentWork.channelOfConversation(conversationId)) ?? "general";
   }
 
   private handleStatusUpdate(participant: Participant, event: StatusUpdateEvent): void {
@@ -621,15 +898,29 @@ export class Hub {
   }
 
   private notifyWork(agentId: string, requestIds: string[]): void {
-    if (requestIds.length === 0) return;
+    if (requestIds.length === 0 || !this.runnerRuntime.isAvailable(agentId)) return;
     for (const conn of this.connections) {
       if (conn.participant?.id === agentId) this.sendWorkAvailable(conn, requestIds);
     }
   }
 
+  private async sendPendingWork(conn: Connection): Promise<void> {
+    const pending = await this.agentWork.listPending(conn.participant!.id);
+    this.sendWorkAvailable(conn, pending.map((request) => request.id));
+  }
+
   private sendWorkAvailable(conn: Connection, requestIds: string[]): void {
     for (let index = 0; index < requestIds.length; index += 50) {
       this.send(conn, { type: "work_available", requestIds: requestIds.slice(index, index + 50) });
+    }
+  }
+
+  updateAgentConfig(profile: AgentInvite): void {
+    this.runnerRuntime.update(profile);
+    for (const conn of this.connections) {
+      if (conn.participant?.id !== profile.actorId || !conn.agentProfile) continue;
+      conn.agentProfile = profile;
+      this.send(conn, { type: "agent_config", profile });
     }
   }
 
@@ -642,6 +933,7 @@ export class Hub {
       }
     }
     this.roster.removeAgent(actorId);
+    this.runnerRuntime.clear(actorId);
     this.sessions.revokeFor(actorId);
     this.broadcastPresence();
   }
@@ -668,9 +960,25 @@ export class Hub {
     await Promise.all([...this.connections].map((conn) => conn.queue.catch(() => {})));
     for (const conn of this.connections) conn.socket.terminate();
     this.connections.clear();
+    this.runnerRuntime.clearAll();
     return new Promise((resolve, reject) => {
       this.wss.close((err) => (err ? reject(err) : resolve()));
     });
+  }
+}
+
+/** How long a paused run waits for a human before failing closed. */
+const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** One line a human can decide on without opening the activity panel. */
+function describeAction(action: ActionRequestEvent["action"]): string {
+  switch (action.kind) {
+    case "run_shell":
+      return `run_shell: ${action.command.slice(0, 200)}`;
+    case "list_files":
+      return `list_files ${action.path ?? "."}`;
+    default:
+      return `${action.kind} ${action.path}`;
   }
 }
 

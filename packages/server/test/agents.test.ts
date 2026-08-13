@@ -107,6 +107,31 @@ describe("agent HTTP invites", async () => {
     assert.equal(patched.body.actorId, created.body.actorId);
   });
 
+  test("selected access accepts human members and rejects agents and nonmembers", async () => {
+    const owner = await env.actor("human", "access-owner");
+    const member = await env.db.createHuman("selected-member-id", "selected-member", "member@example.com");
+    const nonmember = await env.actor("human", "selected-nonmember");
+    const agent = await env.actor("agent", "selected-agent-member");
+    const created = await env.api("POST", "/api/agents", owner.token, {
+      name: "access-profile",
+      provider: PROVIDER,
+    });
+
+    const valid = await env.api("PATCH", `/api/agents/${created.body.id}`, owner.token, {
+      access: { mode: "selected", selectedActorIds: [member.id] },
+    });
+    assert.equal(valid.status, 200, valid.body.message);
+    assert.deepEqual(valid.body.access.selectedActorIds, [member.id]);
+
+    for (const actorId of [nonmember.actor.id, agent.actor.id]) {
+      const invalid = await env.api("PATCH", `/api/agents/${created.body.id}`, owner.token, {
+        access: { mode: "selected", selectedActorIds: [actorId] },
+      });
+      assert.equal(invalid.status, 400);
+      assert.equal(invalid.body.error, "BAD_ACCESS");
+    }
+  });
+
   test("pairings expire, are replaced, and can only be exchanged once under a race", async () => {
     const human = await env.actor("human", "pairing-owner");
     const created = await env.api("POST", "/api/agents", human.token, {

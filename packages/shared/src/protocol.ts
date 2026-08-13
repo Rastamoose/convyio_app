@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ChatMessage, Participant, TraceChunk } from "./participant";
 import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
-import type { AgentWorkAssignment } from "./agentWork";
-import type { ChannelInfo } from "./thread";
+import type { AgentInvite } from "./agent";
+import type { AgentConversation, AgentWorkAssignment, InteractionRequest } from "./agentWork";
+import type { ChannelInfo, ThreadEvent } from "./thread";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -126,6 +127,178 @@ export const workCompleteEventSchema = z.object({
   outcome: z.enum(["completed", "cancelled"]),
 });
 
+const boundedJsonPrimitiveSchema = z.union([
+  z.string().max(4_000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+
+function boundedJsonValueSchema(depth = 0): z.ZodTypeAny {
+  if (depth >= 4) return boundedJsonPrimitiveSchema;
+  const child = z.lazy(() => boundedJsonValueSchema(depth + 1));
+  return z.union([
+    boundedJsonPrimitiveSchema,
+    z.array(child).max(50),
+    z.record(z.string().min(1).max(128), child).superRefine((value, context) => {
+      if (Object.keys(value).length > 50) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "JSON objects may have at most 50 keys" });
+      }
+    }),
+  ]);
+}
+
+const boundedPayloadSchema = z
+  .record(z.string().min(1).max(128), boundedJsonValueSchema())
+  .superRefine((value, context) => {
+    if (Object.keys(value).length > 50) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "payloads may have at most 50 keys" });
+    }
+    if (JSON.stringify(value).length > 16_000) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "payload exceeds 16000 bytes" });
+    }
+  });
+
+export const normalizedUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    outputTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    cacheReadTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    cacheWriteTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    thoughtTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    toolTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    totalTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    costUsd: z.number().nonnegative().max(1_000_000).optional(),
+  })
+  .refine((usage) => Object.values(usage).some((value) => value !== undefined), {
+    message: "usage must contain at least one value",
+  });
+
+export const agentActivityKindSchema = z.enum([
+  "agent.output.delta",
+  "agent.thought.delta",
+  "agent.plan.updated",
+  "agent.tool.started",
+  "agent.tool.progress",
+  "agent.tool.completed",
+  "agent.tool.failed",
+  "agent.usage.reported",
+  "agent.provider.session",
+]);
+
+const activityItemSchema = z.object({
+  clientEventId: z.string().min(1).max(128),
+  kind: agentActivityKindSchema,
+  channelId: z.string().min(1).max(128),
+  conversationId: z.string().min(1).max(128).nullable(),
+  runId: z.string().min(1).max(128),
+  subjectId: z.string().min(1).max(128).optional(),
+  parentId: z.string().min(1).max(128).optional(),
+  payload: boundedPayloadSchema,
+});
+
+export const activityBatchEventSchema = z.object({
+  type: z.literal("activity_batch"),
+  events: z
+    .array(activityItemSchema)
+    .min(1)
+    .max(50)
+    .refine((events) => new Set(events.map((event) => event.clientEventId)).size === events.length, {
+      message: "activity client event ids must be unique",
+    }),
+});
+
+export const agentRunFinishEventSchema = z.object({
+  type: z.literal("agent_run_finish"),
+  runId: z.string().min(1).max(128),
+  channelId: z.string().min(1).max(128),
+  conversationId: z.string().min(1).max(128).nullable(),
+  requestIds: z
+    .array(z.string().min(1).max(128))
+    .max(50)
+    .refine((ids) => new Set(ids).size === ids.length, "request ids must be unique"),
+  outcome: z.enum(["completed", "cancelled", "failed"]),
+  finalContent: z.string().max(4_000),
+  error: z.string().max(2_000).optional(),
+  usage: normalizedUsageSchema.optional(),
+});
+
+export const conversationSessionSetEventSchema = z.object({
+  type: z.literal("conversation_session_set"),
+  conversationId: z.string().min(1).max(128),
+  providerSessionId: z.string().min(1).max(4_096).nullable(),
+  permissionMode: z.enum(["default", "plan", "acceptEdits"]),
+  clientEventId: z.string().min(1).max(128).optional(),
+});
+
+/** A human picks how much of the board grant runs without asking. */
+export const conversationModeSetEventSchema = z.object({
+  type: z.literal("conversation_mode_set"),
+  agentId: z.string().min(1).max(128),
+  /** Channel name; the server resolves it to the stable channel id. */
+  channel: z.string().min(1).max(64),
+  mode: z.enum(["default", "plan", "acceptEdits"]),
+});
+
+export const RUNNER_PROTOCOL_VERSION = 1;
+
+const runnerOptionBase = {
+  id: z.string().min(1).max(64),
+  label: z.string().min(1).max(100),
+  category: z.enum(["model", "model_config", "thought_level", "mode"]),
+};
+
+const runnerSelectOptionSchema = z.object({
+  ...runnerOptionBase,
+  kind: z.literal("select"),
+  value: z.string().max(200).optional(),
+  choices: z
+    .array(z.object({ value: z.string().min(1).max(200), label: z.string().min(1).max(100) }))
+    .min(1)
+    .max(50),
+});
+
+const runnerBooleanOptionSchema = z.object({
+  ...runnerOptionBase,
+  kind: z.literal("boolean"),
+  value: z.boolean(),
+});
+
+export const runnerConfigOptionSchema = z.discriminatedUnion("kind", [
+  runnerSelectOptionSchema,
+  runnerBooleanOptionSchema,
+]);
+
+export const runnerHelloEventSchema = z.object({
+  type: z.literal("runner_hello"),
+  protocolVersion: z.number().int().min(1).max(1000),
+  harness: z.object({
+    id: z.string().min(1).max(64),
+    version: z.string().min(1).max(64),
+  }),
+  options: z
+    .array(runnerConfigOptionSchema)
+    .max(32)
+    .refine((options) => new Set(options.map((option) => option.id)).size === options.length, {
+      message: "runner option ids must be unique",
+    }),
+});
+
+export const runnerStatusEventSchema = z.object({
+  type: z.literal("runner_status"),
+  configRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  health: z.enum([
+    "checking",
+    "ready",
+    "degraded",
+    "auth_required",
+    "misconfigured",
+    "incompatible",
+  ]),
+  effectiveModel: z.string().min(1).max(200).optional(),
+  diagnosticCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/).optional(),
+});
+
 export const pinEventSchema = z.object({
   type: z.literal("pin"),
   messageId: z.string(),
@@ -169,7 +342,22 @@ export const actionRequestEventSchema = z.object({
     z.object({ kind: z.literal("list_files"), path: z.string().optional() }),
     z.object({ kind: z.literal("write_file"), path: z.string(), content: z.string() }),
     z.object({ kind: z.literal("append_file"), path: z.string(), content: z.string() }),
+    z.object({ kind: z.literal("run_shell"), command: z.string().min(1).max(4000) }),
+    z.object({
+      kind: z.literal("search_files"),
+      query: z.string().min(1).max(500),
+      path: z.string().max(500).optional(),
+    }),
   ]),
+  /** Conversation the action belongs to; selects the permission mode. */
+  conversationId: z.string().max(128).nullable().optional(),
+});
+
+/** A human answers a pending permission request from any surface. */
+export const interactionResolveEventSchema = z.object({
+  type: z.literal("interaction_resolve"),
+  requestId: z.string().max(128),
+  decision: z.enum(["approve", "deny"]),
 });
 
 export const clientEventSchema = z
@@ -189,12 +377,19 @@ export const clientEventSchema = z
     runEndEventSchema,
     workClaimEventSchema,
     workCompleteEventSchema,
+    activityBatchEventSchema,
+    agentRunFinishEventSchema,
+    conversationSessionSetEventSchema,
+    runnerHelloEventSchema,
+    runnerStatusEventSchema,
     pinEventSchema,
     messageEditEventSchema,
     messageDeleteEventSchema,
     messageReactEventSchema,
     typingEventSchema,
     actionRequestEventSchema,
+    interactionResolveEventSchema,
+    conversationModeSetEventSchema,
   ])
   .refine((event) => event.type !== "message" || messageHasSubstance(event), {
     message: "message needs content or attachments",
@@ -216,12 +411,23 @@ export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
 export type WorkClaimEvent = z.infer<typeof workClaimEventSchema>;
 export type WorkCompleteEvent = z.infer<typeof workCompleteEventSchema>;
+export type AgentActivityKind = z.infer<typeof agentActivityKindSchema>;
+export type AgentActivityItem = z.infer<typeof activityItemSchema>;
+export type ActivityBatchEvent = z.infer<typeof activityBatchEventSchema>;
+export type AgentRunFinishEvent = z.infer<typeof agentRunFinishEventSchema>;
+export type ConversationSessionSetEvent = z.infer<typeof conversationSessionSetEventSchema>;
+export type RunnerConfigOption = z.infer<typeof runnerConfigOptionSchema>;
+export type RunnerHelloEvent = z.infer<typeof runnerHelloEventSchema>;
+export type RunnerStatusEvent = z.infer<typeof runnerStatusEventSchema>;
+export type RunnerHealth = RunnerStatusEvent["health"];
 export type PinEvent = z.infer<typeof pinEventSchema>;
 export type MessageEditEvent = z.infer<typeof messageEditEventSchema>;
 export type MessageDeleteEvent = z.infer<typeof messageDeleteEventSchema>;
 export type MessageReactEvent = z.infer<typeof messageReactEventSchema>;
 export type TypingEvent = z.infer<typeof typingEventSchema>;
 export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
+export type InteractionResolveEvent = z.infer<typeof interactionResolveEventSchema>;
+export type ConversationModeSetEvent = z.infer<typeof conversationModeSetEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 
 // ---------------------------------------------------------------------------
@@ -254,6 +460,23 @@ export interface WelcomeEvent {
   token: string;
   /** Base URL of the HTTP API (same host/port as the websocket). */
   apiUrl: string;
+  agentConfig?: AgentInvite;
+}
+
+export interface AgentConfigEvent {
+  type: "agent_config";
+  profile: AgentInvite;
+}
+
+export interface AgentRuntimeSummary {
+  connected: boolean;
+  health: RunnerHealth;
+  configRevision: number;
+  protocolVersion?: number;
+  harness?: { id: string; version: string };
+  effectiveModel?: string;
+  diagnosticCode?: string;
+  options: RunnerConfigOption[];
 }
 
 /** Toolman verdict, sent only to the requesting agent. */
@@ -267,6 +490,21 @@ export interface ActionResultEvent {
   output?: string;
 }
 
+/**
+ * Broadcast when a run pauses on a human decision, and again when it resolves.
+ * One id, every surface: the inline capsule, the approval queue and the
+ * activity panel all render this record rather than minting their own.
+ */
+export interface InteractionRequestEvent {
+  type: "interaction_request";
+  request: InteractionRequest;
+}
+
+export interface InteractionResolvedEvent {
+  type: "interaction_resolved";
+  request: InteractionRequest;
+}
+
 export interface WorkAvailableEvent {
   type: "work_available";
   requestIds: string[];
@@ -275,6 +513,16 @@ export interface WorkAvailableEvent {
 export interface WorkAssignedEvent {
   type: "work_assigned";
   assignments: AgentWorkAssignment[];
+}
+
+export interface ThreadEventBroadcast {
+  type: "thread_event";
+  event: ThreadEvent;
+}
+
+export interface ConversationUpdatedBroadcast {
+  type: "conversation_updated";
+  conversation: AgentConversation;
 }
 
 export interface MessageBroadcast {
@@ -381,8 +629,13 @@ export interface RunEndBroadcast {
 
 export type ServerEvent =
   | WelcomeEvent
+  | AgentConfigEvent
   | WorkAvailableEvent
+  | InteractionRequestEvent
+  | InteractionResolvedEvent
   | WorkAssignedEvent
+  | ThreadEventBroadcast
+  | ConversationUpdatedBroadcast
   | MessageBroadcast
   | MessageUpdatedBroadcast
   | MessageDeletedBroadcast

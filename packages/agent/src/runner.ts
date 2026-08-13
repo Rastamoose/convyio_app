@@ -1,7 +1,22 @@
 import { randomUUID } from "node:crypto";
-import type { AgentWorkAssignment, Attachment, BoardItem } from "@workspace/shared";
+import type {
+  AgentActivityItem,
+  AgentRunFinishEvent,
+  AgentWorkAssignment,
+  Attachment,
+  BoardItem,
+  ChannelInfo,
+  JsonValue,
+  NormalizedUsage,
+  PermissionMode,
+} from "@workspace/shared";
 import type { AgentSocket } from "./socket";
-import type { Brain } from "./brain";
+import {
+  boundedToolInput,
+  summarizedToolOutput,
+  type Brain,
+  type BrainEvent,
+} from "./brain";
 import type { Memory } from "./memory";
 import type { BoardClient } from "./boardClient";
 import type { PendingWork } from "./pendingWork";
@@ -17,6 +32,9 @@ export interface WorkItem {
   requestId?: string;
   conversationId?: string;
   channelId?: string;
+  providerSessionId?: string | null;
+  serverProviderSessionId?: string | null;
+  permissionMode?: PermissionMode;
   triggerMessageId?: string;
   /** Files the triggering message carried; images are shown to the model. */
   attachments?: Attachment[];
@@ -41,7 +59,8 @@ export class AgentRunner {
   private pendingClaims = new Set<string>();
   private claimedRequests = new Set<string>();
   private seenRequests = new Set<string>();
-  private finishedRequests = new Map<string, "completed" | "cancelled">();
+  private finishedRequests = new Map<string, AgentRunFinishEvent>();
+  private channelIds = new Map<string, string>();
 
   constructor(
     private socket: AgentSocket,
@@ -54,10 +73,16 @@ export class AgentRunner {
     private systemPrompt: string,
   ) {}
 
+  /** Profile changes affect the next run; an input already handed to a brain stays immutable. */
+  updateSystemPrompt(systemPrompt: string): void {
+    this.systemPrompt = systemPrompt;
+  }
+
   /** A reconnect invalidates server claims, but not local queued/running work. */
-  onWelcome(): void {
+  onWelcome(channels: ChannelInfo[] = []): void {
     this.pendingClaims.clear();
     this.claimedRequests.clear();
+    this.channelIds = new Map(channels.map((channel) => [channel.name, channel.id]));
   }
 
   claimAvailable(requestIds: string[]): void {
@@ -76,15 +101,23 @@ export class AgentRunner {
     this.pendingClaims.delete(request.id);
     this.claimedRequests.add(request.id);
     if (this.seenRequests.has(request.id)) {
-      const outcome = this.finishedRequests.get(request.id);
-      if (outcome) this.finishRequests([request.id], outcome);
+      const finish = this.finishedRequests.get(request.id);
+      if (finish) this.socket.send(finish);
       return;
     }
     this.seenRequests.add(request.id);
+    const local = this.conversationSessions.get(conversation.id);
+    const providerSessionId = conversation.providerSessionId ?? local?.providerSessionId ?? null;
+    void this.conversationSessions
+      .set(conversation.id, { providerSessionId, permissionMode: conversation.permissionMode })
+      .catch((err) => console.error("[agent] could not persist assigned conversation session:", err));
     this.enqueue({
       requestId: request.id,
       conversationId: conversation.id,
       channelId: request.channelId,
+      providerSessionId,
+      serverProviderSessionId: conversation.providerSessionId,
+      permissionMode: conversation.permissionMode,
       triggerMessageId: trigger.id,
       authorName: trigger.authorName,
       content: trigger.content,
@@ -101,7 +134,7 @@ export class AgentRunner {
   /** Abort the current run, drop all queued work, and start over on this. */
   interruptWith(work: WorkItem): void {
     this.abortController?.abort();
-    this.finishRequests(this.queue.flatMap((item) => item.requestId ?? []), "cancelled");
+    this.cancelQueued(this.queue);
     this.queue.length = 0;
     this.enqueue(work);
   }
@@ -132,22 +165,41 @@ export class AgentRunner {
   }
 
   /**
-   * Batch only work from the same channel so the reply lands where it was
-   * asked; remaining channels are handled on the next loop pass.
+   * Batch legacy work by channel and durable work by conversation so every
+   * finish has one server-valid run scope.
    */
   private nextBatch(): WorkItem[] {
-    const channel = this.queue[0].channelId ?? this.queue[0].channel;
+    const first = this.queue[0];
+    const channel = first.channelId ?? first.channel;
+    const conversationId = first.requestId ? first.conversationId : undefined;
     const batch: WorkItem[] = [];
-    for (let i = this.queue.length - 1; i >= 0; i--) {
-      if ((this.queue[i].channelId ?? this.queue[i].channel) === channel) {
-        batch.unshift(...this.queue.splice(i, 1));
+    let durableRequests = 0;
+    for (let index = 0; index < this.queue.length;) {
+      const item = this.queue[index];
+      const isSameRunScope =
+        (item.channelId ?? item.channel) === channel &&
+        (conversationId === undefined
+          ? item.requestId === undefined
+          : item.requestId !== undefined && item.conversationId === conversationId);
+      if (!isSameRunScope || (item.requestId !== undefined && durableRequests >= 50)) {
+        index += 1;
+        continue;
       }
+      batch.push(...this.queue.splice(index, 1));
+      if (item.requestId) durableRequests += 1;
     }
     return batch;
   }
 
   private async runBatch(batch: WorkItem[]): Promise<void> {
     const channel = batch[0].channel;
+    const channelId = batch[0].channelId ?? this.channelIds.get(channel) ?? channel;
+    const requestIds = batch.flatMap((item) => item.requestId ?? []);
+    const conversationItem = batch.find((item) => item.conversationId);
+    const conversationId = conversationItem?.conversationId ?? null;
+    const providerSessionId = conversationItem?.providerSessionId ?? null;
+    const serverProviderSessionId = conversationItem?.serverProviderSessionId ?? null;
+    const permissionMode = conversationItem?.permissionMode ?? "default";
     const authorNames = Array.from(new Set(batch.map((m) => m.authorName)));
     const resumedTaskId = batch.find((m) => m.taskId)?.taskId;
     const resumedItem = resumedTaskId ? this.board.resolve(resumedTaskId) : undefined;
@@ -168,14 +220,27 @@ export class AgentRunner {
 
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
-
-    let finalText = "";
-    let producedOutput = false;
-    let aborted = false;
-
-    const emitChunk = (kind: "thought" | "text", content: string) => {
-      producedOutput = true;
-      this.socket.send({ type: "trace_chunk", runId, chunk: { kind, content } });
+    const activity = channelId
+      ? createActivityBatcher(this.socket, runId, channelId, conversationId)
+      : null;
+    const providerSessionEvents = new Map<string, string>();
+    let latestProviderSessionId = providerSessionId;
+    let streamedText = "";
+    let reportedUsage: NormalizedUsage | undefined;
+    const onBrainEvent = (event: BrainEvent) => {
+      const clientEventId = activity?.push(event);
+      if (event.type === "provider.session") {
+        latestProviderSessionId = event.providerSessionId;
+        if (clientEventId) providerSessionEvents.set(event.providerSessionId, clientEventId);
+      } else if (event.type === "usage.reported") {
+        reportedUsage = event.usage;
+      }
+      if (event.type === "output.delta") {
+        streamedText += event.text;
+        this.socket.send({ type: "trace_chunk", runId, chunk: { kind: "text", content: event.text } });
+      } else if (event.type === "thought.delta") {
+        this.socket.send({ type: "trace_chunk", runId, chunk: { kind: "thought", content: event.text } });
+      }
     };
 
     const executeTool = createToolExecutor(this.board, {
@@ -190,13 +255,18 @@ export class AgentRunner {
         this.activeTask = item;
         this.presence.working(`Working on ${item.ref}…`, item.id);
       },
-      onActivity: (line) => emitChunk("thought", `[toolman] ${line}`),
+      onActivity: (line) => onBrainEvent({ type: "thought.delta", text: `[toolman] ${line}` }),
+      conversationId,
     });
 
     const { images, notes } = await this.gatherImages(batch);
+    let finalText = "";
+    let error: string | undefined;
+    let usage: NormalizedUsage | undefined;
+    let outcome: AgentRunFinishEvent["outcome"] = "completed";
 
     try {
-      finalText = await this.brain.run(
+      const result = await this.brain.run(
         {
           system: this.systemPrompt,
           context: this.buildContext(),
@@ -204,54 +274,96 @@ export class AgentRunner {
           images,
           tools: TOOL_DECLARATIONS,
         },
-        {
-          onThought: (thought) => emitChunk("thought", thought),
-          onText: (text) => emitChunk("text", text),
-        },
-        { signal, onToolCall: executeTool },
+        { onEvent: onBrainEvent },
+        { signal, onToolCall: executeTool, providerSessionId, permissionMode },
       );
+      finalText = result.text;
+      usage = result.usage ?? reportedUsage;
+      latestProviderSessionId = result.providerSessionId;
     } catch (err) {
       if (signal.aborted) {
-        aborted = true;
+        outcome = "cancelled";
         console.log(`[agent] run ${runId.slice(0, 8)} interrupted`);
       } else {
+        outcome = "failed";
         const detail = err instanceof Error ? err.message : String(err);
+        error = "Brain run failed";
+        finalText = streamedText.trim() || friendlyErrorMessage(detail);
         console.error("[agent] run failed:", detail);
-        if (!producedOutput) {
-          finalText = friendlyErrorMessage(detail);
-        }
       }
     } finally {
+      activity?.flush();
       this.abortController = null;
     }
 
-    const requestIds = batch.flatMap((item) => item.requestId ?? []);
-    if (!aborted) {
-      this.socket.send({ type: "summary", runId, content: finalText, channel });
-      this.finishRequests(requestIds, "completed");
-      console.log(`[agent] run ${runId.slice(0, 8)} summary sent (${finalText.length} chars)`);
-    } else {
-      this.socket.send({ type: "run_end", runId, reason: "aborted" });
-      this.finishRequests(requestIds, "cancelled");
-      console.log(`[agent] run ${runId.slice(0, 8)} aborted`);
+    usage ??= reportedUsage;
+    if (conversationId) {
+      await this.persistConversationSession(
+        conversationId,
+        latestProviderSessionId,
+        serverProviderSessionId,
+        permissionMode,
+        providerSessionEvents.get(latestProviderSessionId ?? ""),
+      );
     }
+
+    const finalContent = outcome === "cancelled" ? "" : finalText.slice(0, 4_000);
+    this.sendFinish({
+      type: "agent_run_finish",
+      runId,
+      channelId,
+      conversationId,
+      requestIds,
+      outcome,
+      finalContent,
+      ...(error ? { error } : {}),
+      ...(usage ? { usage } : {}),
+    });
+    console.log(`[agent] run ${runId.slice(0, 8)} ${outcome} (${finalContent.length} chars)`);
     this.activeTask = null;
   }
 
-  private finishRequests(
-    requestIds: string[],
-    outcome: "completed" | "cancelled",
-  ): void {
-    if (requestIds.length === 0) return;
-    for (const id of requestIds) {
-      this.finishedRequests.set(id, outcome);
-      this.claimedRequests.delete(id);
+  private async persistConversationSession(
+    conversationId: string,
+    providerSessionId: string | null,
+    serverProviderSessionId: string | null,
+    permissionMode: PermissionMode,
+    clientEventId: string | undefined,
+  ): Promise<void> {
+    try {
+      await this.conversationSessions.set(conversationId, { providerSessionId, permissionMode });
+    } catch (err) {
+      console.error("[agent] could not persist conversation session:", err);
     }
-    for (let index = 0; index < requestIds.length; index += 50) {
-      this.socket.send({
-        type: "work_complete",
-        requestIds: requestIds.slice(index, index + 50),
-        outcome,
+    if (providerSessionId === serverProviderSessionId) return;
+    this.socket.send({
+      type: "conversation_session_set",
+      conversationId,
+      providerSessionId,
+      permissionMode,
+      ...(clientEventId ? { clientEventId } : {}),
+    });
+  }
+
+  private sendFinish(event: AgentRunFinishEvent): void {
+    for (const requestId of event.requestIds) {
+      this.finishedRequests.set(requestId, event);
+      this.claimedRequests.delete(requestId);
+    }
+    this.socket.send(event);
+  }
+
+  private cancelQueued(items: WorkItem[]): void {
+    for (const item of items) {
+      if (!item.requestId) continue;
+      this.sendFinish({
+        type: "agent_run_finish",
+        runId: randomUUID(),
+        channelId: item.channelId ?? this.channelIds.get(item.channel) ?? item.channel,
+        conversationId: item.conversationId ?? null,
+        requestIds: [item.requestId],
+        outcome: "cancelled",
+        finalContent: "",
       });
     }
   }
@@ -290,6 +402,115 @@ export class AgentRunner {
     }
     return { images, notes };
   }
+}
+
+function createActivityBatcher(
+  socket: AgentSocket,
+  runId: string,
+  channelId: string,
+  conversationId: string | null,
+): { push(event: BrainEvent): string; flush(): void } {
+  let pending: AgentActivityItem[] = [];
+  let scheduled = false;
+  const flush = () => {
+    scheduled = false;
+    if (pending.length === 0) return;
+    socket.send({ type: "activity_batch", events: pending });
+    pending = [];
+  };
+  const append = (
+    kind: AgentActivityItem["kind"],
+    payload: AgentActivityItem["payload"],
+    subjectId?: string,
+  ) => {
+    const item: AgentActivityItem = {
+      clientEventId: randomUUID(),
+      kind,
+      channelId,
+      conversationId,
+      runId,
+      ...(subjectId ? { subjectId: boundedId(subjectId) } : {}),
+      payload,
+    };
+    pending.push(item);
+    if (pending.length === 50) flush();
+    else if (!scheduled) {
+      scheduled = true;
+      queueMicrotask(flush);
+    }
+    return item.clientEventId;
+  };
+  return {
+    push(event) {
+      if (event.type === "output.delta" || event.type === "thought.delta") {
+        const kind = event.type === "output.delta" ? "agent.output.delta" : "agent.thought.delta";
+        let firstId = "";
+        for (let offset = 0; offset < Math.max(event.text.length, 1); offset += 4_000) {
+          const id = append(kind, { text: event.text.slice(offset, offset + 4_000) });
+          if (!firstId) firstId = id;
+        }
+        return firstId;
+      }
+      switch (event.type) {
+        case "plan.updated":
+          return append(
+            "agent.plan.updated",
+            { plan: boundedActivityValue(boundedToolInput(event.plan)) },
+            event.toolCallId,
+          );
+        case "tool.started":
+          return append(
+            "agent.tool.started",
+            {
+              name: event.name.slice(0, 1_000),
+              source: event.source,
+              input: boundedActivityValue(boundedToolInput(event.input)),
+            },
+            event.toolCallId,
+          );
+        case "tool.progress":
+          return append(
+            "agent.tool.progress",
+            {
+              name: event.name.slice(0, 1_000),
+              progress: boundedActivityValue(boundedToolInput(event.progress)),
+            },
+            event.toolCallId,
+          );
+        case "tool.completed":
+          return append(
+            "agent.tool.completed",
+            {
+              name: event.name.slice(0, 1_000),
+              ...(event.output === undefined
+                ? {}
+                : { output: boundedActivityValue(summarizedToolOutput(event.output)) }),
+            },
+            event.toolCallId,
+          );
+        case "tool.failed":
+          return append(
+            "agent.tool.failed",
+            { name: event.name.slice(0, 1_000), error: "Tool failed" },
+            event.toolCallId,
+          );
+        case "usage.reported":
+          return append("agent.usage.reported", { usage: event.usage });
+        case "provider.session":
+          return append("agent.provider.session", { captured: true });
+      }
+    },
+    flush,
+  };
+}
+
+function boundedId(value: string): string {
+  return value.slice(0, 128) || "unknown";
+}
+
+function boundedActivityValue(value: JsonValue): JsonValue {
+  const bytes = JSON.stringify(value).length;
+  return bytes <= 12_000 ? value : `[payload omitted:${bytes} bytes]`;
 }
 
 /**

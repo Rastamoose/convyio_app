@@ -32,8 +32,18 @@ the wire protocol (websocket) and the HTTP board API.
 - `BoardService` — every board transition, each with its audit row in one
   transaction, fanned out after commit.  → WorkspaceDb
 - `Toolman` — the enforcement point for agent actions; sandboxed filesystem
-  mechanics. `authorizeMutation` is the pure policy decision.  → BoardService
+  and shell mechanics. `authorizeMutation` is the pure policy decision.
+  `authorize` exposes that decision on its own so the Hub can settle the board
+  ceiling before prompting a human.  → BoardService
+- `InteractionStore` (`chat/`) — durable permission prompts. A paused run is a
+  row, so it survives a restart and every surface resolves the same request id.
+  Startup expires prompts left by a previous process — their waiter is gone.
+  → WorkspaceDb, ThreadEventStore
 - `scope.ts` — scope-path semantics: normalize, match, validate.
+- `schemaCheck.ts` — boot-time assertion that the database has what the code
+  needs, with the fix in the message. A database a few migrations behind
+  otherwise starts fine and fails feature by feature, which surfaces in the
+  browser as an unexplained "Connecting…" rather than as a missing migration.
 - `Sessions` — bearer tokens with TTL and revocation.
 - `Auth` (`auth/`) — bridges a verified Supabase session to a workspace
   actor: re-verifies the caller's Supabase access token on every call (via
@@ -106,9 +116,25 @@ the wire protocol (websocket) and the HTTP board API.
 
 - The board is a permission boundary. No agent write path may bypass
   `Toolman.execute`; tools not known to be read-only are treated as mutating
-  (fail closed). Exception, tracked below: `ClaudeBrain`'s native Claude Code
-  tools (`AGENT_PROVIDER=claude`) currently bypass this — accepted MVP debt,
-  not the general rule.
+  (fail closed). `ClaudeBrain` enables only read-only native tools, so native
+  Claude Code execution cannot mutate around this.
+- Authorization is two layers, in this order. Layer 1 is the board grant: an
+  item must be workable, cover the path (`scope_paths`) and grant the class of
+  action (`capabilities`). Layer 2 is the conversation's permission mode,
+  which only decides how much of that grant runs without asking — it can never
+  widen layer 1. The Hub settles layer 1 first so no human is asked to approve
+  something the board would refuse anyway.
+- `shell_repo` is bounded by the sandbox root, not by `scope_paths`: a shell
+  command's writes are not statically knowable. That coarseness is the reason
+  it is a separate capability a human grants explicitly, rather than something
+  `file_write` implies.
+- An action class absent from `ACTION_CAPABILITY` can never be authorized, so a
+  newly added tool fails closed until it is deliberately classified.
+- If a permission decision cannot be recorded, the action does not run
+  (`APPROVAL_UNAVAILABLE`): an unauditable mutation is worse than a refusal.
+- Tool subprocesses get a minimal environment. `AGENT_TOKEN`, provider keys and
+  the database URL live in the server's `process.env` and must never reach a
+  child process or its output.
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
 - Auth mode is a config switch, not a flag: GOOGLE_AUTH_ENABLED and/or
@@ -181,23 +207,13 @@ the wire protocol (websocket) and the HTTP board API.
   with no `ANTHROPIC_API_KEY` fallback. Consequence: every host running the
   agent with `AGENT_PROVIDER=claude` needs a one-time interactive login;
   headless/CI deploys of this provider aren't possible until that changes.
-- 2026-08-09 — `ClaudeBrain` leaves Claude Code's native tools (Bash, Write,
-  Edit, ...) enabled ungated, alongside the existing board tools. This
-  bypasses the invariant below ("no agent write paths bypass Toolman") for
-  the claude provider specifically — accepted as MVP debt. Consequence: with
-  `AGENT_PROVIDER=claude`, the board is not a complete permission boundary.
-  The blast radius is wider than "files and shell commands within the
-  workspace": `CLAUDE_WORKDIR` is a starting cwd, not a sandbox — native
-  Bash/Write/Edit take absolute paths, reaching `.env`, `data/board.db`,
-  and process environment variables (`AGENT_TOKEN`, any API keys) like any
-  other process on the host. Separately, `packages/agent/charter.md` names
-  board tools bare and claims the toolman "refuses anything else, you
-  cannot bypass it" — false under this provider, and nothing steers the
-  model toward the MCP-routed board tools over its own native ones, so in
-  practice native tools aren't just an ungated alternative alongside the
-  board path, they're the path of least resistance. Follow-up: route
-  `ClaudeBrain`'s `canUseTool` callback through the same board-approval
-  flow `board_propose`/`write_file` already use.
+- 2026-08-13 — Resolved the 2026-08-09 native-tool bypass. `ClaudeBrain` now
+  enables only read-only native tools (Read, Glob, Grep, WebFetch, WebSearch);
+  every mutation goes through the MCP-routed board tools, so the board is a
+  complete permission boundary under `AGENT_PROVIDER=claude` too. Shell now
+  exists as a first-class `run_shell` action gated by the `shell_repo`
+  capability and executed in the server's sandbox with a minimal environment,
+  rather than as an ungated native tool reaching the whole host.
 - 2026-08-09 — Persistence, auth, and file storage moved from
   `node:sqlite`/hand-rolled Google ID-token verification+scrypt/local disk
   to Supabase (Postgres, Auth, Storage) — a clean cutover, no data

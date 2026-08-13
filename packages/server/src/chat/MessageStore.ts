@@ -3,6 +3,7 @@ import type {
   ChannelInfo,
   ChatMessage,
   MessageReaction,
+  ThreadEvent,
   ThreadEventKind,
   ThreadEventPayload,
   TraceChunk,
@@ -131,34 +132,44 @@ export class MessageStore {
 
   /** Append a message and caller-owned projections in one database transaction. */
   async appendAtomically<T>(message: ChatMessage, project: (sql: Sql) => Promise<T>): Promise<T> {
+    return this.store.transaction(async (sql) => {
+      await this.appendInTransaction(sql, message);
+      return project(sql);
+    });
+  }
+
+  async appendInTransaction(
+    sql: Sql,
+    message: ChatMessage,
+    canonical: { conversationId?: string | null; clientEventId?: string | null } = {},
+  ): Promise<ThreadEvent> {
     const channelId = message.channelId;
     if (!channelId) throw new Error("message channelId is required");
-    return this.store.transaction(async (sql) => {
-      await sql`
-        INSERT INTO messages
-          (id, author_id, author_name, author_kind, content, channel, channel_id,
-           mentions, run_id, trace, attachments, reply_to_id, created_at)
-        VALUES (
-          ${message.id}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
-          ${message.content}, ${message.channel ?? "general"}, ${channelId},
-          ${sql.json(message.mentions ?? [])}, ${message.runId ?? null},
-          ${message.trace ? JSON.stringify(message.trace) : null},
-          ${message.attachments ? JSON.stringify(message.attachments) : null},
-          ${message.replyToId ?? null}, ${message.timestamp}
-        )
-      `;
-      await this.threadEvents.append(sql, {
-        workspaceId: this.store.workspaceId,
-        channelId,
-        actorId: message.authorId,
-        kind: "message.created",
-        runId: message.runId,
-        subjectId: message.id,
-        parentId: message.replyToId,
-        payload: JSON.parse(JSON.stringify(message)) as ThreadEventPayload,
-        createdAt: message.timestamp,
-      });
-      return project(sql);
+    await sql`
+      INSERT INTO messages
+        (id, author_id, author_name, author_kind, content, channel, channel_id,
+         mentions, run_id, trace, attachments, reply_to_id, created_at)
+      VALUES (
+        ${message.id}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
+        ${message.content}, ${message.channel ?? "general"}, ${channelId},
+        ${sql.json(message.mentions ?? [])}, ${message.runId ?? null},
+        ${message.trace ? JSON.stringify(message.trace) : null},
+        ${message.attachments ? JSON.stringify(message.attachments) : null},
+        ${message.replyToId ?? null}, ${message.timestamp}
+      )
+    `;
+    return this.threadEvents.append(sql, {
+      workspaceId: this.store.workspaceId,
+      channelId,
+      actorId: message.authorId,
+      kind: "message.created",
+      conversationId: canonical.conversationId,
+      runId: message.runId,
+      subjectId: message.id,
+      parentId: message.replyToId,
+      clientEventId: canonical.clientEventId,
+      payload: JSON.parse(JSON.stringify(message)) as ThreadEventPayload,
+      createdAt: message.timestamp,
     });
   }
 
@@ -421,9 +432,9 @@ function toMessage(row: MessageRow, reactions?: MessageReaction[]): ChatMessage 
     content: row.content,
     timestamp: row.created_at,
     channelId: row.channel_id,
-    mentions: row.mentions,
     channel: row.channel,
   };
+  if (row.mentions.length > 0) message.mentions = row.mentions;
   if (row.run_id) message.runId = row.run_id;
   if (row.trace) message.trace = JSON.parse(row.trace) as TraceChunk[];
   if (row.attachments) message.attachments = JSON.parse(row.attachments) as Attachment[];

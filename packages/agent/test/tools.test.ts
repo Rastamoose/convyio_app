@@ -22,6 +22,7 @@ function boardItem(overrides: Partial<BoardItem> = {}): BoardItem {
     proposalWhy: "sessions are safer",
     proposalEffect: "auth uses sessions",
     scopePaths: ["billing/"],
+    capabilities: null,
     createdAt: 0,
     approvedAt: null,
     startedAt: null,
@@ -103,6 +104,68 @@ describe("tool executor", () => {
     // The note must steer the model back inside the approved scope.
     assert.match(String(result.note), /scope_paths/);
     assert.match(String(result.note), /board_propose/);
+  });
+
+  test("run_shell carries the command and the conversation's mode context", async () => {
+    const sent: { action: ToolmanAction; ref: string | null; conversationId: unknown }[] = [];
+    const board = {
+      resolve: () => undefined,
+      requestAction: async (
+        action: ToolmanAction,
+        ref: string | null,
+        conversationId: string | null,
+      ): Promise<ActionResultEvent> => {
+        sent.push({ action, ref, conversationId });
+        return { type: "action_result", requestId: "r-1", ok: true, output: "3 tests passed" };
+      },
+    } as unknown as BoardClient;
+    const execute = createToolExecutor(board, { ...noopHooks(), conversationId: "conv-9" });
+
+    const result = await execute("run_shell", { command: "npm test", board_item_ref: "task-1" });
+
+    assert.deepEqual(sent[0].action, { kind: "run_shell", command: "npm test" });
+    assert.equal(sent[0].ref, "task-1");
+    // Without the conversation the server cannot tell which permission mode
+    // applies, so it must reach the toolman with every mutating call.
+    assert.equal(sent[0].conversationId, "conv-9");
+    assert.equal(result.done, "3 tests passed");
+  });
+
+  test("a capability denial tells the model to propose the capability", async () => {
+    const board = {
+      resolve: () => undefined,
+      requestAction: async (): Promise<ActionResultEvent> => ({
+        type: "action_result",
+        requestId: "r-1",
+        ok: false,
+        code: "CAPABILITY_MISSING",
+        error: "task-1 does not grant shell_repo",
+      }),
+    } as unknown as BoardClient;
+    const execute = createToolExecutor(board, noopHooks());
+
+    const result = await execute("run_shell", { command: "rm -rf /", board_item_ref: "task-1" });
+
+    assert.equal(result.denied, "CAPABILITY_MISSING");
+    assert.match(String(result.note), /shell_repo/);
+  });
+
+  test("search_files is read-only: no board ref is sent", async () => {
+    const sent: { action: ToolmanAction; ref: string | null }[] = [];
+    const board = {
+      resolve: () => undefined,
+      requestAction: async (action: ToolmanAction, ref: string | null): Promise<ActionResultEvent> => {
+        sent.push({ action, ref });
+        return { type: "action_result", requestId: "r-1", ok: true, output: "a.ts:1: hit" };
+      },
+    } as unknown as BoardClient;
+    const execute = createToolExecutor(board, noopHooks());
+
+    const result = await execute("search_files", { query: "TODO" });
+
+    assert.deepEqual(sent[0].action, { kind: "search_files", query: "TODO" });
+    assert.equal(sent[0].ref, null);
+    assert.equal(result.matches, "a.ts:1: hit");
   });
 
   test("unknown tool name yields an error result", async () => {

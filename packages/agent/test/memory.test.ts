@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, test } from "node:test";
 import type { ChatMessage } from "@workspace/shared";
 import { Memory } from "../src/memory";
@@ -79,6 +80,18 @@ describe("Memory", () => {
       return fresh.context().includes("survives-restart") ? fresh : undefined;
     }, "transcript to persist");
     assert.ok(reloaded.context().includes("survives-restart"));
+  });
+
+  test("repairs existing state permissions and writes private files", async () => {
+    const dir = await tempDir();
+    const file = path.join(dir, "transcript.json");
+    await fs.writeFile(file, "[]", { mode: 0o644 });
+    await fs.chmod(dir, 0o755);
+    const memory = await Memory.load(dir);
+    memory.append(message("private"));
+    await waitFor(async () => (await fs.readFile(file, "utf8")).includes("private") || undefined, "private transcript write");
+    assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
   });
 
   test("a failed transcript write does not block later writes", async () => {

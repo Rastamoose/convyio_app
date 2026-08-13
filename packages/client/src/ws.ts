@@ -22,6 +22,7 @@ export class WorkspaceSocket {
   private credentials: JoinCredentials | null = null;
   private retryMs = 500;
   private closed = false;
+  private retryTimer: number | undefined;
 
   connect(credentials: JoinCredentials): void {
     this.credentials = credentials;
@@ -61,7 +62,13 @@ export class WorkspaceSocket {
     this.socket.onclose = () => {
       if (this.closed) return;
       for (const l of this.disconnectListeners) l();
-      setTimeout(() => this.open(), this.retryMs);
+      // Re-check `closed` when the timer fires, not only when it is set:
+      // close() during the wait must not be undone by a pending reconnect.
+      // Otherwise React's dev double-mount leaves a zombie socket behind.
+      this.retryTimer = window.setTimeout(() => {
+        if (this.closed) return;
+        this.open();
+      }, this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 10_000);
     };
   }
@@ -89,6 +96,7 @@ export class WorkspaceSocket {
 
   close(): void {
     this.closed = true;
+    window.clearTimeout(this.retryTimer);
     this.socket?.close();
   }
 }

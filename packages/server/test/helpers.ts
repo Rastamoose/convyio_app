@@ -13,6 +13,7 @@ import { AgentWorkStore } from "../src/chat/AgentWorkStore";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
+import { InteractionStore } from "../src/chat/InteractionStore";
 import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
 import { AgentInvites } from "../src/auth/AgentInvites";
@@ -22,6 +23,7 @@ import { Sessions } from "../src/board/sessions";
 import { Toolman } from "../src/board/Toolman";
 import { createApiHandler, type AuthGate } from "../src/board/api";
 import { Hub } from "../src/hub";
+import { RunnerRuntime } from "../src/RunnerRuntime";
 import { createTestDb } from "./pgSchema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -78,6 +80,7 @@ export interface Env {
   agentWork: AgentWorkStore;
   threadEvents: ThreadEventStore;
   attachments: Attachments;
+  runnerRuntime: RunnerRuntime;
   baseUrl: string;
   envelopes: BoardEventEnvelope[];
   actor(kind: "human" | "agent", name: string): Promise<{ actor: Actor; token: string }>;
@@ -105,6 +108,7 @@ export async function createEnv(): Promise<Env> {
   const messages = new MessageStore(db, threadEvents);
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const agentInvites = new AgentInvites(db);
+  const runnerRuntime = new RunnerRuntime();
   const handler = createApiHandler(
     db,
     service,
@@ -116,6 +120,8 @@ export async function createEnv(): Promise<Env> {
     "*",
     null,
     agentInvites,
+    runnerRuntime,
+    null,
     null,
   );
   const server = http.createServer((req, res) => void handler(req, res));
@@ -131,6 +137,7 @@ export async function createEnv(): Promise<Env> {
     agentWork,
     threadEvents,
     attachments,
+    runnerRuntime,
     baseUrl,
     envelopes,
     async actor(kind, name) {
@@ -149,7 +156,7 @@ export async function createEnv(): Promise<Env> {
       return { status: res.status, body: await res.json() };
     },
     async close() {
-      await new Promise<void>((r) => server.close(r));
+      await new Promise<void>((r) => server.close(() => r()));
       server.closeAllConnections?.();
       await drop();
     },
@@ -177,6 +184,7 @@ export interface JoinOutcome {
   welcome: any | null;
   error: string | null;
   closed: boolean;
+  client: WsClient | null;
 }
 
 export interface WsEnv {
@@ -188,6 +196,7 @@ export interface WsEnv {
   threadEvents: ThreadEventStore;
   channels: Channels;
   attachments: Attachments;
+  runnerRuntime: RunnerRuntime;
   hub: Hub;
   agentInvites: AgentInvites;
   /** Set when the env was created with auth enabled. */
@@ -211,6 +220,15 @@ export interface WsAuthOptions {
 }
 
 /** The full hub + HTTP stack on an ephemeral port, for websocket suites. */
+/**
+ * How long to wait for an expected frame. Generous on purpose: these tests
+ * talk to a real remote Postgres, so a round trip is not a fixed cost, and a
+ * frame arriving in 1.2s instead of 0.9s is not a bug. Tests that genuinely
+ * assert latency pass their own bound. Node's 30s per-test timeout still
+ * catches a real hang.
+ */
+const WS_WAIT_MS = 5000;
+
 export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
@@ -226,6 +244,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const attachments = new Attachments(db, supabaseAdmin());
   const agentInvites = new AgentInvites(db);
+  const runnerRuntime = new RunnerRuntime();
   // Auth-enabled envs expose /api/auth/* through the SAME Auth instance the
   // join gate uses (prod runs one instance for both HTTP and ws, and the
   // verify cache lives per instance).
@@ -243,16 +262,34 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     "localhost-dev",
     authGate,
     agentInvites,
+    runnerRuntime,
+    (profile) => hub.updateAgentConfig(profile),
     (actorId) => hub.closeAgentConnection(actorId),
     (actorId) => hub.closeHumanConnection(actorId),
   );
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
-  const hub = new Hub(server, roster, messages, agentWork, channels, attachments, sessions, toolman, {
-    workspace: { id: db.workspaceId, name: db.workspaceName },
-    demoChannels: [],
-    authorizeJoin: auth ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites) : undefined,
-  });
+  const interactions = new InteractionStore(db, threadEvents);
+  const hub = new Hub(
+    server,
+    roster,
+    messages,
+    agentWork,
+    channels,
+    attachments,
+    sessions,
+    toolman,
+    interactions,
+    runnerRuntime,
+    {
+      workspace: { id: db.workspaceId, name: db.workspaceName },
+      demoChannels: [],
+      authorizeJoin: auth
+        ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites)
+        : undefined,
+      authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
+    },
+  );
   channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
@@ -261,6 +298,10 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
   const clients: WebSocket[] = [];
+  const closeClients = () => {
+    for (const ws of clients) ws.terminate();
+    clients.length = 0;
+  };
 
   return {
     db,
@@ -271,6 +312,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     threadEvents,
     channels,
     attachments,
+    runnerRuntime,
     hub,
     agentInvites,
     auth,
@@ -279,20 +321,44 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       return new Promise<JoinOutcome>((resolve) => {
         const ws = new WebSocket(`ws://localhost:${port}`);
         clients.push(ws);
+        const seen: any[] = [];
+        const waiters: { pred: (e: any) => boolean; resolve: (e: any) => void }[] = [];
         let error: string | null = null;
         let settled = false;
         ws.on("message", (raw) => {
           const ev = JSON.parse(raw.toString());
+          seen.push(ev);
+          for (let i = waiters.length - 1; i >= 0; i--) {
+            if (waiters[i].pred(ev)) waiters.splice(i, 1)[0].resolve(ev);
+          }
           if (ev.type === "error") error = ev.error;
           if (ev.type === "welcome" && !settled) {
             settled = true;
-            resolve({ welcome: ev, error, closed: false });
+            const client: WsClient = {
+              ws,
+              token: ev.token,
+              welcome: ev,
+              next: (pred, ms = WS_WAIT_MS) =>
+                new Promise((res, rej) => {
+                  const already = seen.find(pred);
+                  if (already) return res(already);
+                  const timeout = setTimeout(() => rej(new Error("timeout")), ms);
+                  waiters.push({
+                    pred,
+                    resolve: (event) => {
+                      clearTimeout(timeout);
+                      res(event);
+                    },
+                  });
+                }),
+            };
+            resolve({ welcome: ev, error, closed: false, client });
           }
         });
         ws.on("close", () => {
           if (!settled) {
             settled = true;
-            resolve({ welcome: null, error, closed: true });
+            resolve({ welcome: null, error, closed: true, client: null });
           }
         });
         ws.on("open", () => ws.send(JSON.stringify(frame)));
@@ -315,7 +381,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
               ws,
               token: ev.token,
               welcome: ev,
-              next: (pred, ms = 1000) =>
+              next: (pred, ms = WS_WAIT_MS) =>
                 new Promise((res, rej) => {
                   const already = seen.find(pred);
                   if (already) return res(already);
@@ -328,12 +394,11 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, kind })));
       });
     },
-    closeClients() {
-      for (const ws of clients) ws.terminate();
-      clients.length = 0;
-    },
+    closeClients,
     async reset() {
-      this.closeClients();
+      // A local function, not `this`: inside an object literal being returned
+      // as a promise, `this` widens to include the PromiseLike form.
+      closeClients();
       // Truncate all mutable tables, keep the workspaces row so
       // db.workspaceId stays valid.
       await db.sql`
@@ -348,12 +413,13 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       `;
       await channels.seed([{ name: "general", isDemo: false }]);
       sessions.clear();
+      runnerRuntime.clearAll();
       roster.clear();
     },
     async close() {
       for (const ws of clients) ws.terminate();
       await hub.close();
-      await new Promise<void>((r) => server.close(r));
+      await new Promise<void>((r) => server.close(() => r()));
       server.closeAllConnections?.();
       fs.rmSync(workspaceDir, { recursive: true, force: true });
       await drop();

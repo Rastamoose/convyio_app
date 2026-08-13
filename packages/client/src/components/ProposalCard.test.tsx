@@ -26,6 +26,7 @@ const item: BoardItem = {
   proposalWhy: "Invoices round the wrong way",
   proposalEffect: "Totals match the ledger",
   scopePaths: ["billing/", "docs/README.md"],
+  capabilities: null,
   createdAt: Date.now() - 60_000,
   approvedAt: null,
   startedAt: null,

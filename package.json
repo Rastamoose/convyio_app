@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,client,agent -c blue,green,magenta \"npm run dev -w @workspace/server\" \"npm run dev -w @workspace/client\" \"npm run dev:agent\"",
+    "dev": "concurrently --kill-others-on-fail -n server,client,agent -c blue,green,magenta \"npm run dev -w @workspace/server\" \"npm run dev -w @workspace/client\" \"npm run dev:agent\"",
     "dev:server": "npm run dev -w @workspace/server",
     "dev:client": "npm run dev -w @workspace/client",
     "dev:agent": "npm run dev -w @workspace/agent",

@@ -1,13 +1,19 @@
 import { useEffect, useRef } from "react";
-import type { BoardItem } from "@workspace/shared";
+import type { BoardItem, InteractionRequest } from "@workspace/shared";
 import { ProposalCard } from "./ProposalCard";
+import { PermissionCard } from "./PermissionCard";
 
 export function ApprovalQueue({
   items,
+  interactions,
+  onResolveInteraction,
   onDiscuss,
   onClose,
 }: {
   items: BoardItem[];
+  /** Runs paused mid-flight; they block an agent right now, so they sort first. */
+  interactions: InteractionRequest[];
+  onResolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
   onDiscuss: (item: BoardItem) => void;
   onClose: () => void;
 }) {
@@ -37,9 +43,9 @@ export function ApprovalQueue({
       className="fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg bg-popup p-3 shadow-lg"
     >
       <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
-        Awaiting approval — {items.length}
+        Awaiting approval — {items.length + interactions.length}
       </h2>
-      {sorted.length === 0 ? (
+      {sorted.length + interactions.length === 0 ? (
         <div className="flex items-center gap-1.5 px-1 py-2 text-xs text-faint">
           <svg
             className="h-3.5 w-3.5 shrink-0"
@@ -60,6 +66,13 @@ export function ApprovalQueue({
         </div>
       ) : (
         <div className="space-y-2">
+          {interactions.map((request) => (
+            <PermissionCard
+              key={request.id}
+              request={request}
+              onResolve={onResolveInteraction}
+            />
+          ))}
           {sorted.map((item) => (
             <ProposalCard key={item.id} item={item} onDiscuss={onDiscuss} />
           ))}

@@ -37,7 +37,7 @@ export function createJoinGate(
             ok: true,
             name: resolved.actor.displayName,
             actorId: resolved.actor.id,
-            harness: resolved.invite.provider,
+            profile: resolved.invite,
           }
         : { ok: false };
     }

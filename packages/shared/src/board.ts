@@ -14,6 +14,24 @@ export interface Actor {
   workspaceId: string;
 }
 
+/**
+ * What a board item lets an agent do, beyond where it may do it. `file_write`
+ * is bounded by scopePaths; `shell_repo` cannot be (a shell command's writes
+ * are not statically knowable), so it is a deliberate coarse grant over the
+ * whole sandboxed workspace; `network` is separate because installs and pushes
+ * reach outside the machine.
+ */
+export type WorkCapability = "file_write" | "shell_repo" | "network";
+
+export const WORK_CAPABILITIES: readonly WorkCapability[] = [
+  "file_write",
+  "shell_repo",
+  "network",
+];
+
+/** Legacy items predate capabilities and authorized file writes only. */
+export const DEFAULT_CAPABILITIES: readonly WorkCapability[] = ["file_write"];
+
 export type ItemStatus =
   | "proposed" // agent-raised, inert, awaiting human decision
   | "denied" // terminal, retained for audit
@@ -50,6 +68,12 @@ export interface BoardItem {
    * Required on agent proposals; null on human items means unrestricted.
    */
   scopePaths: string[] | null;
+  /**
+   * Classes of mutation this item authorizes. Paths alone cannot bound a shell
+   * command, so coarse capabilities sit beside the path scope. null means the
+   * legacy default of file writes only — never shell or network.
+   */
+  capabilities: WorkCapability[] | null;
   createdAt: number;
   approvedAt: number | null;
   startedAt: number | null;
@@ -129,7 +153,11 @@ export type AuthzDenyCode =
   | "ITEM_WRONG_SERVER"
   | "ITEM_NOT_WORKABLE" // status not approved | in_progress
   | "ITEM_DELETED"
-  | "SCOPE_VIOLATION"; // action path falls outside the item's scope_paths
+  | "SCOPE_VIOLATION" // action path falls outside the item's scope_paths
+  | "CAPABILITY_MISSING" // item's grant does not cover this class of action
+  | "PLAN_MODE" // conversation is in plan mode; nothing may mutate
+  | "APPROVAL_DENIED" // a human declined the permission request
+  | "APPROVAL_UNAVAILABLE"; // approval could not be recorded — fail closed
 
 export type AuthzResult =
   | { allow: true; item: BoardItem }
@@ -139,4 +167,16 @@ export type ToolmanAction =
   | { kind: "read_file"; path: string }
   | { kind: "list_files"; path?: string }
   | { kind: "write_file"; path: string; content: string }
-  | { kind: "append_file"; path: string; content: string };
+  | { kind: "append_file"; path: string; content: string }
+  | { kind: "run_shell"; command: string }
+  | { kind: "search_files"; query: string; path?: string };
+
+/**
+ * Which capability each action class consumes. Absent from this map = mutating
+ * and ungrantable, so new tools fail closed until they are classified.
+ */
+export const ACTION_CAPABILITY: Readonly<Record<string, WorkCapability>> = {
+  write_file: "file_write",
+  append_file: "file_write",
+  run_shell: "shell_repo",
+};

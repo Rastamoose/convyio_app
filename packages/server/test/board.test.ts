@@ -9,6 +9,7 @@ import { Attachments } from "../src/chat/Attachments";
 import { Channels } from "../src/chat/Channels";
 import { MessageStore } from "../src/chat/MessageStore";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
+import { InteractionStore } from "../src/chat/InteractionStore";
 import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
@@ -16,6 +17,7 @@ import { createApiHandler } from "../src/board/api";
 import { AgentInvites } from "../src/auth/AgentInvites";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
 import { Hub } from "../src/hub";
+import { RunnerRuntime } from "../src/RunnerRuntime";
 import { createEnv, createWsEnv, PROPOSAL, supabaseAdmin } from "./helpers";
 import { createTestDb } from "./pgSchema";
 
@@ -281,7 +283,7 @@ describe("T10: full-stack approval fan-out", async () => {
       null,
     );
     const server = http.createServer((req, res) => void handler(req, res));
-    const hub = new Hub(server, await Roster.create(db, agentInvites), messages, agentWork, channels, attachments, sessions, toolman, {
+    const hub = new Hub(server, await Roster.create(db, agentInvites), messages, agentWork, channels, attachments, sessions, toolman, new InteractionStore(db, threadEvents), new RunnerRuntime(), {
       workspace: { id: db.workspaceId, name: db.workspaceName },
       demoChannels: [],
     });
@@ -360,13 +362,28 @@ describe("T10: full-stack approval fan-out", async () => {
       assert.equal(aSaw.item.status, "approved");
       assert.equal(bSaw.item.status, "approved");
 
-      // Agent resumes with no further human action: the same mutation now runs.
+      // The board now authorizes the mutation, so the run reaches the second
+      // layer: manual mode pauses on a human before writing anything.
       agent.ws.send(JSON.stringify({
         type: "action_request",
         requestId: "r2",
         boardItemRef: proposed.ref,
         action: { kind: "write_file", path: "out.md", content: "x" },
       }));
+      const prompt = await humanA.next((e) => e.type === "interaction_request");
+      assert.equal(prompt.request.summary, "write_file out.md");
+      assert.equal(prompt.request.capability, "file_write");
+
+      // Any human surface can answer, and every surface sees the same id resolve.
+      humanB.ws.send(JSON.stringify({
+        type: "interaction_resolve",
+        requestId: prompt.request.id,
+        decision: "approve",
+      }));
+      const resolved = await humanA.next((e) => e.type === "interaction_resolved");
+      assert.equal(resolved.request.id, prompt.request.id);
+      assert.equal(resolved.request.status, "approved");
+
       const allowed = await agent.next((e) => e.type === "action_result" && e.requestId === "r2");
       assert.equal(allowed.ok, true);
 

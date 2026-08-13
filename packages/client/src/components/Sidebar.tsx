@@ -335,6 +335,8 @@ export function Sidebar({
     agentInvites,
     revokeAgent,
     removeMember,
+    pendingInteractions,
+    resolveInteraction,
   } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
@@ -513,7 +515,7 @@ export function Sidebar({
 
       {/* Status area — top third, becomes the status strip */}
       <section className="min-h-0 basis-1/3 overflow-y-auto px-2 pt-3">
-        {pendingItems.length > 0 && (
+        {pendingItems.length + pendingInteractions.length > 0 && (
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setQueueOpen((o) => !o)}
@@ -523,7 +525,7 @@ export function Sidebar({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-dead" />
             </span>
-            Awaiting approval ({pendingItems.length})
+            Awaiting approval ({pendingItems.length + pendingInteractions.length})
           </button>
         )}
         <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none">
@@ -683,9 +685,11 @@ export function Sidebar({
         )}
       </footer>
 
-      {queueOpen && pendingItems.length > 0 && (
+      {queueOpen && pendingItems.length + pendingInteractions.length > 0 && (
         <ApprovalQueue
           items={pendingItems}
+          interactions={pendingInteractions}
+          onResolveInteraction={resolveInteraction}
           onDiscuss={discuss}
           onClose={() => setQueueOpen(false)}
         />
@@ -693,6 +697,7 @@ export function Sidebar({
       {selectedMember && selected && (
         <MemberCard
           participant={selectedMember}
+          channel={channel}
           anchor={selected.anchor}
           onDiscuss={discuss}
           onPrefill={onPrefill}

@@ -11,6 +11,9 @@ export class AgentSocket {
   private url: string;
   private retryMs = 500;
   private closed = false;
+  private retryTimer: NodeJS.Timeout | undefined;
+  /** Connection failures so far; the first few are normal at dev startup. */
+  private failures = 0;
 
   constructor(url: string) {
     this.url = url;
@@ -28,6 +31,7 @@ export class AgentSocket {
 
     this.socket.on("open", () => {
       this.retryMs = 500;
+      this.failures = 0;
       if (this.joinName) {
         this.sendRaw({
           type: "join",
@@ -57,12 +61,26 @@ export class AgentSocket {
 
     this.socket.on("close", () => {
       if (this.closed) return;
-      setTimeout(() => this.open(), this.retryMs);
+      // Re-check `closed` when the timer fires, not only when it is set:
+      // a close() during the wait must not be undone by a pending reconnect.
+      this.retryTimer = setTimeout(() => {
+        if (this.closed) return;
+        this.open();
+      }, this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 10_000);
     });
 
     this.socket.on("error", (err) => {
-      console.warn("[agent ws] error:", err.message);
+      // `npm run dev` starts the agent and the server together, so the first
+      // attempts lose the race by design. Only say so once it stops looking
+      // like a startup race and starts looking like the server being down.
+      this.failures += 1;
+      if (this.failures === 1 || this.failures % 10 === 0) {
+        console.warn(
+          `[agent ws] cannot reach ${this.url} (attempt ${this.failures}): ${err.message}` +
+            (this.failures === 1 ? " — retrying, this is normal while the server boots" : ""),
+        );
+      }
     });
   }
 
@@ -83,6 +101,7 @@ export class AgentSocket {
 
   close(): void {
     this.closed = true;
+    clearTimeout(this.retryTimer);
     this.socket?.close();
   }
 }

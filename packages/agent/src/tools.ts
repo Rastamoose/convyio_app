@@ -1,4 +1,4 @@
-import type { BoardItem } from "@workspace/shared";
+import type { AuthzDenyCode, BoardItem, WorkCapability } from "@workspace/shared";
 import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
@@ -27,6 +27,15 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
             "Workspace-relative paths the work will touch. An entry ending in \"/\" grants " +
             "that directory subtree; otherwise exactly that file. Approval authorizes only " +
             "this scope — mutations outside it are refused.",
+        },
+        capabilities: {
+          type: "array",
+          items: { type: "string", enum: ["file_write", "shell_repo", "network"] },
+          description:
+            "What the work needs to do. Omit for plain file edits (the default). " +
+            "Ask for shell_repo only if you must run commands — it is coarse, since a " +
+            "command's writes cannot be bounded by scope_paths — and network only if " +
+            "the work installs packages or reaches outside the machine.",
         },
       },
       required: ["title", "why", "effect", "scope_paths"],
@@ -90,6 +99,19 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
   },
   {
+    name: "search_files",
+    description:
+      "Search file contents across the workspace (like grep). Read-only; needs no board item.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Text or basic regex to search for" },
+        path: { type: "string", description: "Directory to search under; omit for the whole workspace" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "write_file",
     description:
       "Write a file in the shared workspace. Mutating: requires board_item_ref for an " +
@@ -119,7 +141,44 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       required: ["path", "content", "board_item_ref"],
     },
   },
+  {
+    name: "run_shell",
+    description:
+      "Run a shell command in the workspace root (tests, builds, git). Mutating: requires " +
+      "board_item_ref for an item that grants the shell_repo capability, or it will be refused.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Command line to run via sh -c" },
+        board_item_ref: { type: "string", description: "Backing board item ref, e.g. task-3" },
+      },
+      required: ["command", "board_item_ref"],
+    },
+  },
 ];
+
+/**
+ * What the model should do about each refusal. The denial itself is enforced
+ * server-side; this only tells the model how to get unstuck.
+ */
+const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
+  NO_BOARD_REF:
+    "No workable board item authorizes this. Use board_propose to request the scope, then wait for approval.",
+  ITEM_NOT_FOUND: "That ref does not exist. Check board_list, or board_propose a new item.",
+  ITEM_WRONG_SERVER: "That item belongs to another workspace. Propose the work here instead.",
+  ITEM_NOT_WORKABLE:
+    "That item is not approved or in_progress yet. Wait for a human to approve it before working.",
+  ITEM_DELETED: "That item was deleted. Stop this work and tell the team.",
+  SCOPE_VIOLATION:
+    "That path is outside the backing item's approved scope_paths. Stay within the approved scope, or board_propose a new item covering that path.",
+  CAPABILITY_MISSING:
+    "That item does not grant this kind of action. Propose a new item requesting the capability you need (e.g. shell_repo) and explain why.",
+  PLAN_MODE:
+    "The conversation is in plan mode: nothing may change yet. Finish the plan and tell the team what you would do.",
+  APPROVAL_DENIED: "A human declined this action. Do not retry it; ask what they would prefer.",
+  APPROVAL_UNAVAILABLE:
+    "The permission could not be recorded, so nothing ran. Report this and stop — do not retry mutations.",
+};
 
 export interface ToolHooks {
   /** Fired when the agent files a proposal (so it can block on it). */
@@ -128,6 +187,8 @@ export interface ToolHooks {
   onTaskActive(item: BoardItem): void;
   /** Fired so tool activity shows up in the visible run trace. */
   onActivity(line: string): void;
+  /** Conversation the actions belong to; selects the server-side permission mode. */
+  conversationId?: string | null;
 }
 
 export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolExecutor {
@@ -147,6 +208,9 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             // An omitted/empty scope goes through as [] so the server's
             // SCOPE_REQUIRED rejection reaches the model verbatim.
             scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
+            ...(Array.isArray(args.capabilities)
+              ? { capabilities: args.capabilities.map(String) as WorkCapability[] }
+              : {}),
           });
           hooks.onProposed(item);
           hooks.onActivity(`proposed ${item.ref}: ${item.title}`);
@@ -177,6 +241,15 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           const result = await board.requestAction({ kind: "read_file", path: str("path") }, null);
           return result.ok ? { content: result.output } : { error: result.error };
         }
+        case "search_files": {
+          const path = args.path ? str("path") : undefined;
+          hooks.onActivity(`search_files ${str("query")}`);
+          const result = await board.requestAction(
+            { kind: "search_files", query: str("query"), ...(path ? { path } : {}) },
+            null,
+          );
+          return result.ok ? { matches: result.output } : { error: result.error };
+        }
         case "list_files": {
           const path = args.path ? str("path") : undefined;
           hooks.onActivity(`list_files ${path ?? "."}`);
@@ -184,27 +257,25 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           return result.ok ? { listing: result.output } : { error: result.error };
         }
         case "write_file":
-        case "append_file": {
+        case "append_file":
+        case "run_shell": {
           const ref = str("board_item_ref");
           const item = board.resolve(ref);
           if (item && (item.status === "approved" || item.status === "in_progress")) {
             hooks.onTaskActive(item);
           }
-          hooks.onActivity(`${name} ${str("path")} (${ref || "no ref"})`);
+          const target = name === "run_shell" ? str("command") : str("path");
+          hooks.onActivity(`${name} ${target} (${ref || "no ref"})`);
           const result = await board.requestAction(
-            { kind: name, path: str("path"), content: str("content") },
+            name === "run_shell"
+              ? { kind: "run_shell", command: str("command") }
+              : { kind: name, path: str("path"), content: str("content") },
             ref || null,
+            hooks.conversationId ?? null,
           );
           if (!result.ok && result.code) {
             hooks.onActivity(`toolman denied ${name}: ${result.code}`);
-            return {
-              denied: result.code,
-              error: result.error,
-              note:
-                result.code === "SCOPE_VIOLATION"
-                  ? "That path is outside the backing item's approved scope_paths. Stay within the approved scope, or board_propose a new item covering that path."
-                  : "No workable board item authorizes this. Use board_propose to request the scope, then wait for approval.",
-            };
+            return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
           }
           return result.ok ? { done: result.output } : { error: result.error };
         }

@@ -89,6 +89,79 @@ describe("client event validation", () => {
     );
   });
 
+  test("agent activity frames enforce event, payload, and batch bounds", () => {
+    const activity = {
+      clientEventId: "activity-1",
+      kind: "agent.tool.started",
+      channelId: "channel-1",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      subjectId: "tool-1",
+      payload: { name: "Read", input: { path: "README.md" } },
+    };
+    assert.equal(
+      clientEventSchema.parse({ type: "activity_batch", events: [activity] }).type,
+      "activity_batch",
+    );
+    assert.throws(() => clientEventSchema.parse({ type: "activity_batch", events: [] }));
+    assert.throws(() =>
+      clientEventSchema.parse({ type: "activity_batch", events: [activity, activity] }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "activity_batch",
+        events: [{ ...activity, kind: "message.created" }],
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "activity_batch",
+        events: [{ ...activity, payload: { text: "x".repeat(4_001) } }],
+      }),
+    );
+  });
+
+  test("agent finish and conversation session frames are bounded", () => {
+    const finish = clientEventSchema.parse({
+      type: "agent_run_finish",
+      runId: "run-1",
+      channelId: "channel-1",
+      conversationId: null,
+      requestIds: [],
+      outcome: "failed",
+      finalContent: "could not finish",
+      error: "provider failed",
+      usage: { inputTokens: 10, outputTokens: 2 },
+    });
+    assert.equal(finish.type, "agent_run_finish");
+    assert.throws(() =>
+      clientEventSchema.parse({
+        ...finish,
+        requestIds: ["request-1", "request-1"],
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({ ...finish, finalContent: "x".repeat(4_001) }),
+    );
+    assert.equal(
+      clientEventSchema.parse({
+        type: "conversation_session_set",
+        conversationId: "conversation-1",
+        providerSessionId: "provider-session-1",
+        permissionMode: "plan",
+      }).type,
+      "conversation_session_set",
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "conversation_session_set",
+        conversationId: "conversation-1",
+        providerSessionId: "x".repeat(4_097),
+        permissionMode: "default",
+      }),
+    );
+  });
+
   test("message mentions cannot be supplied by a client", () => {
     const event = clientEventSchema.parse({
       type: "message",
@@ -96,5 +169,78 @@ describe("client event validation", () => {
       mentions: ["forged-agent-id"],
     });
     assert.equal(event.type === "message" && "mentions" in event, false);
+  });
+
+  test("runner hello accepts bounded ACP-like options and strips unknown fields", () => {
+    const event = clientEventSchema.parse({
+      type: "runner_hello",
+      protocolVersion: 1,
+      harness: { id: "claude", version: "0.1.0", localPath: "/secret" },
+      options: [
+        {
+          id: "model",
+          label: "Model",
+          category: "model",
+          kind: "select",
+          value: "sonnet",
+          choices: [{ value: "sonnet", label: "Sonnet" }],
+          apiKey: "secret",
+        },
+        {
+          id: "thinking",
+          label: "Thinking",
+          category: "thought_level",
+          kind: "boolean",
+          value: true,
+        },
+      ],
+      env: { TOKEN: "secret" },
+    });
+    assert.equal(event.type, "runner_hello");
+    assert.equal(event.type === "runner_hello" && "env" in event, false);
+    assert.equal(event.type === "runner_hello" && "localPath" in event.harness, false);
+    assert.equal(event.type === "runner_hello" && "apiKey" in event.options[0], false);
+  });
+
+  test("runner frames reject oversized, duplicate, and unstable diagnostics", () => {
+    const option = {
+      id: "model",
+      label: "Model",
+      category: "model",
+      kind: "select",
+      choices: [{ value: "sonnet", label: "Sonnet" }],
+    };
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "runner_hello",
+        protocolVersion: 1,
+        harness: { id: "claude", version: "0.1.0" },
+        options: Array.from({ length: 33 }, (_, index) => ({ ...option, id: `model-${index}` })),
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "runner_hello",
+        protocolVersion: 1,
+        harness: { id: "claude", version: "0.1.0" },
+        options: [option, option],
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "runner_status",
+        configRevision: 1,
+        health: "ready",
+        diagnosticCode: "contains local path /tmp",
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "runner_status",
+        configRevision: 1,
+        health: "ready",
+        effectiveModel: "x".repeat(201),
+      }),
+    );
   });
 });

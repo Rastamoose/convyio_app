@@ -10,7 +10,7 @@ import { MessageStore } from "../src/chat/MessageStore";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { createTestDb } from "./pgSchema";
 import { Sessions } from "../src/board/sessions";
-import { authorizeMutation } from "../src/board/Toolman";
+import { Toolman, authorizeMutation } from "../src/board/Toolman";
 import { scopeAllows, validateScopePaths } from "../src/board/scope";
 import { loadDemoScripts } from "../src/demo/script";
 import { createEnv } from "./helpers";
@@ -21,12 +21,13 @@ describe("scope authorization", async () => {
   const agent = await env.actor("agent", "noodle");
   after(() => env.close());
 
-  const approvedProposal = async (scopePaths: string[]) => {
+  const approvedProposal = async (scopePaths: string[], capabilities?: string[]) => {
     const { body } = await env.api("POST", "/api/board/items", agent.token, {
       title: "scoped work",
       why: "w",
       effect: "e",
       scopePaths,
+      ...(capabilities ? { capabilities } : {}),
     });
     await env.api("POST", `/api/board/items/${body.item.id}/approve`, human.token);
     return body.item;
@@ -79,6 +80,89 @@ describe("scope authorization", async () => {
       env.service,
     );
     assert.equal(normal.allow, true);
+  });
+
+  test("search_files treats its query as data and cannot escape the sandbox", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "toolman-"));
+    fs.writeFileSync(path.join(root, "hit.txt"), "needle here\n");
+    fs.writeFileSync(path.join(root, "miss.txt"), "nothing\n");
+    const outside = path.join(root, "..", `secret-${randomUUID()}.txt`);
+    fs.writeFileSync(outside, "needle outside\n");
+    const toolman = new Toolman(env.service, root);
+    await toolman.init();
+
+    const found = await toolman.execute(agent.actor, { kind: "search_files", query: "needle" }, null);
+    assert.equal(found.ok, true);
+    assert.match(String(found.output), /hit\.txt/);
+    assert.doesNotMatch(String(found.output), /secret-/);
+
+    // A query is a pattern, never shell syntax: the injection is searched for.
+    const injected = await toolman.execute(
+      agent.actor,
+      { kind: "search_files", query: `'; cat ${outside} #` },
+      null,
+    );
+    assert.equal(injected.ok, true);
+    assert.doesNotMatch(String(injected.output), /needle outside/);
+
+    // Searching above the root is refused before any command is built.
+    const escaped = await toolman.execute(
+      agent.actor,
+      { kind: "search_files", query: "needle", path: ".." },
+      null,
+    );
+    assert.equal(escaped.ok, false);
+    assert.match(String(escaped.error), /sandbox/);
+
+    fs.rmSync(outside, { force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test("an item grants only the capabilities it asked for", async () => {
+    const fileOnly = await approvedProposal(["billing/"]);
+    const shellDenied = await authorizeMutation(
+      agent.actor,
+      fileOnly.ref,
+      { name: "run_shell" },
+      env.service,
+    );
+    assert.equal(shellDenied.allow, false);
+    assert.equal(!shellDenied.allow && shellDenied.code, "CAPABILITY_MISSING");
+
+    const withShell = await approvedProposal(["billing/"], ["file_write", "shell_repo"]);
+    const shellAllowed = await authorizeMutation(
+      agent.actor,
+      withShell.ref,
+      { name: "run_shell" },
+      env.service,
+    );
+    // shell_repo is bounded by the sandbox root, not by scopePaths — a
+    // command's writes are not statically knowable.
+    assert.equal(shellAllowed.allow, true);
+  });
+
+  test("granting shell does not grant file writes outside scope", async () => {
+    const item = await approvedProposal(["billing/"], ["file_write", "shell_repo"]);
+    const outside = await authorizeMutation(
+      agent.actor,
+      item.ref,
+      { name: "write_file", path: "secrets/keys.txt" },
+      env.service,
+    );
+    assert.equal(outside.allow, false);
+    assert.equal(!outside.allow && outside.code, "SCOPE_VIOLATION");
+  });
+
+  test("an unclassified tool can never be authorized", async () => {
+    const item = await approvedProposal(["billing/"], ["file_write", "shell_repo", "network"]);
+    const unknown = await authorizeMutation(
+      agent.actor,
+      item.ref,
+      { name: "exfiltrate", path: "billing/x" },
+      env.service,
+    );
+    assert.equal(unknown.allow, false);
+    assert.equal(!unknown.allow && unknown.code, "CAPABILITY_MISSING");
   });
 
   test("read-only actions are not scope-gated", async () => {

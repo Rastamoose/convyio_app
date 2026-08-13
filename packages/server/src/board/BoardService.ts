@@ -8,7 +8,9 @@ import type {
   BoardItemEvent,
   ItemStatus,
   ThreadEventPayload,
+  WorkCapability,
 } from "@workspace/shared";
+import { WORK_CAPABILITIES } from "@workspace/shared";
 import type { Sql, WorkspaceDb } from "../db";
 import type { ThreadEventStore } from "../chat/ThreadEventStore";
 import { validateScopePaths } from "./scope";
@@ -130,6 +132,7 @@ export class BoardService {
       why?: string;
       effect?: string;
       scopePaths?: string[];
+      capabilities?: WorkCapability[];
     },
   ): Promise<BoardItem> {
     const human = actor.kind === "human";
@@ -142,6 +145,11 @@ export class BoardService {
       throw new ApiError(400, "SCOPE_REQUIRED", "agent proposals require non-empty scope_paths");
     }
     const scopePaths = this.normalizedScope(input.scopePaths);
+    // Unrequested capabilities are never granted; an empty ask stays NULL and
+    // means file writes only.
+    const capabilities = input.capabilities?.length
+      ? [...new Set(input.capabilities.filter((c) => WORK_CAPABILITIES.includes(c)))]
+      : null;
     const now = Date.now();
     const id = randomUUID();
     return this.mutate(actor, human ? "item.created" : "item.proposed", async (sql) => {
@@ -150,13 +158,14 @@ export class BoardService {
         INSERT INTO board_items
           (id, workspace_id, ref, title, description, status, origin, created_by,
            approved_by, owner, proposal_why, proposal_effect, scope_paths,
-           created_at, approved_at)
+           capabilities, created_at, approved_at)
         VALUES (
           ${id}, ${actor.workspaceId}, ${ref}, ${input.title}, ${input.description ?? null},
           ${human ? "approved" : "proposed"}, ${actor.kind}, ${actor.id},
           ${human ? actor.id : null}, ${null},
           ${human ? null : input.why!}, ${human ? null : input.effect!},
           ${scopePaths ? JSON.stringify(scopePaths) : null},
+          ${capabilities ? JSON.stringify(capabilities) : null},
           ${now}, ${human ? now : null}
         )
       `;
@@ -442,6 +451,7 @@ interface ItemRow {
   proposal_why: string | null;
   proposal_effect: string | null;
   scope_paths: string | null;
+  capabilities: string | null;
   created_at: number;
   approved_at: number | null;
   started_at: number | null;
@@ -450,6 +460,17 @@ interface ItemRow {
   created_by_name: string;
   approved_by_name: string | null;
   owner_name: string | null;
+}
+
+/** Unknown entries are dropped rather than trusted — grants fail closed. */
+function parseCapabilities(raw: string | null): WorkCapability[] | null {
+  if (!raw) return null;
+  const parsed: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!Array.isArray(parsed)) return null;
+  const kept = parsed.filter((c): c is WorkCapability =>
+    WORK_CAPABILITIES.includes(c as WorkCapability),
+  );
+  return kept.length ? kept : null;
 }
 
 function toItem(row: ItemRow): BoardItem {
@@ -467,6 +488,7 @@ function toItem(row: ItemRow): BoardItem {
     proposalWhy: row.proposal_why,
     proposalEffect: row.proposal_effect,
     scopePaths: row.scope_paths ? (JSON.parse(row.scope_paths) as string[]) : null,
+    capabilities: parseCapabilities(row.capabilities),
     createdAt: row.created_at,
     approvedAt: row.approved_at,
     startedAt: row.started_at,

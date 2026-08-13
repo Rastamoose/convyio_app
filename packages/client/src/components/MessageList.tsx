@@ -527,6 +527,8 @@ export function MessageList({
     firstUnreadId,
     markRead,
     loadOlder,
+    pendingInteractions,
+    resolveInteraction,
   } = useWorkspace();
   const selfName = self?.name ?? null;
 
@@ -862,6 +864,11 @@ export function MessageList({
                 runId={entry.run.runId}
                 agentName={entry.run.agentName}
                 chunks={entry.run.chunks}
+                startedAt={entry.run.startedAt}
+                interactions={pendingInteractions.filter(
+                  (request) => request.agentId === entry.run.agentId,
+                )}
+                onResolveInteraction={resolveInteraction}
               />
             );
           }
@@ -960,6 +967,7 @@ export function MessageList({
       {selectedMember && (
         <MemberCard
           participant={selectedMember.participant}
+          channel={channel}
           anchor={selectedMember.anchor}
           onDiscuss={onDiscuss}
           onPrefill={onPrefill}

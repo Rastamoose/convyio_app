@@ -1,17 +1,33 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ActivityBatchEvent,
   AgentConversation,
+  AgentRunFinishEvent,
   AgentRunRequest,
   AgentWorkAssignment,
   ChatMessage,
+  ConversationSessionSetEvent,
   PermissionMode,
   RunRequestStatus,
+  ThreadEvent,
+  ThreadEventKind,
+  TraceChunk,
 } from "@workspace/shared";
 import type { Sql, WorkspaceDb } from "../db";
 import type { MessageStore } from "./MessageStore";
 import type { ThreadEventStore } from "./ThreadEventStore";
 
 export class RunRequestAccessError extends Error {}
+
+export interface ConversationSessionUpdate {
+  conversation: AgentConversation;
+  event: ThreadEvent | null;
+}
+
+export interface AgentRunFinishResult {
+  message: ChatMessage | null;
+  events: ThreadEvent[];
+}
 
 /** Projects durable agent conversations and mention-triggered run requests. */
 export class AgentWorkStore {
@@ -132,6 +148,200 @@ export class AgentWorkStore {
           createdAt: now,
         });
       }
+    });
+  }
+
+  async appendActivity(agentId: string, batch: ActivityBatchEvent): Promise<ThreadEvent[]> {
+    return this.store.transaction(async (sql) => {
+      await this.requireAgent(sql, agentId);
+      for (const event of batch.events) {
+        await this.requireActivityScope(sql, agentId, event.channelId, event.conversationId);
+      }
+      const appended = await this.threadEvents.appendBatch(
+        sql,
+        batch.events.map((event) => ({
+          workspaceId: this.store.workspaceId,
+          channelId: event.channelId,
+          actorId: agentId,
+          kind: event.kind,
+          conversationId: event.conversationId,
+          runId: event.runId,
+          subjectId: event.subjectId,
+          parentId: event.parentId,
+          clientEventId: event.clientEventId,
+          payload: event.payload,
+        })),
+      );
+      return appended.filter((entry) => entry.inserted).map((entry) => entry.event);
+    });
+  }
+
+  async setConversationSession(
+    agentId: string,
+    event: ConversationSessionSetEvent,
+  ): Promise<ConversationSessionUpdate> {
+    return this.store.transaction(async (sql) => {
+      await this.requireAgent(sql, agentId);
+      const conversation = await this.requireConversation(sql, agentId, event.conversationId, undefined, true);
+      if (
+        conversation.provider_session_id === event.providerSessionId &&
+        conversation.permission_mode === event.permissionMode
+      ) {
+        return { conversation: toConversation(conversation), event: null };
+      }
+
+      const now = Date.now();
+      const [updated] = await sql<ConversationRow[]>`
+        UPDATE agent_conversations
+        SET provider_session_id = ${event.providerSessionId},
+            permission_mode = ${event.permissionMode},
+            updated_at = ${now}
+        WHERE id = ${conversation.id}
+        RETURNING *
+      `;
+      const [appended] = await this.threadEvents.appendBatch(sql, [{
+        workspaceId: updated.workspace_id,
+        channelId: updated.channel_id,
+        actorId: agentId,
+        kind: "agent.provider.session",
+        conversationId: updated.id,
+        subjectId: updated.id,
+        clientEventId: event.clientEventId,
+        payload: {
+          providerSessionIdSet: updated.provider_session_id !== null,
+          permissionMode: updated.permission_mode,
+        },
+        createdAt: now,
+      }]);
+      return {
+        conversation: toConversation(updated),
+        event: appended.inserted ? appended.event : null,
+      };
+    });
+  }
+
+  async finishRun(
+    agentId: string,
+    event: AgentRunFinishEvent,
+    trace: TraceChunk[],
+  ): Promise<AgentRunFinishResult> {
+    this.requireDistinctIdsOrEmpty(event.requestIds);
+    return this.store.transaction(async (sql) => {
+      const actorName = await this.requireAgent(sql, agentId);
+      const channel = await this.requireChannel(sql, event.channelId);
+      const requests = event.requestIds.length > 0
+        ? await this.lockOwned(sql, agentId, event.requestIds)
+        : [];
+      if (
+        requests.some(
+          (request) =>
+            request.channel_id !== event.channelId ||
+            request.conversation_id !== event.conversationId,
+        )
+      ) {
+        throw new RunRequestAccessError("work request does not match run scope");
+      }
+      if (event.conversationId) {
+        await this.requireConversation(sql, agentId, event.conversationId, event.channelId, true);
+      } else if (requests.length > 0) {
+        throw new RunRequestAccessError("durable work requires a conversation");
+      }
+
+      const finishClientEventId = `agent-run-finish:${event.runId}`;
+      const existing = await this.threadEvents.findByClientEvent(sql, agentId, finishClientEventId);
+      if (existing) {
+        this.requireMatchingFinish(existing, event);
+        return { message: null, events: [] };
+      }
+
+      const requestStatus: RunRequestStatus = event.outcome;
+      if (requests.some((request) => request.status !== "claimed" && request.status !== requestStatus)) {
+        throw new RunRequestAccessError("work request is not finishable");
+      }
+
+      const now = Date.now();
+      const committed: ThreadEvent[] = [];
+      const lifecycleKind: ThreadEventKind =
+        event.outcome === "completed"
+          ? "agent.run.completed"
+          : event.outcome === "cancelled"
+            ? "agent.run.cancelled"
+            : "agent.run.failed";
+      for (const request of requests) {
+        if (request.status === "claimed") {
+          const [finished] = await sql<RunRequestRow[]>`
+            UPDATE agent_run_requests
+            SET status = ${requestStatus}, completed_at = ${now}
+            WHERE id = ${request.id} AND status = 'claimed'
+            RETURNING *
+          `;
+          if (!finished) throw new Error("locked claimed work request could not be finished");
+          committed.push(await this.threadEvents.append(sql, {
+            workspaceId: finished.workspace_id,
+            channelId: finished.channel_id,
+            actorId: agentId,
+            kind: lifecycleKind,
+            conversationId: finished.conversation_id,
+            runId: event.runId,
+            subjectId: finished.id,
+            parentId: finished.message_id,
+            clientEventId: `${finishClientEventId}:request:${finished.id}`,
+            payload: {
+              requestId: finished.id,
+              messageId: finished.message_id,
+              outcome: event.outcome,
+            },
+            createdAt: now,
+          }));
+        }
+      }
+
+      let message: ChatMessage | null = null;
+      if (event.outcome !== "cancelled" && event.finalContent.trim()) {
+        message = {
+          id: randomUUID(),
+          authorId: agentId,
+          authorName: actorName,
+          authorKind: "agent",
+          content: event.finalContent,
+          timestamp: now,
+          channelId: channel.id,
+          channel: channel.name,
+          mentions: [],
+          runId: event.runId,
+          trace: trace.length > 0 ? trace : undefined,
+        };
+        committed.push(await this.messages.appendInTransaction(sql, message, {
+          conversationId: event.conversationId,
+          clientEventId: `${finishClientEventId}:message`,
+        }));
+      }
+
+      if (event.conversationId) {
+        await sql`
+          UPDATE agent_conversations SET updated_at = ${now}
+          WHERE id = ${event.conversationId}
+        `;
+      }
+      committed.push(await this.threadEvents.append(sql, {
+        workspaceId: this.store.workspaceId,
+        channelId: event.channelId,
+        actorId: agentId,
+        kind: lifecycleKind,
+        conversationId: event.conversationId,
+        runId: event.runId,
+        subjectId: event.runId,
+        clientEventId: finishClientEventId,
+        payload: {
+          requestIds: event.requestIds,
+          outcome: event.outcome,
+          ...(message ? { messageId: message.id } : {}),
+          ...(event.error ? { error: event.error } : {}),
+          ...(event.usage ? { usage: event.usage } : {}),
+        },
+        createdAt: now,
+      }));
+      return { message, events: committed };
     });
   }
 
@@ -268,11 +478,160 @@ export class AgentWorkStore {
     });
   }
 
+  private async requireAgent(sql: Sql, agentId: string): Promise<string> {
+    const [actor] = await sql<{ display_name: string }[]>`
+      SELECT a.display_name
+      FROM actors a
+      JOIN workspace_members m ON m.actor_id = a.id
+      WHERE a.id = ${agentId}
+        AND a.kind = 'agent'
+        AND m.workspace_id = ${this.store.workspaceId}
+    `;
+    if (!actor) throw new RunRequestAccessError("unknown agent identity");
+    return actor.display_name;
+  }
+
+  private async requireChannel(sql: Sql, channelId: string): Promise<ChannelRow> {
+    const [channel] = await sql<ChannelRow[]>`
+      SELECT id, name FROM channels WHERE id = ${channelId}
+    `;
+    if (!channel) throw new RunRequestAccessError("unknown channel");
+    return channel;
+  }
+
+  private async requireActivityScope(
+    sql: Sql,
+    agentId: string,
+    channelId: string,
+    conversationId: string | null,
+  ): Promise<void> {
+    await this.requireChannel(sql, channelId);
+    if (conversationId) {
+      await this.requireConversation(sql, agentId, conversationId, channelId, false);
+    }
+  }
+
+  private async requireConversation(
+    sql: Sql,
+    agentId: string,
+    conversationId: string,
+    channelId: string | undefined,
+    lock: boolean,
+  ): Promise<ConversationRow> {
+    const channel = channelId ? sql`AND channel_id = ${channelId}` : sql``;
+    const locking = lock ? sql`FOR UPDATE` : sql``;
+    const [conversation] = await sql<ConversationRow[]>`
+      SELECT * FROM agent_conversations
+      WHERE id = ${conversationId}
+        AND workspace_id = ${this.store.workspaceId}
+        AND agent_id = ${agentId}
+        ${channel}
+      ${locking}
+    `;
+    if (!conversation) throw new RunRequestAccessError("unknown or unowned conversation");
+    return conversation;
+  }
+
+  /**
+   * The mode governing a conversation's tool calls. Ownership is part of the
+   * lookup, so an agent cannot read a mode set on someone else's conversation;
+   * an unknown or unowned id falls back to the strictest prompting mode.
+   */
+  /**
+   * A human's choice of how much of the board grant runs without asking. Keyed
+   * on the agent and channel because that is what a person picks in the UI;
+   * the conversation may not exist until the agent is first mentioned, so an
+   * unmentioned agent's mode is stored the moment it is chosen.
+   */
+  async setPermissionMode(
+    actorId: string,
+    agentId: string,
+    channelId: string,
+    mode: PermissionMode,
+  ): Promise<AgentConversation> {
+    return this.store.transaction(async (sql) => {
+      const now = Date.now();
+      const [row] = await sql<ConversationRow[]>`
+        INSERT INTO agent_conversations (
+          id, workspace_id, agent_id, channel_id, provider_session_id,
+          permission_mode, status, created_at, updated_at
+        ) VALUES (
+          ${randomUUID()}, ${this.store.workspaceId}, ${agentId}, ${channelId},
+          NULL, ${mode}, 'active', ${now}, ${now}
+        )
+        ON CONFLICT (workspace_id, agent_id, channel_id)
+        DO UPDATE SET permission_mode = ${mode}, updated_at = ${now}
+        RETURNING *
+      `;
+      await this.threadEvents.append(sql, {
+        workspaceId: row.workspace_id,
+        channelId: row.channel_id,
+        actorId,
+        kind: "conversation.mode_changed",
+        conversationId: row.id,
+        subjectId: row.id,
+        payload: { permissionMode: mode, agentId },
+        createdAt: now,
+      });
+      return toConversation(row);
+    });
+  }
+
+  async permissionMode(agentId: string, conversationId: string): Promise<PermissionMode> {
+    const [row] = await this.store.sql<{ permission_mode: PermissionMode }[]>`
+      SELECT permission_mode FROM agent_conversations
+      WHERE id = ${conversationId}
+        AND workspace_id = ${this.store.workspaceId}
+        AND agent_id = ${agentId}
+    `;
+    return row?.permission_mode ?? "default";
+  }
+
+  async channelOfConversation(conversationId: string): Promise<string | null> {
+    const [row] = await this.store.sql<{ channel_id: string }[]>`
+      SELECT channel_id FROM agent_conversations
+      WHERE id = ${conversationId} AND workspace_id = ${this.store.workspaceId}
+    `;
+    return row?.channel_id ?? null;
+  }
+
+  private requireMatchingFinish(existing: ThreadEvent, event: AgentRunFinishEvent): void {
+    const requestIds = existing.payload.requestIds;
+    if (
+      existing.kind !==
+        (event.outcome === "completed"
+          ? "agent.run.completed"
+          : event.outcome === "cancelled"
+            ? "agent.run.cancelled"
+            : "agent.run.failed") ||
+      existing.channelId !== event.channelId ||
+      existing.conversationId !== event.conversationId ||
+      existing.runId !== event.runId ||
+      existing.payload.outcome !== event.outcome ||
+      !Array.isArray(requestIds) ||
+      requestIds.length !== event.requestIds.length ||
+      requestIds.some((id, index) => id !== event.requestIds[index])
+    ) {
+      throw new RunRequestAccessError("run id was already finalized with different data");
+    }
+  }
+
   private requireDistinctIds(requestIds: string[]): void {
     if (requestIds.length === 0 || new Set(requestIds).size !== requestIds.length) {
       throw new RunRequestAccessError("work request ids must be non-empty and unique");
     }
   }
+
+  private requireDistinctIdsOrEmpty(requestIds: string[]): void {
+    if (new Set(requestIds).size !== requestIds.length) {
+      throw new RunRequestAccessError("work request ids must be unique");
+    }
+  }
+}
+
+interface ChannelRow {
+  id: string;
+  name: string;
 }
 
 interface ConversationRow {

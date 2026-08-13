@@ -37,6 +37,18 @@ describe("PendingWork", () => {
     assert.deepEqual(work.entries(), []);
   });
 
+  test("repairs existing state permissions and writes private files", async () => {
+    const dir = await tempDir();
+    const file = path.join(dir, "pending-work.json");
+    await fs.writeFile(file, "{}", { mode: 0o644 });
+    await fs.chmod(dir, 0o755);
+    const work = await PendingWork.load(dir);
+    work.set("private", { origin: "x", channel: "general" });
+    await waitFor(async () => (await fs.readFile(file, "utf8")).includes("private") || undefined, "private pending-work write");
+    assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  });
+
   test("a failed write does not block later writes", async () => {
     const dir = await tempDir();
     const work = await PendingWork.load(dir);

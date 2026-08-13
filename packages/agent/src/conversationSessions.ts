@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PermissionMode } from "@workspace/shared";
+import { atomicWriteStateFile, secureExistingStateFile, secureStateDirectory } from "./stateFile";
 
 export interface ConversationSession {
   providerSessionId: string | null;
@@ -17,8 +18,9 @@ export class ConversationSessions {
   ) {}
 
   static async load(dataDir: string): Promise<ConversationSessions> {
-    await fs.mkdir(dataDir, { recursive: true });
+    await secureStateDirectory(dataDir);
     const file = path.join(dataDir, "conversation-sessions.json");
+    await secureExistingStateFile(file);
     return new ConversationSessions(file, await readSessions(file));
   }
 
@@ -34,11 +36,7 @@ export class ConversationSessions {
     const snapshot = Object.fromEntries(this.sessions);
     const write = this.writeQueue
       .catch(() => undefined)
-      .then(async () => {
-        const temporary = `${this.file}.tmp`;
-        await fs.writeFile(temporary, JSON.stringify(snapshot, null, 2), { mode: 0o600 });
-        await fs.rename(temporary, this.file);
-      });
+      .then(() => atomicWriteStateFile(this.file, JSON.stringify(snapshot, null, 2)));
     this.writeQueue = write;
     return write;
   }

@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  ACTION_CAPABILITY,
+  DEFAULT_CAPABILITIES,
   WORKABLE_STATUSES,
   type Actor,
   type AuthzDenyCode,
@@ -21,10 +24,21 @@ export interface ToolmanResult {
  * Tools that never change the world. Anything not listed here — including
  * tools that do not exist yet — is treated as mutating (fail closed).
  */
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files"]);
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "search_files"]);
 
 export function isMutating(toolName: string): boolean {
   return !READ_ONLY_TOOLS.has(toolName);
+}
+
+const SHELL_TIMEOUT_MS = 120_000;
+const SHELL_MAX_OUTPUT = 256 * 1024;
+/** Transport and model context both need a ceiling on tool output. */
+const OUTPUT_CLIP = 16_000;
+
+function clip(text: string): string {
+  return text.length <= OUTPUT_CLIP
+    ? text
+    : `${text.slice(0, OUTPUT_CLIP)}\n…[${text.length - OUTPUT_CLIP} more characters truncated]`;
 }
 
 /**
@@ -67,15 +81,20 @@ export async function authorizeMutation(
       message: `${item.ref} is ${item.status}; mutating work requires approved or in_progress`,
     };
   }
-  if (item.scopePaths) {
-    if (!action.path || !scopeAllows(item.scopePaths, action.path)) {
-      return {
-        allow: false,
-        code: "SCOPE_VIOLATION",
-        message: `${action.path ?? "(no path)"} is outside ${item.ref}'s scope (${item.scopePaths.join(", ")})`,
-      };
-    }
-  } else if (item.origin === "agent") {
+  // The item must grant this class of action. An unclassified tool has no
+  // capability and can never be granted one, so new tools fail closed.
+  const required = ACTION_CAPABILITY[action.name];
+  const granted = item.capabilities ?? DEFAULT_CAPABILITIES;
+  if (!required || !granted.includes(required)) {
+    return {
+      allow: false,
+      code: "CAPABILITY_MISSING",
+      message: required
+        ? `${item.ref} does not grant ${required} (grants: ${granted.join(", ")})`
+        : `${action.name} is not a classified capability and cannot be authorized`,
+    };
+  }
+  if (!item.scopePaths && item.origin === "agent") {
     // Agent proposals always carry scope (enforced at creation); an
     // agent-origin item without one fails closed rather than granting
     // unrestricted access.
@@ -84,6 +103,18 @@ export async function authorizeMutation(
       code: "SCOPE_VIOLATION",
       message: `${item.ref} declares no scope_paths; agent items cannot authorize unscoped work`,
     };
+  }
+  // Path scope binds file actions. A shell command's writes are not statically
+  // knowable, so shell_repo is bounded by the sandbox root instead — that
+  // coarseness is why it is a separate capability a human must grant.
+  if (required !== "shell_repo" && item.scopePaths) {
+    if (!action.path || !scopeAllows(item.scopePaths, action.path)) {
+      return {
+        allow: false,
+        code: "SCOPE_VIOLATION",
+        message: `${action.path ?? "(no path)"} is outside ${item.ref}'s scope (${item.scopePaths.join(", ")})`,
+      };
+    }
   }
   return { allow: true, item };
 }
@@ -103,17 +134,27 @@ export class Toolman {
     await fs.mkdir(this.workspaceRoot, { recursive: true });
   }
 
-  async execute(
-    actor: Actor,
-    action: ToolmanAction,
-    boardItemRef: string | null,
-  ): Promise<ToolmanResult> {
-    const authz = await authorizeMutation(
+  /**
+   * Layer 1 on its own: does the board authorize this at all? Exposed so the
+   * hub can settle the hard ceiling before asking a human to approve something
+   * the board would refuse anyway. `execute` re-checks, so this is an early
+   * answer rather than a substitute for enforcement.
+   */
+  authorize(actor: Actor, action: ToolmanAction, boardItemRef: string | null): Promise<AuthzResult> {
+    return authorizeMutation(
       actor,
       boardItemRef,
       { name: action.kind, path: "path" in action ? action.path : undefined },
       this.board,
     );
+  }
+
+  async execute(
+    actor: Actor,
+    action: ToolmanAction,
+    boardItemRef: string | null,
+  ): Promise<ToolmanResult> {
+    const authz = await this.authorize(actor, action, boardItemRef);
     if (!authz.allow) {
       // Every denial is an audit record.
       console.warn(
@@ -152,11 +193,72 @@ export class Toolman {
           await fs.appendFile(target, action.content);
           return { ok: true, output: `appended ${action.content.length} bytes to ${action.path}` };
         }
+        case "run_shell":
+          return await this.runShell(action.command);
+        case "search_files": {
+          // argv, never a shell string: the query is a search pattern and can
+          // never become syntax. grep's exit 1 means "no matches", which is an
+          // answer rather than a failure.
+          const result = await this.spawn("grep", [
+            "-rIn",
+            "--exclude-dir=node_modules",
+            "--exclude-dir=.git",
+            "-m",
+            "100",
+            "-e",
+            action.query,
+            "--",
+            target,
+          ]);
+          return result.ok ? result : { ok: true, output: result.output || "(no matches)" };
+        }
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       return { ok: false, error: detail };
     }
+  }
+
+  /**
+   * Runs a command in the sandbox root. The child gets a minimal environment —
+   * the parent's process.env holds agent tokens, provider keys and the database
+   * URL, none of which a tool may read or leak into its output.
+   */
+  private runShell(command: string): Promise<ToolmanResult> {
+    return this.spawn("/bin/sh", ["-c", command]);
+  }
+
+  /**
+   * Runs one program with an argument vector. Nothing is parsed as shell
+   * syntax, so caller-supplied values cannot become commands.
+   */
+  private spawn(file: string, args: string[]): Promise<ToolmanResult> {
+    return new Promise((resolve) => {
+      execFile(
+        file,
+        args,
+        {
+          cwd: this.workspaceRoot,
+          env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.workspaceRoot, LANG: "C" },
+          timeout: SHELL_TIMEOUT_MS,
+          maxBuffer: SHELL_MAX_OUTPUT,
+          killSignal: "SIGKILL",
+        },
+        (err, stdout, stderr) => {
+          const output = clip(`${stdout}${stderr ? `\n${stderr}` : ""}`);
+          if (err) {
+            const timedOut = "killed" in err && err.killed;
+            resolve({
+              ok: false,
+              error: timedOut ? `command timed out after ${SHELL_TIMEOUT_MS}ms` : err.message,
+              output,
+            });
+            return;
+          }
+          resolve({ ok: true, output: output || "(no output)" });
+        },
+      );
+    });
   }
 
   /** Resolve a path inside the workspace root, or null if it escapes. */

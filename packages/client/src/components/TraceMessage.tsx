@@ -1,8 +1,16 @@
-import { useMemo, useState } from "react";
-import type { ChatMessage, TraceChunk } from "@workspace/shared";
+import { useEffect, useMemo, useState } from "react";
+import type { ChatMessage, InteractionRequest, TraceChunk } from "@workspace/shared";
 import { formatElapsed } from "../lib/format";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
+import { PermissionCard } from "./PermissionCard";
+
+/** Toolman lines are tagged in the trace; everything else is prose. */
+const TOOL_LINE = /^\[toolman\] /;
+
+function countActions(chunks: TraceChunk[]): number {
+  return chunks.filter((c) => TOOL_LINE.test(c.content)).length;
+}
 
 function Chevron({ expanded }: { expanded: boolean }) {
   return (
@@ -39,11 +47,28 @@ export function TraceMessageLive({
   runId,
   agentName,
   chunks,
+  startedAt,
+  interactions = [],
+  onResolveInteraction,
 }: {
   runId: string;
   agentName: string;
   chunks: TraceChunk[];
+  startedAt: number;
+  /** Prompts this run is paused on; answering here is the same act as anywhere. */
+  interactions?: InteractionRequest[];
+  onResolveInteraction?: (requestId: string, decision: "approve" | "deny") => void;
 }) {
+  // A live run's age is the one thing that changes with no new frames.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const actions = countActions(chunks);
+  const paused = interactions.length > 0;
+
   return (
     <div id={`trace-${runId}`} className="mt-4 flex gap-4 py-0.5 pr-4 pl-4">
       <div className="pt-0.5">
@@ -56,12 +81,31 @@ export function TraceMessageLive({
         </div>
         <div className="mb-1 flex items-center gap-2 text-sm text-muted">
           <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-working opacity-75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-working" />
+            {!paused && (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-working opacity-75" />
+            )}
+            <span
+              className={`relative inline-flex h-2.5 w-2.5 rounded-full ${paused ? "bg-dead" : "bg-working"}`}
+            />
           </span>
-          is working…
+          {paused ? "needs your decision" : "is working…"}
+          <span className="text-faint">
+            {actions > 0 && `${actions} action${actions === 1 ? "" : "s"} · `}
+            {formatElapsed(now - startedAt)}
+          </span>
         </div>
         <TraceBody chunks={chunks} />
+        {paused && onResolveInteraction && (
+          <div className="mt-2 space-y-2 pl-[52px]">
+            {interactions.map((request) => (
+              <PermissionCard
+                key={request.id}
+                request={request}
+                onResolve={onResolveInteraction}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -79,6 +123,7 @@ export function TraceMessageFinished({
     () => (durationMs != null ? formatElapsed(durationMs) : null),
     [durationMs],
   );
+  const actions = useMemo(() => countActions(message.trace ?? []), [message.trace]);
 
   return (
     <div className="min-w-0">
@@ -92,7 +137,11 @@ export function TraceMessageFinished({
             className="flex items-center gap-1.5 text-xs text-muted hover:text-body"
           >
             <Chevron expanded={expanded} />
-            {expanded ? "Hide trace" : elapsed ? `Worked for ${elapsed}` : "View trace"}
+            {expanded
+              ? "Hide trace"
+              : [elapsed && `Worked for ${elapsed}`, actions > 0 && `${actions} actions`]
+                  .filter(Boolean)
+                  .join(" · ") || "View trace"}
           </button>
           {expanded && <TraceBody chunks={message.trace} />}
         </div>

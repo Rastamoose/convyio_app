@@ -31,35 +31,59 @@ export interface ListThreadEvents {
   limit: number;
 }
 
+export interface AppendedThreadEvent {
+  event: ThreadEvent;
+  inserted: boolean;
+}
+
 /** Persists and pages the canonical append-only workspace event stream. */
 export class ThreadEventStore {
   constructor(private store: WorkspaceDb) {}
 
   async append(sql: Sql, input: AppendThreadEvent): Promise<ThreadEvent> {
-    const id = input.id ?? randomUUID();
-    const rows = await sql<ThreadEventRow[]>`
-      INSERT INTO thread_events (
-        id, workspace_id, channel_id, actor_id, kind, conversation_id, run_id,
-        subject_id, parent_id, client_event_id, payload, created_at
-      ) VALUES (
-        ${id}, ${input.workspaceId}, ${input.channelId ?? null}, ${input.actorId},
-        ${input.kind}, ${input.conversationId ?? null}, ${input.runId ?? null},
-        ${input.subjectId ?? null}, ${input.parentId ?? null},
-        ${input.clientEventId ?? null}, ${sql.json(input.payload ?? {})},
-        ${input.createdAt ?? Date.now()}
-      )
-      ON CONFLICT (actor_id, client_event_id) WHERE client_event_id IS NOT NULL
-      DO NOTHING
-      RETURNING *
-    `;
-    if (rows[0]) return toThreadEvent(rows[0]);
+    return (await this.appendBatch(sql, [input]))[0].event;
+  }
 
-    const [existing] = await sql<ThreadEventRow[]>`
+  async appendBatch(sql: Sql, inputs: readonly AppendThreadEvent[]): Promise<AppendedThreadEvent[]> {
+    const appended: AppendedThreadEvent[] = [];
+    for (const input of inputs) {
+      const id = input.id ?? randomUUID();
+      const rows = await sql<ThreadEventRow[]>`
+        INSERT INTO thread_events (
+          id, workspace_id, channel_id, actor_id, kind, conversation_id, run_id,
+          subject_id, parent_id, client_event_id, payload, created_at
+        ) VALUES (
+          ${id}, ${input.workspaceId}, ${input.channelId ?? null}, ${input.actorId},
+          ${input.kind}, ${input.conversationId ?? null}, ${input.runId ?? null},
+          ${input.subjectId ?? null}, ${input.parentId ?? null},
+          ${input.clientEventId ?? null}, ${sql.json(input.payload ?? {})},
+          ${input.createdAt ?? Date.now()}
+        )
+        ON CONFLICT (actor_id, client_event_id) WHERE client_event_id IS NOT NULL
+        DO NOTHING
+        RETURNING *
+      `;
+      if (rows[0]) {
+        appended.push({ event: toThreadEvent(rows[0]), inserted: true });
+        continue;
+      }
+
+      const [existing] = await sql<ThreadEventRow[]>`
+        SELECT * FROM thread_events
+        WHERE actor_id = ${input.actorId} AND client_event_id = ${input.clientEventId ?? null}
+      `;
+      if (!existing) throw new Error("thread event insert conflicted without an idempotency match");
+      appended.push({ event: toThreadEvent(existing), inserted: false });
+    }
+    return appended;
+  }
+
+  async findByClientEvent(sql: Sql, actorId: string, clientEventId: string): Promise<ThreadEvent | null> {
+    const [row] = await sql<ThreadEventRow[]>`
       SELECT * FROM thread_events
-      WHERE actor_id = ${input.actorId} AND client_event_id = ${input.clientEventId ?? null}
+      WHERE actor_id = ${actorId} AND client_event_id = ${clientEventId}
     `;
-    if (!existing) throw new Error("thread event insert conflicted without an idempotency match");
-    return toThreadEvent(existing);
+    return row ? toThreadEvent(row) : null;
   }
 
   async list(options: ListThreadEvents): Promise<ThreadEvent[]> {

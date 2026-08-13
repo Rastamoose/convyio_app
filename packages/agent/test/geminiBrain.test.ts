@@ -29,7 +29,7 @@ function stubbedBrain(): { brain: GeminiBrain; requests: RecordedRequest[] } {
   return { brain, requests };
 }
 
-const noopCallbacks: BrainCallbacks = { onThought: () => {}, onText: () => {} };
+const noopCallbacks: BrainCallbacks = { onEvent: () => {} };
 
 describe("GeminiBrain", () => {
   test("image parts come before the text part in the first user content", async () => {
@@ -44,7 +44,7 @@ describe("GeminiBrain", () => {
       noopCallbacks,
     );
 
-    assert.equal(reply, "ok");
+    assert.equal(reply.text, "ok");
     assert.equal(requests.length, 1);
     const parts = requests[0].contents[0].parts;
     assert.equal(parts.length, 3);
@@ -63,5 +63,71 @@ describe("GeminiBrain", () => {
     const parts = requests[0].contents[0].parts;
     assert.equal(parts.length, 1);
     assert.equal(parts[0].text, "<context>\nctx\n</context>\n\nhello");
+  });
+
+  test("normalizes function lifecycle, plan updates, and exact streamed usage", async () => {
+    const brain = new GeminiBrain("fake-key", "fake-model");
+    let round = 0;
+    const ai = {
+      models: {
+        generateContentStream: async () => {
+          round += 1;
+          return (async function* () {
+            if (round === 1) {
+              yield {
+                candidates: [{ content: { parts: [{
+                  functionCall: {
+                    id: "call-1",
+                    name: "board_propose",
+                    args: { title: "Ship it" },
+                  },
+                }] } }],
+                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2, totalTokenCount: 12 },
+              };
+            } else {
+              yield {
+                candidates: [{ content: { parts: [{ text: "done" }] } }],
+                usageMetadata: {
+                  promptTokenCount: 5,
+                  candidatesTokenCount: 3,
+                  thoughtsTokenCount: 1,
+                  totalTokenCount: 9,
+                },
+              };
+            }
+          })();
+        },
+      },
+    };
+    (brain as unknown as { ai: typeof ai }).ai = ai;
+    const events: any[] = [];
+
+    const result = await brain.run(
+      {
+        system: "sys",
+        context: "ctx",
+        prompt: "hi",
+        tools: [{
+          name: "board_propose",
+          description: "Propose",
+          parameters: { type: "object", properties: { title: { type: "string" } } },
+        }],
+      },
+      { onEvent: (event) => events.push(event) },
+      { onToolCall: async () => ({ ok: true }) },
+    );
+
+    assert.deepEqual(
+      events.filter((event) => event.type !== "usage.reported").map((event) => event.type),
+      ["tool.started", "plan.updated", "tool.completed", "output.delta"],
+    );
+    assert.deepEqual(result.usage, {
+      inputTokens: 15,
+      outputTokens: 5,
+      thoughtTokens: 1,
+      totalTokens: 21,
+    });
+    assert.equal(result.providerSessionId, null);
+    assert.equal(result.text, "done");
   });
 });

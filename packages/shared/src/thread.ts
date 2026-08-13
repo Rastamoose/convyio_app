@@ -9,6 +9,17 @@ export interface JsonObject {
   [key: string]: JsonValue | undefined;
 }
 
+export interface NormalizedUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  thoughtTokens?: number;
+  toolTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+
 export type ThreadEventKind =
   | "message.created"
   | "message.edited"
@@ -31,6 +42,7 @@ export type ThreadEventKind =
   | "item.deleted"
   | "item.reopened"
   | "conversation.created"
+  | "conversation.mode_changed"
   | "agent.run.requested"
   | "agent.run.claimed"
   | "agent.run.requeued"
@@ -49,9 +61,14 @@ export type ThreadEventKind =
   | "agent.tool.progress"
   | "agent.tool.completed"
   | "agent.tool.failed"
+  | "agent.plan.updated"
+  | "agent.usage.reported"
+  | "agent.provider.session"
   | "agent.output.started"
   | "agent.output.delta"
-  | "agent.output.completed";
+  | "agent.output.completed"
+  | "interaction.requested"
+  | "interaction.resolved";
 
 export type ThreadEventPayload = JsonObject;
 
