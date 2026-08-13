@@ -56,6 +56,25 @@ describe("agent HTTP invites", async () => {
     const res = await env.api("DELETE", "/api/agents/not-a-uuid", human.token);
     assert.equal(res.status, 404);
   });
+
+  test("revoking an agent frees its name for a brand-new agent identity", async () => {
+    const human = await env.actor("human", "priya");
+    const first = await env.api("POST", "/api/agents", human.token, { name: "clone", provider: PROVIDER });
+    assert.equal(first.status, 201);
+    assert.equal(await env.db.isMember(first.body.actorId), true);
+
+    const revoke = await env.api("DELETE", `/api/agents/${first.body.id}`, human.token);
+    assert.equal(revoke.status, 200);
+    // The agent has no existence outside the workspace: once removed, it
+    // is no longer a member (unlike a removed human, whose actor row
+    // stays a global identity even if this workspace's membership ends).
+    assert.equal(await env.db.isMember(first.body.actorId), false);
+
+    const second = await env.api("POST", "/api/agents", human.token, { name: "clone", provider: PROVIDER });
+    assert.equal(second.status, 201, second.body.message);
+    // A genuinely new identity, not a resurrection of the old one.
+    assert.notEqual(second.body.actorId, first.body.actorId);
+  });
 });
 
 describe("agent invite websocket joins", async () => {

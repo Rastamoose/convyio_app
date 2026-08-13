@@ -183,12 +183,16 @@ async function route(
     return json(res, 201, { ...invite, token });
   }
 
-  // DELETE /api/agents/:id — revoke an agent invite (humans only).
+  // DELETE /api/agents/:id — revoke an agent invite (humans only). This
+  // also drops the agent's workspace membership: an agent has no identity
+  // outside the workspace that created it, so removal must fully retire
+  // the name for reuse, not just the token (see findActorByName).
   if (parts[1] === "agents" && parts.length === 3 && method === "DELETE") {
     if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove agents");
     const revoked = await agentInvites.revoke(parts[2]);
     if (!revoked) throw new ApiError(404, "NOT_FOUND", "no such agent invite");
+    await db.removeMember(revoked.actorId);
     if (onRevokeAgent) onRevokeAgent(revoked.actorId);
     return json(res, 200, { ok: true });
   }

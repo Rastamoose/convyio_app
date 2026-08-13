@@ -725,7 +725,7 @@ export function MessageInput({
                 displayRef.current.scrollTop = e.currentTarget.scrollTop;
               }
             }}
-            className="relative block max-h-[40vh] w-full resize-none overflow-y-auto break-words bg-transparent py-2.5 text-transparent outline-none"
+            className="text-input-no-focus-ring relative block max-h-[40vh] w-full resize-none overflow-y-auto break-words bg-transparent py-2.5 text-transparent outline-none"
             style={{ caretColor: "var(--color-body)" }}
             placeholder=""
             maxLength={MAX_LENGTH}

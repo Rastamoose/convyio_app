@@ -113,14 +113,27 @@ export class WorkspaceDb {
     return actor;
   }
 
-  /** Case-insensitive display-name lookup, matching upsertActor's dedupe
-   *  rule. Usernames are platform-global (permanent-username model), so
-   *  there is no workspace filter. */
+  /**
+   * Case-insensitive display-name lookup, matching upsertActor's dedupe
+   * rule. Humans are a global, permanent identity (the platform-wide
+   * username model), so the lookup has no workspace filter. Agents are
+   * not: an agent has no existence outside the workspace that created it,
+   * so its name is only taken while it is still a member here — once
+   * removed (invite revoked), its old actor row is inert history and the
+   * name is free again for what is, deliberately, a brand-new identity.
+   */
   async findActorByName(kind: ParticipantKind, displayName: string): Promise<Actor | null> {
-    const rows = await this.sql<ActorRow[]>`
-      SELECT * FROM actors
-      WHERE kind = ${kind} AND lower(display_name) = lower(${displayName})
-    `;
+    const rows =
+      kind === "agent"
+        ? await this.sql<ActorRow[]>`
+            SELECT a.* FROM actors a
+            JOIN workspace_members m ON m.actor_id = a.id AND m.workspace_id = ${this.workspaceId}
+            WHERE a.kind = 'agent' AND lower(a.display_name) = lower(${displayName})
+          `
+        : await this.sql<ActorRow[]>`
+            SELECT * FROM actors
+            WHERE kind = 'human' AND lower(display_name) = lower(${displayName})
+          `;
     return rows[0] ? this.toActor(rows[0]) : null;
   }
 

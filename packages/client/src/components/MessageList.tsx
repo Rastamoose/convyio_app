@@ -414,7 +414,7 @@ function InlineEditor({
         }
       }}
       rows={2}
-      className="w-full resize-none rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none"
+      className="text-input-no-focus-ring w-full resize-none rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none"
     />
   );
 }

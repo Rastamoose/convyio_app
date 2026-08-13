@@ -161,3 +161,11 @@ input:-webkit-autofill {
   outline-offset: 2px;
 }
 
+/* Composer/inline-edit textareas show focus via the caret + surrounding
+   highlight already; the generic keyboard-focus outline above just reads as
+   a stray box around them (and Firefox applies :focus-visible to text
+   inputs on plain mouse clicks, not just keyboard nav). */
+.text-input-no-focus-ring:focus-visible {
+  outline: none;
+}
+
