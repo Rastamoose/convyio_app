@@ -139,14 +139,10 @@ export class BoardService {
     if (!human && (!input.why || !input.effect)) {
       throw new ApiError(400, "PROPOSAL_FIELDS_REQUIRED", "agent proposals require why and effect");
     }
-    // Agent proposals must name the paths they intend to touch, so approval
-    // grants a bounded scope instead of unrestricted workspace access.
     if (!human && (!input.scopePaths || input.scopePaths.length === 0)) {
       throw new ApiError(400, "SCOPE_REQUIRED", "agent proposals require non-empty scope_paths");
     }
     const scopePaths = this.normalizedScope(input.scopePaths);
-    // Unrequested capabilities are never granted; an empty ask stays NULL and
-    // means file writes only.
     const capabilities = input.capabilities?.length
       ? [...new Set(input.capabilities.filter((c) => WORK_CAPABILITIES.includes(c)))]
       : null;

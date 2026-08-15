@@ -1,9 +1,10 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { Actor, AgentInvite, AgentProvider, ItemStatus, WorkCapability } from "@workspace/shared";
+import type { Actor, AgentInvite, AgentProvider, EcosystemImpact, ItemStatus, WorkCapability, WorkspaceSnapshot } from "@workspace/shared";
 import { WORK_CAPABILITIES } from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
+import type { PlanService } from "./PlanService";
 import type { Sessions } from "./sessions";
 import type { AgentInvites } from "../auth/AgentInvites";
 import type { Auth } from "../auth/Auth";
@@ -18,6 +19,7 @@ import {
 import type { WorkspaceDb } from "../db";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
+import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 const capabilitiesSchema = z.array(z.enum(WORK_CAPABILITIES as [WorkCapability, ...WorkCapability[]])).max(3);
@@ -96,6 +98,8 @@ export function createApiHandler(
   onUpdateAgent: ((profile: AgentInvite) => void) | null = null,
   onRevokeAgent: ((actorId: string) => void) | null = null,
   onRemoveMember: ((actorId: string) => void) | null = null,
+  snapshot?: WorkspaceSnapshotBuilder | null,
+  plans?: PlanService | null,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -194,6 +198,8 @@ export function createApiHandler(
           onUpdateAgent,
           onRevokeAgent,
           onRemoveMember,
+          snapshot,
+          plans,
         );
       }
     } catch (err) {
@@ -227,6 +233,8 @@ async function route(
   onUpdateAgent: ((profile: AgentInvite) => void) | null,
   onRevokeAgent: ((actorId: string) => void) | null,
   onRemoveMember: ((actorId: string) => void) | null,
+  snapshot: WorkspaceSnapshotBuilder | null | undefined,
+  plans: PlanService | null | undefined,
 ): Promise<void> {
   const method = req.method ?? "GET";
 
@@ -352,6 +360,73 @@ async function route(
     await messages.clear(actor.id, channel);
     await channels.remove(actor, name);
     return json(res, 200, { ok: true });
+  }
+
+  const impactMapSchema = z.object({
+    protocol: z.enum(["affected", "na"]),
+    server: z.enum(["affected", "na"]),
+    client: z.enum(["affected", "na"]),
+    agent: z.enum(["affected", "na"]),
+    database: z.enum(["affected", "na"]),
+    security: z.enum(["affected", "na"]),
+    deploy: z.enum(["affected", "na"]),
+    tests: z.enum(["affected", "na"]),
+    demos: z.enum(["affected", "na"]),
+    docs: z.enum(["affected", "na"]),
+    notes: z.record(z.string()).default({}),
+  });
+  const planBodySchema = z.object({
+    title: z.string().min(1).max(200),
+    objective: z.string().min(1).max(4000),
+    outline: z.array(z.string().min(1).max(500)).min(1).max(40),
+    impactMap: impactMapSchema.optional(),
+    constraints: z.array(z.string().min(1).max(500)).max(40).optional(),
+    decisions: z.array(z.string().min(1).max(500)).max(40).optional(),
+    acceptanceCriteria: z.array(z.string().min(1).max(500)).max(40).optional(),
+    clarifications: z.array(z.string().min(1).max(1000)).max(20).optional(),
+  });
+  const planDecisionSchema = z.object({ decision: z.string().min(1).max(1000) });
+
+  if (parts[1] === "board" && parts[2] === "plans") {
+    if (!plans) throw new ApiError(501, "NOT_IMPLEMENTED", "plans are not available");
+    if (parts.length === 3 && method === "GET") {
+      return json(res, 200, { plans: await plans.list(actor.workspaceId) });
+    }
+    if (parts.length === 3 && method === "POST") {
+      const body = planBodySchema.parse(await readBody(req));
+      return json(res, 201, { plan: await plans.create(actor, { ...body, impactMap: body.impactMap as EcosystemImpact | undefined }) });
+    }
+    const id = parts[3];
+    if (!id) throw new ApiError(404, "NOT_FOUND", "no such route");
+    if (parts.length === 4 && method === "GET") {
+      const plan = await plans.find(actor.workspaceId, id);
+      if (!plan) throw new ApiError(404, "PLAN_NOT_FOUND", `no plan ${id}`);
+      return json(res, 200, { plan });
+    }
+    if (parts.length === 5 && method === "POST") {
+      switch (parts[4]) {
+        case "accept":
+          return json(res, 200, { plan: await plans.accept(actor, id) });
+        case "complete":
+          return json(res, 200, { plan: await plans.complete(actor, id) });
+        case "cancel":
+          return json(res, 200, { plan: await plans.cancel(actor, id) });
+        case "decisions": {
+          const body = planDecisionSchema.parse(await readBody(req));
+          return json(res, 200, { plan: await plans.appendDecision(actor, id, body.decision) });
+        }
+        default:
+          throw new ApiError(404, "NOT_FOUND", "no such route");
+      }
+    }
+    throw new ApiError(404, "NOT_FOUND", "no such route");
+  }
+
+  // GET /api/workspace/snapshot — cursor-bearing board + context projection.
+  if (parts[1] === "workspace" && parts[2] === "snapshot" && parts.length === 3 && method === "GET") {
+    if (!snapshot) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace snapshot is not available");
+    const body: WorkspaceSnapshot = await snapshot.build();
+    return json(res, 200, body);
   }
 
   // GET /api/thread/events?channel_id=&before_seq=&limit= — canonical

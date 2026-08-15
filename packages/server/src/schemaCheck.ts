@@ -29,6 +29,8 @@ const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "agent_run_requests" },
   { table: "interaction_requests" },
   { table: "board_plans" },
+  { table: "board_plans", column: "clarifications" },
+  { table: "ref_counters", column: "plan_n" },
   { table: "board_items", column: "plan_id" },
   { table: "board_items", column: "acceptance_criteria" },
   { table: "board_items", column: "verification_evidence" },

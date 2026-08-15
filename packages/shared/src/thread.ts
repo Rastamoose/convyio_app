@@ -74,6 +74,7 @@ export type ThreadEventKind =
   | "plan.accepted"
   | "plan.completed"
   | "plan.cancelled"
+  | "plan.edited"
   | "context.created"
   | "context.superseded"
   | "context.cursor.acknowledged";

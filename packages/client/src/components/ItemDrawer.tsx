@@ -261,7 +261,7 @@ export function ItemDrawer({
         onClick={onClose}
         className="fixed top-12 right-0 bottom-0 left-0 z-30 animate-fade-in bg-black/20"
       />
-      <aside className="elevated fixed top-12 right-0 bottom-0 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto p-4">
+      <aside className="elevated fixed top-14 right-2 bottom-2 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto rounded-l-xl p-4">
         <div className="mb-3 flex items-center gap-2">
           <span className="rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
             {item.ref}

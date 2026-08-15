@@ -5,7 +5,9 @@ import type {
   BoardItem,
   BoardItemEvent,
   ItemStatus,
+  WorkspaceSnapshot,
 } from "@workspace/shared";
+import { mergeLiveItems } from "@workspace/shared";
 import type { ApiSession } from "./useApiSession";
 
 /** Compact system line derived from a board event, interleaved into chat. */
@@ -101,15 +103,15 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
     /** Welcome frame arrived (API session already bound): load the snapshot. */
     startSession: () => {
       setLines([]);
-      const request = api.fetch("/api/board/items?include_deleted=true");
+      const request = api.fetch("/api/workspace/snapshot");
       if (!request) return;
       void request
         .then(async (res) => {
           if (!res.ok) throw new Error(await api.errorMessage(res));
-          return res.json() as Promise<{ items: BoardItem[] }>;
+          return res.json() as Promise<WorkspaceSnapshot>;
         })
-        .then(({ items: loaded }) =>
-          setItems(loaded.filter((i) => i.deletedAt == null)),
+        .then((snapshot) =>
+          setItems((live) => mergeLiveItems(snapshot.items, live)),
         )
         .catch((err) => fail("Could not load the board", String(err)));
     },

@@ -43,9 +43,12 @@ currently dispatch work.
 5. The server does not currently construct or version the model's complete
    context wrapper.
 
-Agents load a board snapshot on join and update their cache from board
-websocket events. The current compact model summary omits the roster and board
-ownership.
+Agents load a cursor-bearing workspace snapshot on join
+(`/api/workspace/snapshot`) and merge it with any board envelopes that
+arrived while the snapshot was in flight. The welcome frame carries
+`snapshotSeq` so later events at or below that sequence are already
+represented. The current compact model summary includes owner names when
+present; the roster is not yet compiled into every run.
 
 ## Board and action authorization
 

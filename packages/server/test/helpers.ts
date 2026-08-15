@@ -25,6 +25,9 @@ import { createApiHandler, type AuthGate } from "../src/board/api";
 import { Hub } from "../src/hub";
 import { RunnerRuntime } from "../src/RunnerRuntime";
 import { createTestDb } from "./pgSchema";
+import { ContextStore } from "../src/context/ContextStore";
+import { WorkspaceSnapshotBuilder } from "../src/context/WorkspaceSnapshot";
+import { PlanService } from "../src/board/PlanService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
@@ -109,6 +112,12 @@ export async function createEnv(): Promise<Env> {
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const agentInvites = new AgentInvites(db);
   const runnerRuntime = new RunnerRuntime();
+  const snapshot = new WorkspaceSnapshotBuilder(
+    db,
+    service,
+    new PlanService(db, threadEvents),
+    new ContextStore(db, threadEvents),
+  );
   const handler = createApiHandler(
     db,
     service,
@@ -123,6 +132,9 @@ export async function createEnv(): Promise<Env> {
     runnerRuntime,
     null,
     null,
+    null,
+    snapshot,
+    new PlanService(db, threadEvents),
   );
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
@@ -288,6 +300,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites)
         : undefined,
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
+      threadEvents,
     },
   );
   channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);

@@ -46,7 +46,14 @@ async function renderBoard(item: BoardItem) {
     const api = useApiSession();
     return { ...useBoard(onError, api), bindSession: api.start };
   });
-  fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [item] }));
+  fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+    seq: 1,
+    generatedAt: Date.now(),
+    items: [item],
+    plans: [],
+    context: [],
+    members: [],
+  }));
   act(() => {
     rendered.result.current.bindSession("http://api.test", "tok-1");
     rendered.result.current.startSession();

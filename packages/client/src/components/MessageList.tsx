@@ -829,20 +829,17 @@ export function MessageList({
         className="min-h-0 flex-1 overflow-y-auto pb-4"
       >
         <PinnedMessages messages={messages} onJump={jumpToMessage} />
-        {/* The page: everything in the timeline reads inside one centered
-            column; only the pinned bar spans the full width. */}
-        <div className="mx-auto w-full max-w-3xl">
         {loadingOlder && (
           <div className="py-3 text-center text-xs text-faint">Loading messages…</div>
         )}
         {!hasMore && !loadingOlder && messages.length > 0 && (
-          <div className="py-3 text-center font-serif text-xs text-faint italic">
-            the beginning of #{channel}
+          <div className="py-3 text-center font-mono text-[10px] tracking-wider text-faint uppercase">
+            Beginning of #{channel}
           </div>
         )}
         {messages.length === 0 && activeRuns.length === 0 && (
           <div className="px-4 pt-12">
-            <h2 className="font-serif text-4xl font-bold tracking-tight text-body">
+            <h2 className="text-3xl font-bold tracking-tight text-body">
               <span className="text-accent">#</span>
               {channel}
             </h2>
@@ -860,8 +857,8 @@ export function MessageList({
         {timeline.map((entry) => {
           if (entry.kind === "board") {
             return (
-              <div key={entry.line.id} className="py-0.5 text-center font-serif text-xs text-faint italic">
-                · {renderContent(entry.line.text, null, true, onRefClick)}
+              <div key={entry.line.id} className="flex justify-center px-4 py-0.5 font-mono text-[11px] text-faint">
+                <span>· {renderContent(entry.line.text, null, true, onRefClick)}</span>
               </div>
             );
           }
@@ -888,17 +885,15 @@ export function MessageList({
               className={`transition ${highlightId === m.id ? "bg-accent/20" : ""} ${m.pending ? "opacity-50" : ""}`}
             >
               {firstUnread === m.id && (
-                <div className="my-3 flex items-center justify-center gap-3">
-                  <div className="h-px w-10 bg-accent/50" />
-                  <span className="font-serif text-sm text-accent italic">new</span>
-                  <div className="h-px w-10 bg-accent/50" />
+                <div className="mx-4 my-2 flex items-center gap-3">
+                  <span className="font-mono text-[10px] font-bold tracking-wider text-accent uppercase">New</span>
+                  <div className="h-px flex-1 bg-accent/40" />
                 </div>
               )}
               {newDay && (
-                <div className="mt-6 mb-2 flex items-center justify-center gap-3">
-                  <div className="h-px w-10 bg-divider" />
-                  <span className="font-serif text-sm text-muted italic">{formatDivider(m.timestamp)}</span>
-                  <div className="h-px w-10 bg-divider" />
+                <div className="mx-4 mt-4 mb-1 flex items-center gap-3">
+                  <span className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">{formatDivider(m.timestamp)}</span>
+                  <div className="h-px flex-1 bg-divider" />
                 </div>
               )}
               {grouped ? (
@@ -918,7 +913,7 @@ export function MessageList({
                 </div>
               ) : (
                 <div
-                  className={rowClasses(m, "group relative mt-5 flex gap-4 py-0.5 pr-4 pl-4")}
+                  className={rowClasses(m, "group relative mt-4 flex gap-4 py-0.5 pr-4 pl-4")}
                   onContextMenu={(e) => openContextMenu(e, m.id)}
                 >
                   <div className="pt-0.5">
@@ -941,7 +936,6 @@ export function MessageList({
           );
         })}
         <TypingRow typists={typists} />
-        </div>
         {lightbox && (
           <AttachmentLightbox
             attachment={lightbox}

@@ -45,6 +45,7 @@ export interface BoardPlan {
   constraints: string[];
   decisions: string[];
   acceptanceCriteria: string[];
+  clarifications: string[];
   status: PlanStatus;
   createdBy: string;
   acceptedBy: string | null;
@@ -115,6 +116,31 @@ export function isCompleteImpactMap(value: EcosystemImpact): boolean {
     if (assessment !== "affected" && assessment !== "na") return false;
     return assessment === "affected" ? Boolean(value.notes[surface]?.trim()) : true;
   });
+}
+
+export type PlanEventType =
+  | "plan.created"
+  | "plan.proposed"
+  | "plan.accepted"
+  | "plan.completed"
+  | "plan.cancelled"
+  | "plan.edited";
+
+export interface PlanEventEnvelope {
+  channel: "plan";
+  type: PlanEventType;
+  workspace_id: string;
+  actor: { id: string; kind: "human" | "agent"; display_name: string };
+  plan: BoardPlan;
+  ts: string;
+}
+
+export function isPlanEnvelope(event: unknown): event is PlanEventEnvelope {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as { channel?: unknown }).channel === "plan"
+  );
 }
 
 /** Merge a snapshot with events that arrived while it was loading. */

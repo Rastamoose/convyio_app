@@ -11,6 +11,7 @@ import {
   type AgentRunFinishEvent,
   type Attachment,
   type BoardEventEnvelope,
+  type PlanEventEnvelope,
   type ChannelInfo,
   type ChatMessage,
   type ClientEvent,
@@ -134,6 +135,10 @@ export class Hub {
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
     this.broadcast(envelope);
     this.onBoardEvent?.(envelope);
+  }
+
+  broadcastPlanEvent(envelope: PlanEventEnvelope): void {
+    this.broadcast(envelope);
   }
 
   broadcastChannelCreated(channel: ChannelInfo): void {

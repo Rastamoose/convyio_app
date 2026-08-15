@@ -430,12 +430,9 @@ export function MessageInput({
   };
 
   return (
-    <div className="relative shrink-0 px-4 pb-6">
-      {/* The composer follows the timeline's centered reading column; the
-          popups position against this wrapper so they track it. */}
-      <div className="relative mx-auto w-full max-w-3xl">
+    <div className="relative shrink-0 border-t border-divider px-4 pb-6">
       {commandOpen && (
-        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Commands
           </div>
@@ -466,7 +463,7 @@ export function MessageInput({
         </div>
       )}
       {mentionOpen && (
-        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Members
           </div>
@@ -493,7 +490,7 @@ export function MessageInput({
         </div>
       )}
       {shortcodeOpen && (
-        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Emoji
           </div>
@@ -521,7 +518,7 @@ export function MessageInput({
       {emojiPickerOpen && (
         <div
           ref={emojiPopupRef}
-          className="elevated absolute bottom-full left-0 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg p-2"
+          className="elevated absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg p-2"
         >
           {EMOJI_GRID.map((emoji, i) => (
             <button
@@ -647,7 +644,7 @@ export function MessageInput({
           ))}
         </div>
       )}
-      <div className="relative flex items-end gap-3 rounded-lg bg-composer px-4">
+      <div className="relative flex items-end gap-3 pt-1">
         <input
           ref={fileRef}
           type="file"
@@ -748,7 +745,6 @@ export function MessageInput({
             {remaining}
           </span>
         )}
-      </div>
       </div>
     </div>
   );

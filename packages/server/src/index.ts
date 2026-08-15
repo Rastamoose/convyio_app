@@ -19,6 +19,7 @@ import { Auth } from "./auth/Auth";
 import { AgentInvites } from "./auth/AgentInvites";
 import { createJoinGate } from "./auth/joinPolicy";
 import { BoardService } from "./board/BoardService";
+import { PlanService } from "./board/PlanService";
 import { Toolman } from "./board/Toolman";
 import { Sessions } from "./board/sessions";
 import { createApiHandler, type AuthGate } from "./board/api";
@@ -26,6 +27,9 @@ import { loadDemoScripts } from "./demo/script";
 import { DemoOrchestrator } from "./demo/DemoOrchestrator";
 import { RunnerRuntime } from "./RunnerRuntime";
 import { assertSchemaCurrent, SchemaOutOfDateError } from "./schemaCheck";
+import { ContextStore } from "./context/ContextStore";
+import { ContextCursorStore } from "./context/ContextCursorStore";
+import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
 
 const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 const MIGRATIONS_DIR = path.resolve(
@@ -46,6 +50,10 @@ async function main() {
   const messages = new MessageStore(db, threadEvents);
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const service = new BoardService(db, threadEvents);
+  const plans = new PlanService(db, threadEvents);
+  const context = new ContextStore(db, threadEvents);
+  const contextCursors = new ContextCursorStore(db, threadEvents);
+  const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
   const interactions = new InteractionStore(db, threadEvents);
   // Prompts from a previous process have no waiter left to answer them. This
   // is tidying, not a precondition: a transient database hiccup here must not
@@ -109,6 +117,8 @@ async function main() {
     (profile) => agentConfigUpdater.update?.(profile),
     (actorId) => agentRevoker.close?.(actorId),
     (actorId) => memberRemover.close?.(actorId),
+    snapshot,
+    plans,
   );
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -147,12 +157,15 @@ async function main() {
         ? createJoinGate(authGate.auth, config.agentToken, agentInvites)
         : async () => ({ ok: false }),
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
+      threadEvents,
+      contextCursors,
     },
   );
   agentConfigUpdater.update = (profile) => hub.updateAgentConfig(profile);
   agentRevoker.close = (actorId) => hub.closeAgentConnection(actorId);
   memberRemover.close = (actorId) => hub.closeHumanConnection(actorId);
   service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
+  plans.onEvent = (envelope) => hub.broadcastPlanEvent(envelope);
   channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);

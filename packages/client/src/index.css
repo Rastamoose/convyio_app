@@ -63,9 +63,6 @@
   --font-mono:
     "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
-  /* Editorial display face: headlines and datelines only, never body text.
-     ui-serif resolves to New York on macOS, Georgia elsewhere. */
-  --font-serif: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
 
   /* Shared enter animations — referenced by name across components. */
   --animate-fade-in: fade-in 150ms ease-out;

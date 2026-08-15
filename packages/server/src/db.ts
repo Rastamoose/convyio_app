@@ -88,6 +88,17 @@ export class WorkspaceDb {
     return `task-${row.n}`;
   }
 
+  async nextPlanRef(sql: Sql, workspaceId: string): Promise<string> {
+    await sql`
+      INSERT INTO ref_counters (workspace_id, n, plan_n) VALUES (${workspaceId}, 0, 0)
+      ON CONFLICT (workspace_id) DO NOTHING
+    `;
+    const [row] = await sql<{ plan_n: number }[]>`
+      UPDATE ref_counters SET plan_n = plan_n + 1 WHERE workspace_id = ${workspaceId} RETURNING plan_n
+    `;
+    return `plan-${row.plan_n}`;
+  }
+
   /**
    * Find or create a persistent actor identity for a joining participant.
    * A newly created agent is also registered as a workspace member

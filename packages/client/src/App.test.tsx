@@ -57,6 +57,7 @@ vi.mock("./ws", () => {
           demoChannels: [],
           token: "tok-1",
           apiUrl: "http://api.test",
+          snapshotSeq: 0,
         });
       }
     }

@@ -1,6 +1,5 @@
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { ThemeToggle } from "./ThemeToggle";
-import { PinIcon } from "./PinnedMessages";
 
 export type WorkspaceView = "chat" | "board";
 
@@ -10,16 +9,12 @@ export function TopBar({
   onSetView,
   sidebarOpen,
   onToggleSidebar,
-  boardPinned,
-  onToggleBoardPin,
 }: {
   channel: string;
   view: WorkspaceView;
   onSetView: (view: WorkspaceView) => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  boardPinned: boolean;
-  onToggleBoardPin: () => void;
 }) {
   const { demoChannels, startDemo } = useWorkspace();
 
@@ -62,7 +57,7 @@ export function TopBar({
         </svg>
       </button>
       {view === "chat" && (
-        <span className="min-w-0 truncate font-serif text-xl font-bold tracking-tight text-body select-none">
+        <span className="min-w-0 truncate text-lg font-bold tracking-tight text-body select-none">
           <span className="text-accent">#</span>
           {channel}
         </span>
@@ -72,21 +67,6 @@ export function TopBar({
         {tab("board", "Board")}
       </div>
       <div className="flex shrink-0 items-center gap-2.5">
-        {view === "chat" && (
-          <button
-            onClick={onToggleBoardPin}
-            aria-label={boardPinned ? "Unpin the board pane" : "Pin the board beside the chat"}
-            aria-pressed={boardPinned}
-            title={boardPinned ? "Unpin the board pane" : "Pin the board beside the chat"}
-            className={`flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md transition select-none ${
-              boardPinned
-                ? "bg-accent/15 text-accent"
-                : "text-muted hover:bg-subtle-hover hover:text-body"
-            }`}
-          >
-            <PinIcon className="h-3.5 w-3.5" />
-          </button>
-        )}
         {demoChannels.includes(channel) && (
           <button
             onClick={() => startDemo(channel)}

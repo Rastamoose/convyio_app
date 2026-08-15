@@ -14,6 +14,7 @@ the wire protocol (websocket) and the HTTP board API.
 - `board.ts` — board item/event shapes, workable statuses, authz contract.
 - `agentWork.ts` — durable agent conversation, run-request, permission-mode and interaction shapes.
 - `thread.ts` — canonical append-only workspace event and channel shapes.
+- `context.ts` — plan, context-entry, cursor and workspace-snapshot shapes.
 - `protocol.ts` — the wire protocol: zod schemas for client→server frames,
   types for server→client frames.
 
@@ -77,6 +78,15 @@ the wire protocol (websocket) and the HTTP board API.
 - `staticSite.ts` — serves the built client so production needs one origin
   and no second server; unknown paths fall back to index.html (SPA routing).
   Wired only when the dist directory exists (dev stays API-only).
+- `ContextStore` (`context/`) — durable shared-context entries (decision,
+  constraint, fact, blocker, handoff, summary). Entries are attributed and
+  superseded, never rewritten. → WorkspaceDb, ThreadEventStore
+- `ContextCursorStore` (`context/`) — per-actor acknowledged workspace-event
+  cursor; never rewinds. → WorkspaceDb, ThreadEventStore
+- `WorkspaceSnapshotBuilder` (`context/`) — cursor-bearing projection of
+  items, members and active context. Captures thread_events.seq first so
+  live events after that seq remain applyable. → WorkspaceDb, BoardService,
+  ContextStore
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
   pipeline.  → Hub, Roster, BoardService
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.

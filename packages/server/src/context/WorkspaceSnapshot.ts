@@ -1,6 +1,7 @@
 import type { WorkspaceSnapshot } from "@workspace/shared";
 import type { WorkspaceDb } from "../db";
 import type { BoardService } from "../board/BoardService";
+import type { PlanService } from "../board/PlanService";
 import type { ContextStore } from "./ContextStore";
 
 /**
@@ -12,6 +13,7 @@ export class WorkspaceSnapshotBuilder {
   constructor(
     private store: WorkspaceDb,
     private board: BoardService,
+    private plans: PlanService,
     private context: ContextStore,
   ) {}
 
@@ -23,8 +25,9 @@ export class WorkspaceSnapshotBuilder {
       SELECT max(seq) AS seq FROM thread_events
       WHERE workspace_id = ${this.store.workspaceId}
     `;
-    const [items, context, members] = await Promise.all([
+    const [items, plans, context, members] = await Promise.all([
       this.board.list(this.store.workspaceId, { includeDeleted: true }),
+      this.plans.list(this.store.workspaceId),
       this.context.listActive(),
       this.store.listMembers(),
     ]);
@@ -32,7 +35,7 @@ export class WorkspaceSnapshotBuilder {
       seq: seqRow?.seq ?? 0,
       generatedAt: Date.now(),
       items: items.filter((item) => item.deletedAt == null),
-      plans: [],
+      plans,
       context,
       members,
     };

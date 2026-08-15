@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import {
   ACTION_CAPABILITY,
   isBoardEnvelope,
+  mergeLiveItems,
   type ActionResultEvent,
   type BoardItem,
+  type BoardPlan,
   type ToolmanAction,
   type WorkCapability,
+  type WorkspaceSnapshot,
 } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
 
@@ -52,13 +55,10 @@ export class BoardClient {
     this.token = token;
     this.apiUrl = apiUrl;
     try {
-      const { items } = (await this.api("GET", "/api/board/items?include_deleted=true")) as {
-        items: BoardItem[];
-      };
+      const snapshot = (await this.api("GET", "/api/workspace/snapshot")) as WorkspaceSnapshot;
+      const merged = mergeLiveItems(snapshot.items, [...this.items.values()]);
       this.items.clear();
-      for (const item of items) {
-        if (!item.deletedAt) this.items.set(item.id, item);
-      }
+      for (const item of merged) this.items.set(item.id, item);
       return true;
     } catch (err) {
       console.warn("[agent] board refresh failed:", err);
@@ -82,6 +82,16 @@ export class BoardClient {
   // -------------------------------------------------------------------------
   // Board lifecycle (HTTP)
   // -------------------------------------------------------------------------
+
+  async proposePlan(fields: {
+    title: string;
+    objective: string;
+    outline: string[];
+    clarifications: string[];
+  }): Promise<BoardPlan> {
+    const { plan } = (await this.api("POST", "/api/board/plans", fields)) as { plan: BoardPlan };
+    return plan;
+  }
 
   async propose(fields: {
     title: string;
@@ -185,7 +195,8 @@ export class BoardClient {
         const proposal =
           i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
         const scope = i.scopePaths ? ` — scope: ${i.scopePaths.join(", ")}` : "";
-        return `${i.ref} [${i.status}] ${i.title}${proposal}${scope}`;
+        const owner = i.ownerName ? ` — owner: ${i.ownerName}` : "";
+        return `${i.ref} [${i.status}] ${i.title}${owner}${proposal}${scope}`;
       })
       .join("\n");
   }

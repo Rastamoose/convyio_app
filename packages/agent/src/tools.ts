@@ -9,6 +9,26 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     parameters: { type: "object", properties: {} },
   },
   {
+    name: "board_propose_plan",
+    description:
+      "Propose a read-only megaplan: objective, outline, impact map and at least one clarification. " +
+      "Acceptance does not authorize mutations. After proposing, wait for a human to accept it.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short plan title" },
+        objective: { type: "string", description: "What done looks like" },
+        outline: { type: "array", items: { type: "string" }, description: "Ordered high-level steps" },
+        clarifications: {
+          type: "array",
+          items: { type: "string" },
+          description: "At least one clarifying question you asked, and the answer",
+        },
+      },
+      required: ["title", "objective", "outline", "clarifications"],
+    },
+  },
+  {
     name: "board_propose",
     description:
       "Propose a new board item when needed work is not covered by any approved item. " +
@@ -199,6 +219,20 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         case "board_list": {
           hooks.onActivity("board_list");
           return { board: board.summary() };
+        }
+        case "board_propose_plan": {
+          const plan = await board.proposePlan({
+            title: str("title"),
+            objective: str("objective"),
+            outline: Array.isArray(args.outline) ? args.outline.map(String) : [],
+            clarifications: Array.isArray(args.clarifications) ? args.clarifications.map(String) : [],
+          });
+          hooks.onActivity(`proposed plan ${plan.ref}: ${plan.title}`);
+          return {
+            ref: plan.ref,
+            status: plan.status,
+            note: "Plan filed. A human must accept it; acceptance grants no mutating authority.",
+          };
         }
         case "board_propose": {
           const item = await board.propose({

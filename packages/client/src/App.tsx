@@ -9,6 +9,7 @@ import { FileDropZone } from "./components/FileDropZone";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
+import { StatusBar } from "./components/StatusBar";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
@@ -462,11 +463,6 @@ function Workspace() {
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.localStorage.getItem("convyio:sidebar-open") !== "0",
   );
-  // The board pinned beside the chat — the workbench. The Board tab still
-  // gives it the full window; the pin keeps sign-off visible mid-conversation.
-  const [boardPinned, setBoardPinned] = useState(
-    () => window.localStorage.getItem("convyio:board-pinned") === "1",
-  );
 
   // Switching channels leaves any in-flight reply behind and marks the
   // channel we're entering as read (also covers the initial mount).
@@ -504,11 +500,10 @@ function Workspace() {
   useEffect(() => {
     try {
       window.localStorage.setItem("convyio:sidebar-open", sidebarOpen ? "1" : "0");
-      window.localStorage.setItem("convyio:board-pinned", boardPinned ? "1" : "0");
     } catch {
-      // Private-mode storage denial: the toggles still apply for this session.
+      // Private-mode storage denial: the toggle still applies for this session.
     }
-  }, [sidebarOpen, boardPinned]);
+  }, [sidebarOpen]);
 
   // Single window-level listener for the global shortcuts, registered
   // with useCapture so it runs before MessageInput's own keydown handling —
@@ -595,67 +590,58 @@ function Workspace() {
   };
 
   return (
-    <div className="app-frame flex h-full">
-      {/* The sidebar rests on the canvas; collapsing animates its width to
-          zero while the inner aside holds its fixed 240px width. */}
-      <div
-        className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          sidebarOpen ? "w-60" : "w-0"
-        }`}
-      >
-        <Sidebar
-          channel={channel}
-          onSelectChannel={setChannel}
-          onDiscuss={discussItem}
-          onPrefill={prefillText}
-        />
-      </div>
-      <main className="flex min-w-0 flex-1 flex-col bg-chat">
+    <div className="app-frame flex h-full flex-col">
+      <div className="flex min-h-0 flex-1">
+        {/* The sidebar rests on the canvas, flush to the window edge;
+            collapsing animates width+padding to zero while the inner aside
+            holds its fixed 240px width. */}
+        <div
+          className={`shrink-0 overflow-hidden transition-[width,padding] duration-200 ease-out ${
+            sidebarOpen ? "w-60 pr-2" : "w-0"
+          }`}
+        >
+          <Sidebar
+            channel={channel}
+            onSelectChannel={setChannel}
+            onDiscuss={discussItem}
+            onPrefill={prefillText}
+          />
+        </div>
+        <main
+          className={`mt-2 mb-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-divider bg-chat shadow-sm ${
+            sidebarOpen ? "" : "ml-2"
+          }`}
+        >
         <TopBar
           channel={channel}
           view={view}
           onSetView={setView}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
-          boardPinned={boardPinned}
-          onToggleBoardPin={() => setBoardPinned((p) => !p)}
         />
         {view === "chat" ? (
-          <div className="flex min-h-0 flex-1">
-            <FileDropZone
-              onFiles={(files) => workspace.addAttachments(channel, files)}
-            >
-              <MessageList
-                channel={channel}
-                onRefClick={handleRefClick}
-                onReply={setReplyTo}
-                editingId={editingId}
-                onEditingIdChange={setEditingId}
-                onDiscuss={discussItem}
-                onPrefill={prefillText}
-              />
-              <MessageInput
-                channel={channel}
-                onSend={handleSend}
-                prefill={prefill}
-                replyTo={replyTo}
-                onCancelReply={() => setReplyTo(null)}
-                editingId={editingId}
-                onRequestEditLast={setEditingId}
-              />
-            </FileDropZone>
-            {boardPinned && (
-              <aside className="flex w-[400px] shrink-0 flex-col border-l border-divider">
-                <BoardView
-                  highlightRef={highlightRef}
-                  openItemId={openItemId}
-                  onOpenItem={setOpenItemId}
-                  onDiscuss={discussItem}
-                  onJumpToTrace={jumpToTrace}
-                />
-              </aside>
-            )}
-          </div>
+          <FileDropZone
+            onFiles={(files) => workspace.addAttachments(channel, files)}
+          >
+            <MessageList
+              channel={channel}
+              onRefClick={handleRefClick}
+              onReply={setReplyTo}
+              editingId={editingId}
+              onEditingIdChange={setEditingId}
+              onDiscuss={discussItem}
+              onPrefill={prefillText}
+            />
+            <MessageInput
+              channel={channel}
+              onSend={handleSend}
+              prefill={prefill}
+              replyTo={replyTo}
+              onCancelReply={() => setReplyTo(null)}
+              editingId={editingId}
+              onRequestEditLast={setEditingId}
+            />
+          </FileDropZone>
         ) : (
           <BoardView
             highlightRef={highlightRef}
@@ -665,7 +651,9 @@ function Workspace() {
             onJumpToTrace={jumpToTrace}
           />
         )}
-      </main>
+        </main>
+      </div>
+      <StatusBar channel={channel} view={view} />
       {!workspace.connected && (
         <div
           role="status"

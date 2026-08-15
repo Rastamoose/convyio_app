@@ -4,7 +4,7 @@ import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
 import type { AgentInvite } from "./agent";
 import type { AgentConversation, AgentWorkAssignment, InteractionRequest } from "./agentWork";
 import type { ChannelInfo, ThreadEvent } from "./thread";
-import type { ContextCursor } from "./context";
+import type { ContextCursor, PlanEventEnvelope } from "./context";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -662,4 +662,5 @@ export type ServerEvent =
   | InterruptBroadcast
   | RunEndBroadcast
   | ActionResultEvent
+  | PlanEventEnvelope
   | BoardEventEnvelope;
