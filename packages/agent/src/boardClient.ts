@@ -111,6 +111,7 @@ export class BoardClient {
     planId: string;
     owner?: string;
     acceptanceCriteria?: string[];
+    projectId?: string;
   }): Promise<BoardItem> {
     const { item } = (await this.api("POST", "/api/board/items", fields)) as { item: BoardItem };
     this.items.set(item.id, item);

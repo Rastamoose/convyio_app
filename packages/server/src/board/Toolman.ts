@@ -24,7 +24,14 @@ export interface ToolmanResult {
  * Tools that never change the world. Anything not listed here — including
  * tools that do not exist yet — is treated as mutating (fail closed).
  */
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read_file", "list_files", "search_files"]);
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "read_file",
+  "list_files",
+  "search_files",
+  "project_read_file",
+  "project_list_files",
+  "project_search_files",
+]);
 
 export function isMutating(toolName: string): boolean {
   return !READ_ONLY_TOOLS.has(toolName);
@@ -50,13 +57,16 @@ function clip(text: string): string {
 export async function authorizeMutation(
   actor: Actor,
   boardItemRef: string | null,
-  action: { name: string; path?: string },
+  action: { name: string; path?: string; projectId?: string; extraPaths?: string[] },
   board: BoardService,
   options: { chatGrant?: boolean } = {},
 ): Promise<AuthzResult> {
   const mutating = isMutating(action.name);
   if (actor.kind === "human" || !mutating) {
     return { allow: true, item: undefined };
+  }
+  if (action.name.startsWith("project_") && !action.projectId) {
+    return { allow: false, code: "PROJECT_REQUIRED", message: `${action.name} requires a project` };
   }
   if (!boardItemRef) {
     if (options.chatGrant) {
@@ -107,6 +117,22 @@ export async function authorizeMutation(
       message: `${item.ref} is owned by someone else`,
     };
   }
+  if (action.projectId) {
+    if (!item.projectId) {
+      return {
+        allow: false,
+        code: "PROJECT_REQUIRED",
+        message: `${item.ref} is not bound to a project`,
+      };
+    }
+    if (item.projectId !== action.projectId) {
+      return {
+        allow: false,
+        code: "PROJECT_MISMATCH",
+        message: `${item.ref} authorizes ${item.projectId}, not ${action.projectId}`,
+      };
+    }
+  }
   // The item must grant this class of action. An unclassified tool has no
   // capability and can never be granted one, so new tools fail closed.
   const required = ACTION_CAPABILITY[action.name];
@@ -134,11 +160,13 @@ export async function authorizeMutation(
   // knowable, so shell_repo is bounded by the sandbox root instead — that
   // coarseness is why it is a separate capability a human must grant.
   if (required !== "shell_repo" && item.scopePaths) {
-    if (!action.path || !scopeAllows(item.scopePaths, action.path)) {
+    const paths = [action.path, ...(action.extraPaths ?? [])].filter((value): value is string => Boolean(value));
+    const blocked = paths.find((candidate) => !scopeAllows(item.scopePaths!, candidate));
+    if (!action.path || blocked) {
       return {
         allow: false,
         code: "SCOPE_VIOLATION",
-        message: `${action.path ?? "(no path)"} is outside ${item.ref}'s scope (${item.scopePaths.join(", ")})`,
+        message: `${blocked ?? action.path ?? "(no path)"} is outside ${item.ref}'s scope (${item.scopePaths.join(", ")})`,
       };
     }
   }
@@ -178,6 +206,8 @@ export class Toolman {
       {
         name: action.kind,
         path: "path" in action ? action.path : "from" in action ? action.from : undefined,
+        extraPaths: "to" in action ? [action.to] : undefined,
+        projectId: "projectId" in action ? action.projectId : undefined,
       },
       this.board,
       options,
@@ -199,6 +229,13 @@ export class Toolman {
       return { ok: false, code: authz.code, error: authz.message };
     }
 
+    if (action.kind.startsWith("project_")) {
+      return {
+        ok: false,
+        code: "CHECKOUT_UNAVAILABLE",
+        error: "project actions require a paired Toolman node",
+      };
+    }
     const target = this.sandboxed(
       "path" in action ? (action.path ?? ".") : "from" in action ? action.from : ".",
     );

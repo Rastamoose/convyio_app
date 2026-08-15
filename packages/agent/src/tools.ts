@@ -47,13 +47,14 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
           items: { type: "string" },
           description: "How we will know this ticket is done",
         },
+        project_id: { type: "string", description: "Project this ticket authorizes, when the work is in a mounted project" },
         scope_paths: {
           type: "array",
           items: { type: "string" },
           description:
             "Workspace-relative paths the work will touch. An entry ending in \"/\" grants " +
             "that directory subtree; otherwise exactly that file. Approval authorizes only " +
-            "this scope — mutations outside it are refused.",
+            "this scope — mutations outside it are refused. Paths are relative to the project root when project_id is set.",
         },
         capabilities: {
           type: "array",
@@ -183,6 +184,87 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       required: ["command", "board_item_ref"],
     },
   },
+  {
+    name: "project_read_file",
+    description: "Read a text file from an assigned project checkout.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        path: { type: "string" },
+      },
+      required: ["project_id", "path"],
+    },
+  },
+  {
+    name: "project_list_files",
+    description: "List files in an assigned project checkout.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        path: { type: "string" },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "project_search_files",
+    description: "Search text in an assigned project checkout.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        query: { type: "string" },
+        path: { type: "string" },
+      },
+      required: ["project_id", "query"],
+    },
+  },
+  {
+    name: "project_write_file",
+    description: "Write a text file in an assigned project worktree. Requires a workable project-bound ticket.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        path: { type: "string" },
+        content: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "path", "content", "board_item_ref"],
+    },
+  },
+  {
+    name: "project_edit_file",
+    description: "Replace one exact string in a project file. Requires a workable project-bound ticket.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        path: { type: "string" },
+        old_string: { type: "string" },
+        new_string: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "path", "old_string", "new_string", "board_item_ref"],
+    },
+  },
+  {
+    name: "project_run_command",
+    description:
+      "Run a non-interactive command, including ordinary Git commands, in the agent's assigned worktree. " +
+      "Requires a workable project-bound ticket with shell_repo. This is not an OS sandbox.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        command: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "command", "board_item_ref"],
+    },
+  },
 ];
 
 /**
@@ -262,6 +344,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             // An omitted/empty scope goes through as [] so the server's
             // SCOPE_REQUIRED rejection reaches the model verbatim.
             scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
+            ...(str("project_id") ? { projectId: str("project_id") } : {}),
             ...(Array.isArray(args.capabilities)
               ? { capabilities: args.capabilities.map(String) as WorkCapability[] }
               : {}),
@@ -309,6 +392,66 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           hooks.onActivity(`list_files ${path ?? "."}`);
           const result = await board.requestAction({ kind: "list_files", path }, null);
           return result.ok ? { listing: result.output } : { error: result.error };
+        }
+        case "project_read_file": {
+          hooks.onActivity(`${name} ${str("path")}`);
+          const result = await board.requestAction(
+            { kind: "project_read_file", projectId: str("project_id"), path: str("path") },
+            null,
+            hooks.conversationId ?? null,
+          );
+          return result.ok ? { content: result.output } : { error: result.error };
+        }
+        case "project_list_files": {
+          hooks.onActivity(`${name} ${str("path") || "."}`);
+          const result = await board.requestAction(
+            { kind: "project_list_files", projectId: str("project_id"), ...(args.path ? { path: str("path") } : {}) },
+            null,
+            hooks.conversationId ?? null,
+          );
+          return result.ok ? { content: result.output } : { error: result.error };
+        }
+        case "project_search_files": {
+          hooks.onActivity(`${name} ${str("query")}`);
+          const result = await board.requestAction(
+            {
+              kind: "project_search_files",
+              projectId: str("project_id"),
+              query: str("query"),
+              ...(args.path ? { path: str("path") } : {}),
+            },
+            null,
+            hooks.conversationId ?? null,
+          );
+          return result.ok ? { content: result.output } : { error: result.error };
+        }
+        case "project_write_file":
+        case "project_edit_file":
+        case "project_run_command": {
+          const ref = str("board_item_ref");
+          const item = board.resolve(ref);
+          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
+          hooks.onActivity(`${name} ${str("path") || str("command")} (${ref || "no ref"})`);
+          const result = await board.requestAction(
+            name === "project_run_command"
+              ? { kind: name, projectId: str("project_id"), command: str("command") }
+              : name === "project_edit_file"
+                ? {
+                    kind: name,
+                    projectId: str("project_id"),
+                    path: str("path"),
+                    oldString: str("old_string"),
+                    newString: str("new_string"),
+                  }
+                : { kind: name, projectId: str("project_id"), path: str("path"), content: str("content") },
+            ref || null,
+            hooks.conversationId ?? null,
+          );
+          if (!result.ok && result.code) {
+            hooks.onActivity(`toolman denied ${name}: ${result.code}`);
+            return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
+          }
+          return result.ok ? { done: result.output } : { error: result.error };
         }
         case "write_file":
         case "append_file":

@@ -61,12 +61,12 @@ describe("projects and Toolman nodes", () => {
     const agent = { actor: await actor("agent", "helper") };
     await assert.rejects(
       () => projects.create(agent.actor, { name: "secret", kind: "git" }),
-      /HUMAN_ONLY/,
+      (err: unknown) => err instanceof Error && err.message.includes("only humans can manage projects"),
     );
     const created = await projects.create(human.actor, { name: "notes", kind: "directory" });
     await assert.rejects(
       () => projects.requestAccess(human.actor, created.id, "please"),
-      /AGENT_ONLY/,
+      (err: unknown) => err instanceof Error && err.message.includes("only agents can request project access"),
     );
   });
 

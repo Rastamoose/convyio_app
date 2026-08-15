@@ -3,6 +3,7 @@ import type { WorkspaceDb } from "../db";
 import type { BoardService } from "../board/BoardService";
 import type { PlanService } from "../board/PlanService";
 import type { ContextStore } from "./ContextStore";
+import type { ProjectStore } from "../projects/ProjectStore";
 
 /**
  * Builds a cursor-bearing workspace projection. `seq` is the highest
@@ -15,6 +16,7 @@ export class WorkspaceSnapshotBuilder {
     private board: BoardService,
     private plans: PlanService,
     private context: ContextStore,
+    private projects?: ProjectStore,
   ) {}
 
   async build(): Promise<WorkspaceSnapshot> {
@@ -25,11 +27,12 @@ export class WorkspaceSnapshotBuilder {
       SELECT max(seq) AS seq FROM thread_events
       WHERE workspace_id = ${this.store.workspaceId}
     `;
-    const [items, plans, context, members] = await Promise.all([
+    const [items, plans, context, members, projects] = await Promise.all([
       this.board.list(this.store.workspaceId, { includeDeleted: true }),
       this.plans.list(this.store.workspaceId),
       this.context.listActive(),
       this.store.listMembers(),
+      this.projects?.list() ?? Promise.resolve([]),
     ]);
     return {
       seq: seqRow?.seq ?? 0,
@@ -38,7 +41,7 @@ export class WorkspaceSnapshotBuilder {
       plans,
       context,
       members,
-      projects: [],
+      projects,
     };
   }
 }

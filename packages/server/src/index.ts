@@ -31,6 +31,8 @@ import { ContextStore } from "./context/ContextStore";
 import { ContextCursorStore } from "./context/ContextCursorStore";
 import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
 import { PromptEnvelopeBuilder } from "./context/PromptEnvelope";
+import { ProjectStore } from "./projects/ProjectStore";
+import { ToolmanNodes } from "./projects/ToolmanNodes";
 
 const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 const MIGRATIONS_DIR = path.resolve(
@@ -54,7 +56,9 @@ async function main() {
   const service = new BoardService(db, threadEvents, plans);
   const context = new ContextStore(db, threadEvents);
   const contextCursors = new ContextCursorStore(db, threadEvents);
-  const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
+  const projects = new ProjectStore(db, threadEvents);
+  const toolmanNodes = new ToolmanNodes(db, threadEvents);
+  const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context, projects);
   const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
   const interactions = new InteractionStore(db, threadEvents);
   // Prompts from a previous process have no waiter left to answer them. This
@@ -122,6 +126,8 @@ async function main() {
     snapshot,
     plans,
     envelope,
+    projects,
+    toolmanNodes,
   });
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)

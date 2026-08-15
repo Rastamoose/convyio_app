@@ -136,6 +136,7 @@ export class BoardService {
       scopePaths?: string[];
       capabilities?: WorkCapability[];
       planId?: string;
+      projectId?: string | null;
       owner?: string;
       acceptanceCriteria?: string[];
       impactMap?: EcosystemImpact;
@@ -167,6 +168,13 @@ export class BoardService {
       ? [...new Set(input.capabilities.filter((c) => WORK_CAPABILITIES.includes(c)))]
       : null;
     const criteria = (input.acceptanceCriteria ?? []).map((line) => line.trim()).filter(Boolean);
+    if (input.projectId) {
+      const [project] = await this.store.sql<{ id: string }[]>`
+        SELECT id FROM projects
+        WHERE id = ${input.projectId} AND workspace_id = ${actor.workspaceId} AND archived_at IS NULL
+      `;
+      if (!project) throw new ApiError(400, "PROJECT_NOT_FOUND", "tickets must name an attached project");
+    }
     if (input.owner) await this.requireMember(input.owner);
     const now = Date.now();
     const id = randomUUID();
@@ -175,13 +183,13 @@ export class BoardService {
       await sql`
         INSERT INTO board_items
           (id, workspace_id, ref, title, description, status, origin, created_by,
-           approved_by, owner, proposal_why, proposal_effect, scope_paths,
+           approved_by, owner, proposal_why, proposal_effect, project_id, scope_paths,
            capabilities, plan_id, acceptance_criteria, impact_map, created_at, approved_at)
         VALUES (
           ${id}, ${actor.workspaceId}, ${ref}, ${input.title}, ${input.description ?? null},
           ${"proposed"}, ${actor.kind}, ${actor.id},
           ${null}, ${input.owner ?? null},
-          ${why}, ${effect},
+          ${why}, ${effect}, ${input.projectId ?? null},
           ${scopePaths ? JSON.stringify(scopePaths) : null},
           ${capabilities ? JSON.stringify(capabilities) : null},
           ${plan.id}, ${sql.json(criteria)},

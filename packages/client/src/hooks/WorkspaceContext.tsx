@@ -115,6 +115,7 @@ export interface WorkspaceState {
   agentInvites: AgentSummary[];
   /** Absolute origin of the connected server (the same one `welcome.apiUrl` carried), for building agent setup commands. */
   apiUrl: string;
+  apiFetch: (path: string, init?: RequestInit) => Promise<Response> | null;
   /** Create a user-added agent and return its id plus the one-time pairing code; the invite token never reaches the UI. */
   createAgent: (fields: {
     name: string;
@@ -605,6 +606,7 @@ export function WorkspaceProvider({
     // production server anyway, and a blank --server would paste a broken
     // pairing command.
     apiUrl: api.url("") || window.location.origin,
+    apiFetch: api.fetch,
     createAgent,
     updateAgent,
     repairAgent,

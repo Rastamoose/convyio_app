@@ -301,7 +301,7 @@ export class ProjectStore {
         payload: { projectId, agentId, status: patch.status },
         createdAt: now,
       });
-      return (await this.assignment(projectId, agentId))!;
+      return (await this.findAssignmentIn(sql, projectId, agentId))!;
     });
   }
 
@@ -336,7 +336,15 @@ export class ProjectStore {
       if (isUniqueViolation(err)) throw new ApiError(409, "ALREADY_ASSIGNED", "agent already has access to this project");
       throw err;
     }
-    return (await this.assignment(input.projectId, input.agentId))!;
+    return (await this.findAssignmentIn(sql, input.projectId, input.agentId))!;
+  }
+
+  private async findAssignmentIn(sql: Sql, projectId: string, agentId: string): Promise<ProjectAssignment | null> {
+    const [row] = await sql<AssignmentRow[]>`
+      ${selectAssignment(sql)}
+      WHERE a.project_id = ${projectId} AND a.agent_id = ${agentId}
+    `;
+    return row ? toAssignment(row) : null;
   }
 
   private async findIn(sql: Sql, id: string): Promise<Project | null> {

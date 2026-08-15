@@ -197,4 +197,9 @@ export const ACTION_CAPABILITY: Readonly<Record<string, WorkCapability>> = {
   write_file: "file_write",
   append_file: "file_write",
   run_shell: "shell_repo",
+  project_write_file: "file_write",
+  project_edit_file: "file_write",
+  project_delete_file: "file_write",
+  project_move_file: "file_write",
+  project_run_command: "shell_repo",
 };

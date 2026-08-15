@@ -21,6 +21,8 @@ import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
+import type { ProjectStore } from "../projects/ProjectStore";
+import type { ToolmanNodes } from "../projects/ToolmanNodes";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 const capabilitiesSchema = z.array(z.enum(WORK_CAPABILITIES as [WorkCapability, ...WorkCapability[]])).max(3);
@@ -33,6 +35,7 @@ const createBodySchema = z.object({
   scopePaths: scopePathsSchema.optional(),
   capabilities: capabilitiesSchema.optional(),
   planId: z.string().min(1).max(128).optional(),
+  projectId: z.string().min(1).max(128).nullable().optional(),
   owner: z.string().min(1).max(128).optional(),
   acceptanceCriteria: z.array(z.string().min(1).max(500)).max(40).optional(),
   impactMap: z
@@ -85,6 +88,26 @@ const patchAgentBodySchema = z
   })
   .refine((body) => Object.keys(body).length > 0, { message: "at least one profile field is required" });
 const pairingExchangeBodySchema = z.object({ pairingCode: z.string().min(1).max(256) });
+const toolmanPairingBodySchema = z.object({ name: z.string().min(1).max(80) });
+const toolmanMountBodySchema = z.object({
+  mountKey: z.string().min(1).max(128),
+  projectName: z.string().min(1).max(80),
+  kind: z.enum(["git", "directory"]),
+  remoteUrl: z.string().max(500).nullable().optional(),
+  defaultBranch: z.string().max(200).nullable().optional(),
+  headRevision: z.string().max(200).nullable().optional(),
+  branch: z.string().max(200).nullable().optional(),
+  cleanliness: z.enum(["clean", "dirty", "unknown"]).optional(),
+});
+const projectAccessBodySchema = z.object({ reason: z.string().min(1).max(1000) });
+const projectAssignBodySchema = z.object({
+  agentId: z.string().min(1).max(128),
+  mountId: z.string().min(1).max(128),
+});
+const projectAccessResolveBodySchema = z.object({
+  decision: z.enum(["approved", "denied"]),
+  mountId: z.string().min(1).max(128).optional(),
+});
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
@@ -123,6 +146,8 @@ export interface ApiServices {
   snapshot?: WorkspaceSnapshotBuilder | null;
   plans?: PlanService | null;
   envelope?: PromptEnvelopeBuilder | null;
+  projects?: ProjectStore | null;
+  toolmanNodes?: ToolmanNodes | null;
 }
 
 export function createApiHandler(services: ApiServices) {
@@ -144,6 +169,8 @@ export function createApiHandler(services: ApiServices) {
     snapshot = null,
     plans = null,
     envelope = null,
+    projects = null,
+    toolmanNodes = null,
   } = services;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -223,6 +250,52 @@ export function createApiHandler(services: ApiServices) {
           throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         }
         json(res, 200, { ok: true });
+      } else if (
+        parts[1] === "toolman" &&
+        parts[2] === "pairings" &&
+        parts[3] === "exchange" &&
+        parts.length === 4 &&
+        method === "POST"
+      ) {
+        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+        const body = pairingExchangeBodySchema.parse(await readBody(req));
+        const exchanged = await toolmanNodes.exchangePairing(body.pairingCode);
+        if (!exchanged) throw new ApiError(401, "INVALID_PAIRING", "pairing code is invalid or expired");
+        const apiUrl = requestOrigin(req);
+        json(res, 200, {
+          node: exchanged.node,
+          installation: exchanged.installation,
+          installationToken: exchanged.installationToken,
+          workspace: { id: db.workspaceId, name: db.workspaceName },
+          apiUrl,
+          wsUrl: websocketUrl(apiUrl),
+        });
+      } else if (
+        parts[1] === "toolman" &&
+        parts[2] === "installation" &&
+        parts.length === 3 &&
+        method === "DELETE"
+      ) {
+        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+        const token = bearerToken(req);
+        if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        if (!(await toolmanNodes.revokeInstallation(token))) {
+          throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        }
+        json(res, 200, { ok: true });
+      } else if (
+        parts[1] === "toolman" &&
+        parts[2] === "mounts" &&
+        parts.length === 3 &&
+        method === "POST"
+      ) {
+        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+        const token = bearerToken(req);
+        if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        const resolved = await toolmanNodes.resolveInstallation(token);
+        if (!resolved) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        const body = toolmanMountBodySchema.parse(await readBody(req));
+        json(res, 200, await toolmanNodes.registerMount(resolved.node.id, body));
       } else {
         const actor = await authenticate(req, db, sessions);
         await route(req, res, parts, url, actor, {
@@ -240,6 +313,8 @@ export function createApiHandler(services: ApiServices) {
           snapshot,
           plans,
           envelope,
+          projects,
+          toolmanNodes,
         });
       }
     } catch (err) {
@@ -277,6 +352,8 @@ async function route(
     snapshot: WorkspaceSnapshotBuilder | null;
     plans: PlanService | null;
     envelope: PromptEnvelopeBuilder | null;
+    projects: ProjectStore | null;
+    toolmanNodes: ToolmanNodes | null;
   },
 ): Promise<void> {
   const {
@@ -294,6 +371,8 @@ async function route(
     snapshot,
     plans,
     envelope,
+    projects,
+    toolmanNodes,
   } = services;
   const method = req.method ?? "GET";
 
@@ -530,6 +609,69 @@ async function route(
   if (parts[1] === "uploads" && parts.length === 2 && method === "POST") {
     const bytes = await readRawBody(req, MAX_ATTACHMENT_BYTES);
     return json(res, 201, { attachment: await attachments.save(actor, uploadMeta(req), bytes) });
+  }
+
+  if (parts[1] === "projects") {
+    if (!projects) throw new ApiError(501, "NOT_IMPLEMENTED", "projects are not available");
+    if (parts.length === 2 && method === "GET") {
+      return json(res, 200, { projects: await projects.list() });
+    }
+    if (parts.length === 3 && method === "GET") {
+      const project = await projects.find(parts[2]);
+      if (!project) throw new ApiError(404, "NOT_FOUND", "no such project");
+      return json(res, 200, {
+        project,
+        assignments: await projects.listAssignments(project.id),
+        mounts: toolmanNodes ? await toolmanNodes.mountsForProject(project.id) : [],
+      });
+    }
+    if (parts.length === 3 && method === "DELETE") {
+      return json(res, 200, { project: await projects.archive(actor, parts[2]) });
+    }
+    if (parts.length === 4 && parts[3] === "assignments" && method === "POST") {
+      const body = projectAssignBodySchema.parse(await readBody(req));
+      return json(res, 201, {
+        assignment: await projects.assign(actor, { projectId: parts[2], ...body }),
+      });
+    }
+    if (parts.length === 5 && parts[3] === "assignments" && method === "DELETE") {
+      await projects.revoke(actor, parts[2], parts[4]);
+      return json(res, 200, { ok: true });
+    }
+    if (parts.length === 4 && parts[3] === "access-requests" && method === "POST") {
+      const body = projectAccessBodySchema.parse(await readBody(req));
+      return json(res, 201, { request: await projects.requestAccess(actor, parts[2], body.reason) });
+    }
+    throw new ApiError(404, "NOT_FOUND", "no such route");
+  }
+
+  if (parts[1] === "project-access-requests") {
+    if (!projects) throw new ApiError(501, "NOT_IMPLEMENTED", "projects are not available");
+    if (parts.length === 2 && method === "GET") {
+      return json(res, 200, { requests: await projects.pendingAccess() });
+    }
+    if (parts.length === 4 && parts[3] === "resolve" && method === "POST") {
+      const body = projectAccessResolveBodySchema.parse(await readBody(req));
+      return json(res, 200, {
+        request: await projects.resolveAccess(actor, parts[2], body.decision, body.mountId),
+      });
+    }
+    throw new ApiError(404, "NOT_FOUND", "no such route");
+  }
+
+  if (parts[1] === "toolman") {
+    if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+    if (parts[2] === "nodes" && parts.length === 3 && method === "GET") {
+      return json(res, 200, { nodes: await toolmanNodes.list() });
+    }
+    if (parts[2] === "pairings" && parts.length === 3 && method === "POST") {
+      const body = toolmanPairingBodySchema.parse(await readBody(req));
+      return json(res, 201, await toolmanNodes.createPairing(actor, body.name));
+    }
+    if (parts[2] === "nodes" && parts.length === 4 && method === "DELETE") {
+      return json(res, 200, { node: await toolmanNodes.revoke(actor, parts[3]) });
+    }
+    throw new ApiError(404, "NOT_FOUND", "no such route");
   }
 
   if (parts[1] !== "board" || parts[2] !== "items") {

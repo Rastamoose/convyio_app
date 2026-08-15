@@ -10,9 +10,9 @@
     "dev:server": "npm run dev -w @workspace/server",
     "dev:client": "npm run dev -w @workspace/client",
     "dev:agent": "npm run dev -w @workspace/agent",
-    "test": "npm test -w @workspace/shared && npm test -w @workspace/server && npm test -w @workspace/agent && npm test -w @workspace/client",
+    "test": "npm test -w @workspace/shared && npm test -w @workspace/server && npm test -w @workspace/agent && npm test -w @workspace/toolman && npm test -w @workspace/client",
     "db:wipe": "bash scripts/reset-data.sh",
-    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/server && tsc --noEmit -p packages/client && tsc --noEmit -p packages/agent"
+    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/server && tsc --noEmit -p packages/client && tsc --noEmit -p packages/agent && tsc --noEmit -p packages/toolman"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

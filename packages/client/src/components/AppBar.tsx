@@ -1,7 +1,7 @@
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { ThemeToggle } from "./ThemeToggle";
 
-export type WorkspaceView = "chat" | "board";
+export type WorkspaceView = "chat" | "board" | "resources";
 
 /**
  * The application chrome as one slim strip on the canvas above the content
@@ -73,6 +73,20 @@ export function AppBar({
           <path d="M9 4v16" />
         </svg>
       </button>
+      {/* Where you are, aligned with the pane's left edge (248px = 240px
+          sidebar + 8px gap; 8px when the sidebar is collapsed). It glides
+          with the sidebar's collapse animation, and rides the bottom of the
+          bar so it belongs to the pane below, not the tabs beside it. */}
+      {view === "chat" && (
+        <span
+          className="absolute bottom-0 truncate text-lg font-bold tracking-tight text-body transition-[left] duration-200 ease-out select-none"
+          style={{ left: sidebarOpen ? 248 : 8 }}
+        >
+          <span className="text-accent">#</span>
+          {channel}
+        </span>
+      )}
+
       {/* Dead-center: the view switch, where eyes land first. */}
       <div
         role="tablist"
@@ -81,6 +95,7 @@ export function AppBar({
       >
         {tab("chat", "Chat")}
         {tab("board", "Board")}
+        {tab("resources", "Resources")}
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
