@@ -50,6 +50,27 @@ describe("client event validation", () => {
         action: { kind: "write_file", path: "a.md" },
       }),
     );
+    const projectOk = clientEventSchema.parse({
+      type: "action_request",
+      requestId: "r2",
+      boardItemRef: "task-1",
+      action: { kind: "project_run_command", projectId: "proj-1", command: "npm test" },
+    });
+    assert.equal(projectOk.type, "action_request");
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "action_request",
+        requestId: "r2",
+        action: { kind: "project_run_command", command: "npm test" },
+      }),
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "action_request",
+        requestId: "r2",
+        action: { kind: "project_edit_file", projectId: "proj-1", path: "a.ts" },
+      }),
+    );
   });
 
   test("run_end defaults reason to completed", () => {

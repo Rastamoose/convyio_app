@@ -19,8 +19,13 @@ function boardItem(overrides: Partial<BoardItem> = {}): BoardItem {
     createdBy: "agent-1",
     approvedBy: null,
     owner: null,
+    planId: null,
+    acceptanceCriteria: [],
+    verificationEvidence: null,
+    impactMap: null,
     proposalWhy: "sessions are safer",
     proposalEffect: "auth uses sessions",
+    projectId: null,
     scopePaths: ["billing/"],
     capabilities: null,
     createdAt: 0,
@@ -62,6 +67,8 @@ describe("tool executor", () => {
       why: "invoices drift",
       effect: "totals match",
       scope_paths: ["billing/", "notes.md"],
+      plan_id: "plan-1",
+      acceptance_criteria: ["Totals match"],
     });
 
     assert.deepEqual(proposeCalls, [
@@ -69,6 +76,8 @@ describe("tool executor", () => {
         title: "Fix rounding",
         why: "invoices drift",
         effect: "totals match",
+        planId: "plan-1",
+        acceptanceCriteria: ["Totals match"],
         scopePaths: ["billing/", "notes.md"],
       },
     ]);

@@ -1,5 +1,5 @@
 import { useWorkspace } from "../hooks/WorkspaceContext";
-import type { WorkspaceView } from "./TopBar";
+import type { WorkspaceView } from "./AppBar";
 
 /**
  * The bottom strip of the instrument: connection, workspace, where you are,

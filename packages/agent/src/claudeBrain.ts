@@ -108,7 +108,14 @@ export class ClaudeBrain implements Brain {
     const claudeOptions: Options = {
       ...(model ? { model } : {}),
       ...(providerSessionId ? { resume: providerSessionId } : {}),
-      ...(options?.permissionMode ? { permissionMode: options.permissionMode } : {}),
+      ...(options?.permissionMode
+        ? {
+            permissionMode:
+              options.permissionMode === "approveAll" || options.permissionMode === "bypass"
+                ? "acceptEdits"
+                : options.permissionMode,
+          }
+        : {}),
       cwd: this.cwd,
       systemPrompt: input.system,
       abortController,

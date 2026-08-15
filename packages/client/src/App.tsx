@@ -4,7 +4,8 @@ import type { BoardItem, ChatMessage } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { LoginScreen, MIN_PASSWORD_LENGTH } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
-import { TopBar, type WorkspaceView } from "./components/TopBar";
+import { AppBar, type WorkspaceView } from "./components/AppBar";
+import { ChannelHeader } from "./components/ChannelHeader";
 import { FileDropZone } from "./components/FileDropZone";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
@@ -460,6 +461,7 @@ function Workspace() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.localStorage.getItem("convyio:sidebar-open") !== "0",
   );
@@ -591,6 +593,14 @@ function Workspace() {
 
   return (
     <div className="app-frame flex h-full flex-col">
+      <AppBar
+        view={view}
+        onSetView={setView}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((o) => !o)}
+        onOpenSwitcher={() => setSwitcherOpen(true)}
+        onToggleQueue={() => setQueueOpen((o) => !o)}
+      />
       <div className="flex min-h-0 flex-1">
         {/* The sidebar rests on the canvas, flush to the window edge;
             collapsing animates width+padding to zero while the inner aside
@@ -608,17 +618,11 @@ function Workspace() {
           />
         </div>
         <main
-          className={`mt-2 mb-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-divider bg-chat shadow-sm ${
+          className={`mt-1 mb-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-divider bg-chat shadow-sm ${
             sidebarOpen ? "" : "ml-2"
           }`}
         >
-        <TopBar
-          channel={channel}
-          view={view}
-          onSetView={setView}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((o) => !o)}
-        />
+        {view === "chat" && <ChannelHeader channel={channel} />}
         {view === "chat" ? (
           <FileDropZone
             onFiles={(files) => workspace.addAttachments(channel, files)}
@@ -654,6 +658,18 @@ function Workspace() {
         </main>
       </div>
       <StatusBar channel={channel} view={view} />
+      {queueOpen && (
+        <ApprovalQueue
+          items={workspace.board.filter((i) => i.status === "proposed")}
+          interactions={workspace.pendingInteractions}
+          onResolveInteraction={workspace.resolveInteraction}
+          onDiscuss={(item) => {
+            setQueueOpen(false);
+            discussItem(item);
+          }}
+          onClose={() => setQueueOpen(false)}
+        />
+      )}
       {!workspace.connected && (
         <div
           role="status"

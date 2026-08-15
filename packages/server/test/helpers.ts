@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { WebSocket } from "ws";
-import type { Actor, BoardEventEnvelope } from "@workspace/shared";
+import { emptyImpactMap, type Actor, type BoardEventEnvelope, type BoardItem, type EcosystemImpact } from "@workspace/shared";
 import type { WorkspaceDb } from "../src/db";
 import { Attachments } from "../src/chat/Attachments";
 import { AgentWorkStore } from "../src/chat/AgentWorkStore";
@@ -101,7 +101,8 @@ export interface Env {
 export async function createEnv(): Promise<Env> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
-  const service = new BoardService(db, threadEvents);
+  const plans = new PlanService(db, threadEvents);
+  const service = new BoardService(db, threadEvents, plans);
   const sessions = new Sessions();
   const channels = new Channels(db);
   await channels.seed([{ name: "general", isDemo: false }]);
@@ -115,10 +116,10 @@ export async function createEnv(): Promise<Env> {
   const snapshot = new WorkspaceSnapshotBuilder(
     db,
     service,
-    new PlanService(db, threadEvents),
+    plans,
     new ContextStore(db, threadEvents),
   );
-  const handler = createApiHandler(
+  const handler = createApiHandler({
     db,
     service,
     sessions,
@@ -126,16 +127,12 @@ export async function createEnv(): Promise<Env> {
     threadEvents,
     channels,
     attachments,
-    "*",
-    null,
+    corsOrigin: "*",
     agentInvites,
     runnerRuntime,
-    null,
-    null,
-    null,
     snapshot,
-    new PlanService(db, threadEvents),
-  );
+    plans,
+  });
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
@@ -175,13 +172,47 @@ export async function createEnv(): Promise<Env> {
   };
 }
 
+export function ticketImpact(): EcosystemImpact {
+  const map = emptyImpactMap();
+  map.server = "affected";
+  map.notes.server = "Existing ticket authorization path";
+  return map;
+}
+
 /** A valid agent proposal body; scope covers everything tests write. */
 export const PROPOSAL = {
   title: "Migrate auth",
   why: "sessions are safer",
   effect: "auth uses sessions",
   scopePaths: ["out.md", "deep/"],
+  acceptanceCriteria: ["Auth still works"],
+  impactMap: ticketImpact(),
 };
+
+export async function acceptedPlan(
+  env: Pick<Env, "api">,
+  humanToken: string,
+  title = "Test plan",
+): Promise<string> {
+  const created = await env.api("POST", "/api/board/plans", humanToken, {
+    title,
+    objective: "Hold one live ticket for tests",
+    outline: ["Accept", "Create next ticket"],
+    clarifications: ["Test fixture: this is megaplan work"],
+    impactMap: ticketImpact(),
+  });
+  const accepted = await env.api("POST", `/api/board/plans/${created.body.plan.id}/accept`, humanToken);
+  return accepted.body.plan.id as string;
+}
+
+export async function proposeTicket(
+  env: Pick<Env, "service">,
+  actor: Actor,
+  planId: string,
+  extras: Partial<typeof PROPOSAL> & { owner?: string; title?: string } = {},
+): Promise<BoardItem> {
+  return env.service.create(actor, { ...PROPOSAL, planId, ...extras });
+}
 
 export interface WsClient {
   ws: WebSocket;
@@ -244,7 +275,8 @@ const WS_WAIT_MS = 5000;
 export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
-  const service = new BoardService(db, threadEvents);
+  const plans = new PlanService(db, threadEvents);
+  const service = new BoardService(db, threadEvents, plans);
   const sessions = new Sessions();
   const auth = options.auth ? new Auth(db, fakeSupabase(options.auth.users)) : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
@@ -263,7 +295,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const authGate: AuthGate | null = auth ? { googleAuthEnabled: true, emailAuthEnabled: true, auth } : null;
   // "localhost-dev" (the server's real default) rather than "*", so suites
   // exercise the same same-origin/cross-origin classification prod runs.
-  const handler = createApiHandler(
+  const handler = createApiHandler({
     db,
     service,
     sessions,
@@ -271,14 +303,14 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
     threadEvents,
     channels,
     attachments,
-    "localhost-dev",
+    corsOrigin: "localhost-dev",
     authGate,
     agentInvites,
     runnerRuntime,
-    (profile) => hub.updateAgentConfig(profile),
-    (actorId) => hub.closeAgentConnection(actorId),
-    (actorId) => hub.closeHumanConnection(actorId),
-  );
+    onUpdateAgent: (profile) => hub.updateAgentConfig(profile),
+    onRevokeAgent: (actorId) => hub.closeAgentConnection(actorId),
+    onRemoveMember: (actorId) => hub.closeHumanConnection(actorId),
+  });
   const server = http.createServer((req, res) => void handler(req, res));
   const roster = await Roster.create(db, agentInvites);
   const interactions = new InteractionStore(db, threadEvents);

@@ -40,6 +40,13 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         title: { type: "string", description: "What you want to add/change (one short line)" },
         why: { type: "string", description: "Why this is needed (one line)" },
         effect: { type: "string", description: "Expected effect once done (one line)" },
+        plan_id: { type: "string", description: "Accepted plan this ticket belongs to, e.g. plan-1" },
+        owner: { type: "string", description: "Actor id that will own the work" },
+        acceptance_criteria: {
+          type: "array",
+          items: { type: "string" },
+          description: "How we will know this ticket is done",
+        },
         scope_paths: {
           type: "array",
           items: { type: "string" },
@@ -58,7 +65,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
             "the work installs packages or reaches outside the machine.",
         },
       },
-      required: ["title", "why", "effect", "scope_paths"],
+      required: ["title", "why", "effect", "scope_paths", "plan_id", "acceptance_criteria"],
     },
   },
   {
@@ -79,8 +86,9 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       type: "object",
       properties: {
         ref: { type: "string", description: "Board item ref, e.g. task-3" },
+        evidence: { type: "string", description: "How the acceptance criteria were verified" },
       },
-      required: ["ref"],
+      required: ["ref", "evidence"],
     },
   },
   {
@@ -191,6 +199,13 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
   ITEM_DELETED: "That item was deleted. Stop this work and tell the team.",
   SCOPE_VIOLATION:
     "That path is outside the backing item's approved scope_paths. Stay within the approved scope, or board_propose a new item covering that path.",
+  OWNER_MISMATCH:
+    "That ticket is owned by someone else. Do not work it; propose a handoff if needed.",
+  PROJECT_REQUIRED: "That action needs a project.",
+  PROJECT_MISMATCH: "That action named the wrong project.",
+  PROJECT_UNASSIGNED: "You are not assigned to that project.",
+  CHECKOUT_UNAVAILABLE: "The assigned checkout is not ready.",
+  UNKNOWN_ACTION: "That action is not classified and cannot be authorized.",
   CAPABILITY_MISSING:
     "That item does not grant this kind of action. Propose a new item requesting the capability you need (e.g. shell_repo) and explain why.",
   PLAN_MODE:
@@ -239,6 +254,11 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             title: str("title"),
             why: str("why"),
             effect: str("effect"),
+            planId: str("plan_id"),
+            ...(str("owner") ? { owner: str("owner") } : {}),
+            acceptanceCriteria: Array.isArray(args.acceptance_criteria)
+              ? args.acceptance_criteria.map(String)
+              : [],
             // An omitted/empty scope goes through as [] so the server's
             // SCOPE_REQUIRED rejection reaches the model verbatim.
             scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
@@ -261,7 +281,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           return { ref: item.ref, status: item.status };
         }
         case "board_complete": {
-          const item = await board.complete(str("ref"));
+          const item = await board.complete(str("ref"), str("evidence"));
           hooks.onActivity(`completed ${item.ref}`);
           return { ref: item.ref, status: item.status };
         }

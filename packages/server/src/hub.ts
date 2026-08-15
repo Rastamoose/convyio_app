@@ -694,9 +694,27 @@ export class Hub {
       displayName: p.name,
       workspaceId: this.options.workspace.id,
     };
-    // Layer 1 first: if the board refuses, no human is ever asked to approve
-    // something that could not run anyway.
-    const authz = await this.toolman.authorize(actor, event.action, event.boardItemRef ?? null);
+    const conversationId = event.conversationId ?? null;
+    const mode = conversationId
+      ? await this.agentWork.permissionMode(actor.id, conversationId)
+      : "default";
+    const capability = ACTION_CAPABILITY[event.action.kind];
+    if (mode === "plan" && capability) {
+      return this.send(conn, {
+        type: "action_result",
+        requestId: event.requestId,
+        ok: false,
+        code: "PLAN_MODE",
+        error: "plan mode: propose the change and wait for the human to leave plan mode",
+      });
+    }
+    const chatGrant = !event.boardItemRef && Boolean(capability);
+    const authz = await this.toolman.authorize(
+      actor,
+      event.action,
+      event.boardItemRef ?? null,
+      { chatGrant },
+    );
     if (!authz.allow) {
       return this.send(conn, {
         type: "action_result",
@@ -706,11 +724,16 @@ export class Hub {
         error: authz.message,
       });
     }
-    const gate = await this.gateByMode(actor, event);
+    const gate = await this.gateByMode(actor, event, mode, capability);
     if (gate) {
       return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
     }
-    const result = await this.toolman.execute(actor, event.action, event.boardItemRef ?? null);
+    const result = await this.toolman.execute(
+      actor,
+      event.action,
+      event.boardItemRef ?? null,
+      { chatGrant },
+    );
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
   }
 
@@ -723,27 +746,13 @@ export class Hub {
   private async gateByMode(
     actor: { id: string; workspaceId: string },
     event: ActionRequestEvent,
+    mode: "default" | "plan" | "acceptEdits" | "approveAll" | "bypass",
+    capability: string | undefined,
   ): Promise<ToolmanResult | null> {
-    const capability = ACTION_CAPABILITY[event.action.kind];
-    if (!capability) return null; // read-only; the toolman still has final say
-
-    const conversationId = event.conversationId ?? null;
-    const mode = conversationId
-      ? await this.agentWork.permissionMode(actor.id, conversationId)
-      : "default";
-
-    if (mode === "plan") {
-      return {
-        ok: false,
-        code: "PLAN_MODE",
-        error: "plan mode: propose the change and wait for the human to leave plan mode",
-      };
-    }
-    // acceptEdits pre-approves in-scope file writes only. Shell and network
-    // keep prompting because their blast radius is not bounded by scopePaths.
+    if (!capability) return null;
+    if (mode === "bypass" || mode === "approveAll") return null;
     if (mode === "acceptEdits" && capability === "file_write") return null;
-
-    return await this.awaitApproval(actor, event, capability, conversationId);
+    return await this.awaitApproval(actor, event, capability, event.conversationId ?? null);
   }
 
   private async awaitApproval(
@@ -990,14 +999,10 @@ const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** One line a human can decide on without opening the activity panel. */
 function describeAction(action: ActionRequestEvent["action"]): string {
-  switch (action.kind) {
-    case "run_shell":
-      return `run_shell: ${action.command.slice(0, 200)}`;
-    case "list_files":
-      return `list_files ${action.path ?? "."}`;
-    default:
-      return `${action.kind} ${action.path}`;
-  }
+  if ("command" in action) return `${action.kind}: ${action.command.slice(0, 200)}`;
+  if ("from" in action) return `${action.kind} ${action.from} → ${action.to}`;
+  if ("path" in action) return `${action.kind} ${action.path ?? "."}`;
+  return action.kind;
 }
 
 function deriveMentionedAgents(

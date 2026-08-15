@@ -10,10 +10,11 @@ import type {
   ThreadEventPayload,
   WorkCapability,
 } from "@workspace/shared";
-import { WORK_CAPABILITIES } from "@workspace/shared";
+import { WORK_CAPABILITIES, isCompleteImpactMap, type EcosystemImpact } from "@workspace/shared";
 import type { Sql, WorkspaceDb } from "../db";
 import type { ThreadEventStore } from "../chat/ThreadEventStore";
 import { validateScopePaths } from "./scope";
+import type { PlanService } from "./PlanService";
 
 export class ApiError extends Error {
   constructor(
@@ -46,6 +47,7 @@ export class BoardService {
   constructor(
     private store: WorkspaceDb,
     private threadEvents: ThreadEventStore,
+    private plans?: PlanService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -123,7 +125,7 @@ export class BoardService {
   // Transitions
   // -------------------------------------------------------------------------
 
-  /** Human create (approved by construction) or agent proposal (I2). */
+  /** Every ticket starts proposed. Status in the body is ignored (I2). */
   async create(
     actor: Actor,
     input: {
@@ -133,49 +135,81 @@ export class BoardService {
       effect?: string;
       scopePaths?: string[];
       capabilities?: WorkCapability[];
+      planId?: string;
+      owner?: string;
+      acceptanceCriteria?: string[];
+      impactMap?: EcosystemImpact;
     },
   ): Promise<BoardItem> {
-    const human = actor.kind === "human";
-    if (!human && (!input.why || !input.effect)) {
-      throw new ApiError(400, "PROPOSAL_FIELDS_REQUIRED", "agent proposals require why and effect");
+    const why = input.why?.trim();
+    const effect = input.effect?.trim();
+    if (!why || !effect) {
+      throw new ApiError(400, "PROPOSAL_FIELDS_REQUIRED", "tickets require why and effect");
     }
-    if (!human && (!input.scopePaths || input.scopePaths.length === 0)) {
-      throw new ApiError(400, "SCOPE_REQUIRED", "agent proposals require non-empty scope_paths");
+    if (!input.scopePaths || input.scopePaths.length === 0) {
+      throw new ApiError(400, "SCOPE_REQUIRED", "tickets require non-empty scope_paths");
+    }
+    if (!input.planId) throw new ApiError(400, "PLAN_REQUIRED", "tickets must belong to an accepted plan");
+    const plan = this.plans ? await this.plans.find(actor.workspaceId, input.planId) : null;
+    if (!plan || plan.status !== "accepted") {
+      throw new ApiError(400, "PLAN_NOT_ACCEPTED", "tickets must belong to an accepted plan");
+    }
+    const live = await this.store.sql<{ c: number }[]>`
+      SELECT count(*) AS c FROM board_items
+      WHERE workspace_id = ${actor.workspaceId} AND plan_id = ${plan.id}
+        AND deleted_at IS NULL AND status IN ('proposed', 'approved', 'in_progress', 'blocked')
+    `;
+    if (live[0].c > 0) {
+      throw new ApiError(409, "LIVE_TICKET_EXISTS", `${plan.ref} already has a live ticket`);
     }
     const scopePaths = this.normalizedScope(input.scopePaths);
     const capabilities = input.capabilities?.length
       ? [...new Set(input.capabilities.filter((c) => WORK_CAPABILITIES.includes(c)))]
       : null;
+    const criteria = (input.acceptanceCriteria ?? []).map((line) => line.trim()).filter(Boolean);
+    if (input.owner) await this.requireMember(input.owner);
     const now = Date.now();
     const id = randomUUID();
-    return this.mutate(actor, human ? "item.created" : "item.proposed", async (sql) => {
+    return this.mutate(actor, "item.proposed", async (sql) => {
       const ref = await this.store.nextRef(sql, actor.workspaceId);
       await sql`
         INSERT INTO board_items
           (id, workspace_id, ref, title, description, status, origin, created_by,
            approved_by, owner, proposal_why, proposal_effect, scope_paths,
-           capabilities, created_at, approved_at)
+           capabilities, plan_id, acceptance_criteria, impact_map, created_at, approved_at)
         VALUES (
           ${id}, ${actor.workspaceId}, ${ref}, ${input.title}, ${input.description ?? null},
-          ${human ? "approved" : "proposed"}, ${actor.kind}, ${actor.id},
-          ${human ? actor.id : null}, ${null},
-          ${human ? null : input.why!}, ${human ? null : input.effect!},
+          ${"proposed"}, ${actor.kind}, ${actor.id},
+          ${null}, ${input.owner ?? null},
+          ${why}, ${effect},
           ${scopePaths ? JSON.stringify(scopePaths) : null},
           ${capabilities ? JSON.stringify(capabilities) : null},
-          ${now}, ${human ? now : null}
+          ${plan.id}, ${sql.json(criteria)},
+          ${input.impactMap ? sql.json(JSON.parse(JSON.stringify(input.impactMap))) : null},
+          ${now}, ${null}
         )
       `;
       return id;
     });
   }
 
-  async approve(actor: Actor, idOrRef: string): Promise<BoardItem> {
+  async approve(actor: Actor, idOrRef: string, ownerId?: string): Promise<BoardItem> {
     this.assertHuman(actor, "AGENT_CANNOT_APPROVE");
     const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["proposed"]);
+    const owner = ownerId ?? item.owner;
+    if (!owner) throw new ApiError(400, "OWNER_REQUIRED", "approval requires an owner");
+    await this.requireMember(owner);
+    if (!item.acceptanceCriteria.length) {
+      throw new ApiError(400, "CRITERIA_REQUIRED", "approval requires acceptance criteria");
+    }
+    if (!item.impactMap || !isCompleteImpactMap(item.impactMap)) {
+      throw new ApiError(400, "IMPACT_REQUIRED", "approval requires a complete impact map");
+    }
     return this.mutate(actor, "item.approved", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
-        UPDATE board_items SET status = 'approved', approved_by = ${actor.id}, approved_at = ${Date.now()}
+        UPDATE board_items
+        SET status = 'approved', approved_by = ${actor.id}, approved_at = ${Date.now()}, owner = ${owner}
         WHERE id = ${item.id} AND status = 'proposed'
         RETURNING id
       `;
@@ -205,6 +239,7 @@ export class BoardService {
   async start(actor: Actor, idOrRef: string): Promise<BoardItem> {
     const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["approved"]);
+    this.assertOwner(actor, item);
     return this.mutate(actor, "item.started", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
         UPDATE board_items SET status = 'in_progress', started_at = ${Date.now()},
@@ -217,12 +252,18 @@ export class BoardService {
     });
   }
 
-  async complete(actor: Actor, idOrRef: string): Promise<BoardItem> {
+  async complete(actor: Actor, idOrRef: string, evidence?: string): Promise<BoardItem> {
     const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["in_progress", "blocked"]);
+    this.assertOwner(actor, item);
+    const verification = (evidence ?? item.verificationEvidence ?? "").trim();
+    if (!verification) {
+      throw new ApiError(400, "EVIDENCE_REQUIRED", "completion requires verification evidence");
+    }
     return this.mutate(actor, "item.completed", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
-        UPDATE board_items SET status = 'done', completed_at = ${Date.now()}
+        UPDATE board_items
+        SET status = 'done', completed_at = ${Date.now()}, verification_evidence = ${verification}
         WHERE id = ${item.id} AND (status = 'in_progress' OR status = 'blocked')
         RETURNING id
       `;
@@ -234,6 +275,7 @@ export class BoardService {
   async block(actor: Actor, idOrRef: string, reason: string): Promise<BoardItem> {
     const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["in_progress"]);
+    this.assertOwner(actor, item);
     return this.mutate(
       actor,
       "item.blocked",
@@ -253,6 +295,7 @@ export class BoardService {
   async unblock(actor: Actor, idOrRef: string): Promise<BoardItem> {
     const item = await this.mustFind(actor.workspaceId, idOrRef);
     this.assertStatus(item, ["blocked"]);
+    this.assertOwner(actor, item);
     return this.mutate(actor, "item.unblocked", async (sql) => {
       const [updated] = await sql<{ id: string }[]>`
         UPDATE board_items SET status = 'in_progress'
@@ -298,6 +341,8 @@ export class BoardService {
       changed.scopePaths = { from: item.scopePaths, to: scopePaths };
     }
     if (Object.keys(changed).length === 0) return item;
+    const revokeApproval = item.status === "approved" || item.status === "in_progress" || item.status === "blocked";
+    const authorityChanged = Boolean(changed.owner || changed.scopePaths);
     return this.mutate(
       actor,
       "item.edited",
@@ -311,7 +356,10 @@ export class BoardService {
               scopePaths !== undefined
                 ? scopePaths && JSON.stringify(scopePaths)
                 : item.scopePaths && JSON.stringify(item.scopePaths)
-            }
+            },
+            status = ${authorityChanged && revokeApproval ? "proposed" : item.status},
+            approved_by = ${authorityChanged && revokeApproval ? null : item.approvedBy},
+            approved_at = ${authorityChanged && revokeApproval ? null : item.approvedAt}
           WHERE id = ${item.id}
         `;
         return item.id;
@@ -422,6 +470,20 @@ export class BoardService {
     }
   }
 
+  private assertOwner(actor: Actor, item: BoardItem): void {
+    if (actor.kind === "human") return;
+    if (!item.owner || item.owner !== actor.id) {
+      throw new ApiError(403, "OWNER_MISMATCH", `${item.ref} is owned by someone else`);
+    }
+  }
+
+  private async requireMember(actorId: string): Promise<void> {
+    const owner = await this.store.getActor(actorId);
+    if (!owner || !(await this.store.isMember(owner.id))) {
+      throw new ApiError(400, "OWNER_NOT_FOUND", "owner must be a workspace member");
+    }
+  }
+
   private assertStatus(item: BoardItem, allowed: ItemStatus[]): void {
     if (!allowed.includes(item.status)) {
       throw new ApiError(
@@ -446,8 +508,13 @@ interface ItemRow {
   owner: string | null;
   proposal_why: string | null;
   proposal_effect: string | null;
+  project_id: string | null;
   scope_paths: string | null;
   capabilities: string | null;
+  plan_id: string | null;
+  acceptance_criteria: unknown;
+  verification_evidence: string | null;
+  impact_map: unknown;
   created_at: number;
   approved_at: number | null;
   started_at: number | null;
@@ -481,8 +548,13 @@ function toItem(row: ItemRow): BoardItem {
     createdBy: row.created_by,
     approvedBy: row.approved_by,
     owner: row.owner,
+    planId: row.plan_id,
+    acceptanceCriteria: asStringArray(row.acceptance_criteria),
+    verificationEvidence: row.verification_evidence,
+    impactMap: asImpactMap(row.impact_map),
     proposalWhy: row.proposal_why,
     proposalEffect: row.proposal_effect,
+    projectId: row.project_id ?? null,
     scopePaths: row.scope_paths ? (JSON.parse(row.scope_paths) as string[]) : null,
     capabilities: parseCapabilities(row.capabilities),
     createdAt: row.created_at,
@@ -494,4 +566,24 @@ function toItem(row: ItemRow): BoardItem {
     approvedByName: row.approved_by_name ?? undefined,
     ownerName: row.owner_name ?? undefined,
   };
+}
+
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function asImpactMap(value: unknown): EcosystemImpact | null {
+  if (!value) return null;
+  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== "object") return null;
+  return parsed as EcosystemImpact;
 }

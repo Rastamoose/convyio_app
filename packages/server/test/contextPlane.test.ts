@@ -5,7 +5,7 @@ import { ContextStore } from "../src/context/ContextStore";
 import { WorkspaceSnapshotBuilder } from "../src/context/WorkspaceSnapshot";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { PlanService } from "../src/board/PlanService";
-import { createEnv } from "./helpers";
+import { acceptedPlan, createEnv, proposeTicket } from "./helpers";
 
 describe("context plane", async () => {
   const env = await createEnv();
@@ -17,12 +17,14 @@ describe("context plane", async () => {
   after(() => env.close());
 
   test("snapshot seq is captured before projecting items", async () => {
-    await env.service.create(human.actor, { title: "first" });
+    await proposeTicket(env, human.actor, await acceptedPlan(env, human.token, "first"), {
+      title: "first",
+    });
     const before = await events.latestSeq(env.db.workspaceId);
     const body = await snapshot.build();
     assert.ok(body.seq >= before);
     assert.ok(body.items.some((item) => item.title === "first"));
-    assert.deepEqual(body.plans, []);
+    assert.ok(body.plans.length >= 1);
   });
 
   test("GET /api/workspace/snapshot returns the cursor-bearing projection", async () => {
@@ -62,7 +64,9 @@ describe("context plane", async () => {
   });
 
   test("welcome carries snapshotSeq", async () => {
-    const created = await env.service.create(human.actor, { title: "welcome-seq" });
+    const created = await proposeTicket(env, human.actor, await acceptedPlan(env, human.token, "welcome-seq"), {
+      title: "welcome-seq",
+    });
     assert.ok(created.ref);
     const latest = await events.latestSeq(env.db.workspaceId);
     assert.ok(latest > 0);

@@ -34,8 +34,18 @@ const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "board_items", column: "plan_id" },
   { table: "board_items", column: "acceptance_criteria" },
   { table: "board_items", column: "verification_evidence" },
+  { table: "board_items", column: "impact_map" },
   { table: "context_entries" },
   { table: "context_cursors" },
+  { table: "projects" },
+  { table: "toolman_nodes" },
+  { table: "toolman_pairings" },
+  { table: "project_mounts" },
+  { table: "project_assignments" },
+  { table: "board_items", column: "project_id" },
+  { table: "project_access_requests" },
+  { table: "tool_executions" },
+  { table: "tool_retention_policies" },
 ];
 
 export class SchemaOutOfDateError extends Error {}

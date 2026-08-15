@@ -1,5 +1,5 @@
-import type { Actor } from "./board";
-import type { BoardItem } from "./board";
+import type { Actor, BoardItem } from "./board";
+import type { Project } from "./project";
 
 export type PlanStatus = "draft" | "proposed" | "accepted" | "completed" | "cancelled";
 
@@ -92,6 +92,7 @@ export interface WorkspaceSnapshot {
   plans: BoardPlan[];
   context: ContextEntry[];
   members: Actor[];
+  projects: Project[];
 }
 
 export function emptyImpactMap(): EcosystemImpact {

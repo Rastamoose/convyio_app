@@ -38,6 +38,7 @@ export class WorkspaceSnapshotBuilder {
       plans,
       context,
       members,
+      projects: [],
     };
   }
 }

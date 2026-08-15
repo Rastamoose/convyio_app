@@ -13,7 +13,9 @@ import { ProposalCard } from "./ProposalCard";
  */
 const MODES = [
   { mode: "default", label: "Ask", hint: "Ask before every change" },
-  { mode: "acceptEdits", label: "Edits", hint: "Apply in-scope file edits; still ask for commands" },
+  { mode: "acceptEdits", label: "Edits", hint: "Apply file edits; still ask for commands" },
+  { mode: "approveAll", label: "All", hint: "Apply classified mutations after the hard ceiling" },
+  { mode: "bypass", label: "Bypass", hint: "Same as All: never overrides sandbox or identity" },
   { mode: "plan", label: "Plan", hint: "Read and plan only; change nothing" },
 ] as const;
 

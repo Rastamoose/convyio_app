@@ -12,23 +12,33 @@ import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { InteractionStore } from "../src/chat/InteractionStore";
 import { Roster } from "../src/roster";
 import { BoardService } from "../src/board/BoardService";
+import { PlanService } from "../src/board/PlanService";
 import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
 import { AgentInvites } from "../src/auth/AgentInvites";
 import { Toolman, authorizeMutation, isMutating } from "../src/board/Toolman";
 import { Hub } from "../src/hub";
 import { RunnerRuntime } from "../src/RunnerRuntime";
-import { createEnv, createWsEnv, PROPOSAL, supabaseAdmin } from "./helpers";
+import { acceptedPlan, createEnv, createWsEnv, PROPOSAL, proposeTicket, supabaseAdmin } from "./helpers";
 import { createTestDb } from "./pgSchema";
 
 describe("board invariants", async () => {
   const env = await createEnv();
   const human = await env.actor("human", "dana");
   const agent = await env.actor("agent", "noodle");
+  let planId = "";
   after(() => env.close());
 
+  const ticketBody = (extras: Record<string, unknown> = {}) => ({
+    ...PROPOSAL,
+    planId,
+    owner: agent.actor.id,
+    ...extras,
+  });
+
   test("T1: agent calls approve → 403 AGENT_CANNOT_APPROVE", async () => {
-    const { body: created } = await env.api("POST", "/api/board/items", agent.token, PROPOSAL);
+    planId = await acceptedPlan(env, human.token, "T1");
+    const { body: created } = await env.api("POST", "/api/board/items", agent.token, ticketBody());
     const res = await env.api("POST", `/api/board/items/${created.item.id}/approve`, agent.token);
     assert.equal(res.status, 403);
     assert.equal(res.body.error, "AGENT_CANNOT_APPROVE");
@@ -38,8 +48,9 @@ describe("board invariants", async () => {
   });
 
   test("T2: agent-supplied status is ignored; item lands proposed", async () => {
+    planId = await acceptedPlan(env, human.token, "T2");
     const res = await env.api("POST", "/api/board/items", agent.token, {
-      ...PROPOSAL,
+      ...ticketBody(),
       status: "approved",
     });
     assert.equal(res.status, 201);
@@ -53,17 +64,21 @@ describe("board invariants", async () => {
     assert.equal(res.status, 400);
   });
 
-  test("T3: human create → approved, approved_by set, immediately workable", async () => {
-    const res = await env.api("POST", "/api/board/items", human.token, { title: "Human item" });
+  test("T3: every ticket starts proposed; approval needs owner and makes it workable", async () => {
+    planId = await acceptedPlan(env, human.token, "T3");
+    const res = await env.api("POST", "/api/board/items", human.token, ticketBody({ title: "Human item" }));
     assert.equal(res.status, 201);
     const item: BoardItem = res.body.item;
-    assert.equal(item.status, "approved");
-    assert.equal(item.approvedBy, human.actor.id);
-    assert.ok(item.approvedAt);
+    assert.equal(item.status, "proposed");
+    assert.equal(item.approvedBy, null);
+    const approved = await env.api("POST", `/api/board/items/${item.id}/approve`, human.token, {
+      owner: agent.actor.id,
+    });
+    assert.equal(approved.status, 200);
     const authz = await authorizeMutation(
       agent.actor,
       item.ref,
-      { name: "write_file", path: "notes.md" },
+      { name: "write_file", path: "out.md" },
       env.service,
     );
     assert.equal(authz.allow, true);
@@ -76,15 +91,18 @@ describe("board invariants", async () => {
   });
 
   test("T5: mutating action against proposed/denied/done → ITEM_NOT_WORKABLE", async () => {
-    const proposed = await env.service.create(agent.actor, PROPOSAL);
+    const firstPlan = await acceptedPlan(env, human.token, "T5a");
+    const proposed = await proposeTicket(env, agent.actor, firstPlan, { owner: agent.actor.id });
     for (const setup of [
       async () => proposed,
       async () => await env.service.deny(human.actor, proposed.id),
       async () => {
-        const item = await env.service.create(agent.actor, PROPOSAL);
-        await env.service.approve(human.actor, item.id);
+        const item = await proposeTicket(env, agent.actor, await acceptedPlan(env, human.token, "T5b"), {
+          owner: agent.actor.id,
+        });
+        await env.service.approve(human.actor, item.id, agent.actor.id);
         await env.service.start(agent.actor, item.id);
-        return await env.service.complete(agent.actor, item.id);
+        return await env.service.complete(agent.actor, item.id, "tests pass");
       },
     ]) {
       const item = await setup();
@@ -100,7 +118,11 @@ describe("board invariants", async () => {
   });
 
   test("T6: mutating action against deleted item → ITEM_DELETED; item.deleted emitted", async () => {
-    const item = await env.service.create(human.actor, { title: "doomed" });
+    const item = await proposeTicket(env, human.actor, await acceptedPlan(env, human.token, "T6"), {
+      title: "doomed",
+      owner: agent.actor.id,
+    });
+    await env.service.approve(human.actor, item.id, agent.actor.id);
     await env.service.start(agent.actor, item.id);
     env.envelopes.length = 0;
     await env.service.softDelete(human.actor, item.id);
@@ -144,9 +166,11 @@ describe("board invariants", async () => {
       assert.equal(await countEvents("thread_events", itemId), expected);
     };
 
-    const item = await env.service.create(agent.actor, PROPOSAL);
+    const item = await proposeTicket(env, agent.actor, await acceptedPlan(env, human.token, "T9"), {
+      owner: agent.actor.id,
+    });
     await assertCounts(item.id, 1);
-    await env.service.approve(human.actor, item.id);
+    await env.service.approve(human.actor, item.id, agent.actor.id);
     await assertCounts(item.id, 2);
     await env.service.start(agent.actor, item.id);
     await assertCounts(item.id, 3);
@@ -154,7 +178,7 @@ describe("board invariants", async () => {
     await assertCounts(item.id, 4);
     await env.service.unblock(agent.actor, item.id);
     await assertCounts(item.id, 5);
-    await env.service.complete(agent.actor, item.id);
+    await env.service.complete(agent.actor, item.id, "tests pass");
     await assertCounts(item.id, 6);
     const canonical = await env.db.sql<
       { kind: string; payload: { itemId: string; itemRef: string } }[]
@@ -182,7 +206,7 @@ describe("board invariants", async () => {
     const eventsBefore = eventsBeforeRows[0].c;
     const threadBefore = threadBeforeRows[0].c;
     const invalidWorkspace: Actor = { ...human.actor, workspaceId: randomUUID() };
-    await assert.rejects(env.service.create(invalidWorkspace, { title: "never lands" }));
+    await assert.rejects(env.service.create(invalidWorkspace, { ...PROPOSAL, planId: item.planId! }));
     const itemsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_items`;
     const eventsAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM board_events`;
     const threadAfterRows = await env.db.sql<{ c: number }[]>`SELECT count(*) AS c FROM thread_events`;
@@ -193,9 +217,11 @@ describe("board invariants", async () => {
 
   test("T11: concurrent creation produces unique sequential refs", async () => {
     const before = (await env.service.list(env.db.workspaceId, { includeDeleted: true })).length;
+    const planIds = [];
+    for (let i = 0; i < 10; i++) planIds.push(await acceptedPlan(env, human.token, `T11-${i}`));
     const results = await Promise.all(
-      Array.from({ length: 10 }, (_, i) =>
-        env.api("POST", "/api/board/items", human.token, { title: `parallel ${i}` }),
+      planIds.map((id, i) =>
+        env.api("POST", "/api/board/items", human.token, ticketBody({ title: `parallel ${i}`, planId: id })),
       ),
     );
     const refs = results.map((r) => r.body.item.ref as string);
@@ -211,20 +237,40 @@ describe("board invariants", async () => {
   });
 
   test("T12: invalid transitions → 409", async () => {
-    const { body: done } = await env.api("POST", "/api/board/items", human.token, { title: "lifecycle" });
-    await env.api("POST", `/api/board/items/${done.item.id}/start`, agent.token);
-    await env.api("POST", `/api/board/items/${done.item.id}/complete`, agent.token);
+    const created = await env.api(
+      "POST",
+      "/api/board/items",
+      human.token,
+      ticketBody({ title: "lifecycle", planId: await acceptedPlan(env, human.token, "T12a") }),
+    );
+    await env.api("POST", `/api/board/items/${created.body.item.id}/approve`, human.token, {
+      owner: agent.actor.id,
+    });
+    await env.api("POST", `/api/board/items/${created.body.item.id}/start`, agent.token);
+    await env.api("POST", `/api/board/items/${created.body.item.id}/complete`, agent.token, {
+      evidence: "tests pass",
+    });
 
-    const approveDone = await env.api("POST", `/api/board/items/${done.item.id}/approve`, human.token);
+    const approveDone = await env.api("POST", `/api/board/items/${created.body.item.id}/approve`, human.token);
     assert.equal(approveDone.status, 409);
 
-    const { body: proposed } = await env.api("POST", "/api/board/items", agent.token, PROPOSAL);
+    const { body: proposed } = await env.api(
+      "POST",
+      "/api/board/items",
+      agent.token,
+      ticketBody({ planId: await acceptedPlan(env, human.token, "T12b") }),
+    );
     const startProposed = await env.api("POST", `/api/board/items/${proposed.item.id}/start`, agent.token);
     assert.equal(startProposed.status, 409);
   });
 
   test("edits and reopen are human-only", async () => {
-    const { body: created } = await env.api("POST", "/api/board/items", human.token, { title: "editable" });
+    const { body: created } = await env.api(
+      "POST",
+      "/api/board/items",
+      human.token,
+      ticketBody({ title: "editable", planId: await acceptedPlan(env, human.token, "edit") }),
+    );
     const patch = await env.api("PATCH", `/api/board/items/${created.item.id}`, agent.token, { title: "sneaky" });
     assert.equal(patch.status, 403);
     const del = await env.api("DELETE", `/api/board/items/${created.item.id}`, agent.token);
@@ -235,7 +281,9 @@ describe("board invariants", async () => {
   });
 
   test("list defaults exclude denied and deleted", async () => {
-    const item = await env.service.create(agent.actor, PROPOSAL);
+    const item = await proposeTicket(env, agent.actor, await acceptedPlan(env, human.token, "list"), {
+      owner: agent.actor.id,
+    });
     await env.service.deny(human.actor, item.id);
     const listed = await env.service.list(env.db.workspaceId);
     assert.ok(!listed.some((i) => i.id === item.id));
@@ -259,7 +307,8 @@ describe("T10: full-stack approval fan-out", async () => {
   test("approval reaches all clients within 1s and unblocks agent work", async () => {
     const { db, drop } = await createTestDb();
     const threadEvents = new ThreadEventStore(db);
-    const service = new BoardService(db, threadEvents);
+    const plans = new PlanService(db, threadEvents);
+    const service = new BoardService(db, threadEvents, plans);
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
@@ -269,7 +318,7 @@ describe("T10: full-stack approval fan-out", async () => {
     const messages = new MessageStore(db, threadEvents);
     const agentWork = new AgentWorkStore(db, threadEvents, messages);
     const agentInvites = new AgentInvites(db);
-    const handler = createApiHandler(
+    const handler = createApiHandler({
       db,
       service,
       sessions,
@@ -277,11 +326,10 @@ describe("T10: full-stack approval fan-out", async () => {
       threadEvents,
       channels,
       attachments,
-      "*",
-      null,
+      corsOrigin: "*",
       agentInvites,
-      null,
-    );
+      plans,
+    });
     const server = http.createServer((req, res) => void handler(req, res));
     const hub = new Hub(server, await Roster.create(db, agentInvites), messages, agentWork, channels, attachments, sessions, toolman, new InteractionStore(db, threadEvents), new RunnerRuntime(), {
       workspace: { id: db.workspaceId, name: db.workspaceName },
@@ -293,7 +341,7 @@ describe("T10: full-stack approval fan-out", async () => {
     const baseUrl = `http://localhost:${port}`;
 
     const connect = (name: string, kind: string) =>
-      new Promise<{ ws: WebSocket; token: string; next: (pred: (e: any) => boolean, ms?: number) => Promise<any> }>((resolve) => {
+      new Promise<{ ws: WebSocket; token: string; selfId: string; next: (pred: (e: any) => boolean, ms?: number) => Promise<any> }>((resolve) => {
         const ws = new WebSocket(`ws://localhost:${port}`);
         const seen: any[] = [];
         const waiters: { pred: (e: any) => boolean; resolve: (e: any) => void }[] = [];
@@ -307,6 +355,7 @@ describe("T10: full-stack approval fan-out", async () => {
             resolve({
               ws,
               token: ev.token,
+              selfId: ev.self.id,
               next: (pred, ms = 1000) =>
                 new Promise((res, rej) => {
                   const already = seen.find(pred);
@@ -325,10 +374,26 @@ describe("T10: full-stack approval fan-out", async () => {
       const humanA = await connect("dana", "human");
       const humanB = await connect("harris", "human");
 
+      const planRes = await fetch(`${baseUrl}/api/board/plans`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${humanA.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "T10",
+          objective: "Fan-out",
+          outline: ["Propose", "Approve"],
+          clarifications: ["fixture"],
+          impactMap: PROPOSAL.impactMap,
+        }),
+      });
+      const plan = (await planRes.json()).plan;
+      await fetch(`${baseUrl}/api/board/plans/${plan.id}/accept`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${humanA.token}` },
+      });
       const proposeRes = await fetch(`${baseUrl}/api/board/items`, {
         method: "POST",
         headers: { Authorization: `Bearer ${agent.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(PROPOSAL),
+        body: JSON.stringify({ ...PROPOSAL, planId: plan.id, owner: agent.selfId }),
       });
       const proposed = (await proposeRes.json()).item as BoardItem;
 
@@ -354,7 +419,8 @@ describe("T10: full-stack approval fan-out", async () => {
         humanB.next((e) => e.type === "item.approved" && e.item.id === proposed.id),
         fetch(`${baseUrl}/api/board/items/${proposed.id}/approve`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${humanA.token}` },
+          headers: { Authorization: `Bearer ${humanA.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ owner: agent.selfId }),
         }),
       ]);
       assert.ok(Date.now() - approvedAt < 1000);

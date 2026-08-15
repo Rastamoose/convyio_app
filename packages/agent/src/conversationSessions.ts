@@ -88,7 +88,13 @@ function requireSession(value: {
 }
 
 function isPermissionMode(value: unknown): value is PermissionMode {
-  return value === "default" || value === "plan" || value === "acceptEdits";
+  return (
+    value === "default" ||
+    value === "plan" ||
+    value === "acceptEdits" ||
+    value === "approveAll" ||
+    value === "bypass"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

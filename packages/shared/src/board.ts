@@ -1,4 +1,5 @@
 import type { ParticipantKind } from "./participant";
+import type { ProjectAction } from "./toolman";
 
 /**
  * The canonical board. Items authorize scopes of work, not steps. Every item
@@ -59,6 +60,10 @@ export interface BoardItem {
   createdBy: string;
   approvedBy: string | null;
   owner: string | null;
+  planId: string | null;
+  acceptanceCriteria: string[];
+  verificationEvidence: string | null;
+  impactMap: import("./context").EcosystemImpact | null;
   /** Proposal fields, only populated when origin = "agent". */
   proposalWhy: string | null;
   proposalEffect: string | null;
@@ -66,8 +71,14 @@ export interface BoardItem {
    * Workspace-relative paths this item authorizes mutations under. An entry
    * ending in "/" grants the subtree; otherwise it grants that exact file.
    * Required on agent proposals; null on human items means unrestricted.
+   * Paths are relative to the item's project root when `projectId` is set.
    */
   scopePaths: string[] | null;
+  /**
+   * Project this item authorizes. Required for Toolman project mutations;
+   * null on existing items and demos that are not project-scoped.
+   */
+  projectId: string | null;
   /**
    * Classes of mutation this item authorizes. Paths alone cannot bound a shell
    * command, so coarse capabilities sit beside the path scope. null means the
@@ -154,13 +165,19 @@ export type AuthzDenyCode =
   | "ITEM_NOT_WORKABLE" // status not approved | in_progress
   | "ITEM_DELETED"
   | "SCOPE_VIOLATION" // action path falls outside the item's scope_paths
+  | "OWNER_MISMATCH" // acting agent is not the ticket owner
   | "CAPABILITY_MISSING" // item's grant does not cover this class of action
+  | "PROJECT_REQUIRED" // mutating project action has no project
+  | "PROJECT_MISMATCH" // action project is not the item's project
+  | "PROJECT_UNASSIGNED" // agent has no assignment for the project
+  | "CHECKOUT_UNAVAILABLE" // assigned checkout is not ready or its node is offline
+  | "UNKNOWN_ACTION" // action is not classified and therefore ungrantable
   | "PLAN_MODE" // conversation is in plan mode; nothing may mutate
   | "APPROVAL_DENIED" // a human declined the permission request
   | "APPROVAL_UNAVAILABLE"; // approval could not be recorded — fail closed
 
 export type AuthzResult =
-  | { allow: true; item: BoardItem }
+  | { allow: true; item?: BoardItem }
   | { allow: false; code: AuthzDenyCode; message: string };
 
 export type ToolmanAction =
@@ -169,7 +186,8 @@ export type ToolmanAction =
   | { kind: "write_file"; path: string; content: string }
   | { kind: "append_file"; path: string; content: string }
   | { kind: "run_shell"; command: string }
-  | { kind: "search_files"; query: string; path?: string };
+  | { kind: "search_files"; query: string; path?: string }
+  | ProjectAction;
 
 /**
  * Which capability each action class consumes. Absent from this map = mutating

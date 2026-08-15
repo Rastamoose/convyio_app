@@ -13,7 +13,7 @@ import { Sessions } from "../src/board/sessions";
 import { Toolman, authorizeMutation } from "../src/board/Toolman";
 import { scopeAllows, validateScopePaths } from "../src/board/scope";
 import { loadDemoScripts } from "../src/demo/script";
-import { createEnv } from "./helpers";
+import { acceptedPlan, createEnv, PROPOSAL } from "./helpers";
 
 describe("scope authorization", async () => {
   const env = await createEnv();
@@ -23,13 +23,18 @@ describe("scope authorization", async () => {
 
   const approvedProposal = async (scopePaths: string[], capabilities?: string[]) => {
     const { body } = await env.api("POST", "/api/board/items", agent.token, {
+      ...PROPOSAL,
       title: "scoped work",
       why: "w",
       effect: "e",
       scopePaths,
+      planId: await acceptedPlan(env, human.token, `scope-${scopePaths.join("-")}`),
+      owner: agent.actor.id,
       ...(capabilities ? { capabilities } : {}),
     });
-    await env.api("POST", `/api/board/items/${body.item.id}/approve`, human.token);
+    await env.api("POST", `/api/board/items/${body.item.id}/approve`, human.token, {
+      owner: agent.actor.id,
+    });
     return body.item;
   };
 
@@ -193,37 +198,24 @@ describe("scope authorization", async () => {
         why: "w",
         effect: "e",
         scopePaths: bad,
+        planId: await acceptedPlan(env, human.token, `bad-scope-${bad.join("-")}`),
+        owner: agent.actor.id,
       });
       assert.equal(res.status, 400, `scope ${JSON.stringify(bad)} must be refused`);
       assert.equal(res.body.error, "BAD_SCOPE");
     }
   });
 
-  test("human item without scope stays unrestricted; human can narrow via PATCH", async () => {
-    const { body: created } = await env.api("POST", "/api/board/items", human.token, {
+  test("ticket without scope → 400 SCOPE_REQUIRED", async () => {
+    const res = await env.api("POST", "/api/board/items", human.token, {
       title: "human item",
+      why: "w",
+      effect: "e",
+      planId: await acceptedPlan(env, human.token, "unscoped-human"),
+      owner: agent.actor.id,
     });
-    const anywhere = await authorizeMutation(
-      agent.actor,
-      created.item.ref,
-      { name: "write_file", path: "any/where.txt" },
-      env.service,
-    );
-    assert.equal(anywhere.allow, true);
-
-    const patched = await env.api("PATCH", `/api/board/items/${created.item.id}`, human.token, {
-      scopePaths: ["docs/"],
-    });
-    assert.equal(patched.status, 200);
-    assert.deepEqual(patched.body.item.scopePaths, ["docs/"]);
-    const outside = await authorizeMutation(
-      agent.actor,
-      created.item.ref,
-      { name: "write_file", path: "any/where.txt" },
-      env.service,
-    );
-    assert.equal(outside.allow, false);
-    assert.equal(!outside.allow && outside.code, "SCOPE_VIOLATION");
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, "SCOPE_REQUIRED");
   });
 
   test("agents cannot edit scopePaths", async () => {

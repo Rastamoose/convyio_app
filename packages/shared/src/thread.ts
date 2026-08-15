@@ -77,7 +77,27 @@ export type ThreadEventKind =
   | "plan.edited"
   | "context.created"
   | "context.superseded"
-  | "context.cursor.acknowledged";
+  | "context.cursor.acknowledged"
+  | "project.created"
+  | "project.updated"
+  | "project.archived"
+  | "project.assignment.granted"
+  | "project.assignment.revoked"
+  | "project.access.requested"
+  | "project.access.resolved"
+  | "toolman.node.paired"
+  | "toolman.node.revoked"
+  | "toolman.mount.registered"
+  | "toolman.mount.updated"
+  | "toolman.checkout.updated"
+  | "tool.execution.requested"
+  | "tool.execution.awaiting_approval"
+  | "tool.execution.started"
+  | "tool.execution.completed"
+  | "tool.execution.failed"
+  | "tool.execution.denied"
+  | "tool.execution.cancelled"
+  | "tool.artifact.expired";
 
 export type ThreadEventPayload = JsonObject;
 

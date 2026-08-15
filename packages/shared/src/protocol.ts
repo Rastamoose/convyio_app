@@ -5,6 +5,8 @@ import type { AgentInvite } from "./agent";
 import type { AgentConversation, AgentWorkAssignment, InteractionRequest } from "./agentWork";
 import type { ChannelInfo, ThreadEvent } from "./thread";
 import type { ContextCursor, PlanEventEnvelope } from "./context";
+import type { Project, ProjectAssignment, ProjectAccessRequest } from "./project";
+import type { ToolExecution, ToolmanNodeSummary } from "./toolman";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -228,7 +230,7 @@ export const conversationSessionSetEventSchema = z.object({
   type: z.literal("conversation_session_set"),
   conversationId: z.string().min(1).max(128),
   providerSessionId: z.string().min(1).max(4_096).nullable(),
-  permissionMode: z.enum(["default", "plan", "acceptEdits"]),
+  permissionMode: z.enum(["default", "plan", "acceptEdits", "approveAll", "bypass"]),
   clientEventId: z.string().min(1).max(128).optional(),
 });
 
@@ -238,7 +240,7 @@ export const conversationModeSetEventSchema = z.object({
   agentId: z.string().min(1).max(128),
   /** Channel name; the server resolves it to the stable channel id. */
   channel: z.string().min(1).max(64),
-  mode: z.enum(["default", "plan", "acceptEdits"]),
+  mode: z.enum(["default", "plan", "acceptEdits", "approveAll", "bypass"]),
 });
 
 export const RUNNER_PROTOCOL_VERSION = 1;
@@ -349,9 +351,59 @@ export const actionRequestEventSchema = z.object({
       query: z.string().min(1).max(500),
       path: z.string().max(500).optional(),
     }),
+    z.object({
+      kind: z.literal("project_read_file"),
+      projectId: z.string().min(1).max(128),
+      path: z.string().min(1).max(500),
+    }),
+    z.object({
+      kind: z.literal("project_list_files"),
+      projectId: z.string().min(1).max(128),
+      path: z.string().max(500).optional(),
+    }),
+    z.object({
+      kind: z.literal("project_search_files"),
+      projectId: z.string().min(1).max(128),
+      query: z.string().min(1).max(500),
+      path: z.string().max(500).optional(),
+    }),
+    z.object({
+      kind: z.literal("project_write_file"),
+      projectId: z.string().min(1).max(128),
+      path: z.string().min(1).max(500),
+      content: z.string().max(1_048_576),
+    }),
+    z.object({
+      kind: z.literal("project_edit_file"),
+      projectId: z.string().min(1).max(128),
+      path: z.string().min(1).max(500),
+      oldString: z.string().min(1).max(1_048_576),
+      newString: z.string().max(1_048_576),
+    }),
+    z.object({
+      kind: z.literal("project_delete_file"),
+      projectId: z.string().min(1).max(128),
+      path: z.string().min(1).max(500),
+    }),
+    z.object({
+      kind: z.literal("project_move_file"),
+      projectId: z.string().min(1).max(128),
+      from: z.string().min(1).max(500),
+      to: z.string().min(1).max(500),
+    }),
+    z.object({
+      kind: z.literal("project_run_command"),
+      projectId: z.string().min(1).max(128),
+      command: z.string().min(1).max(4000),
+    }),
   ]),
   /** Conversation the action belongs to; selects the permission mode. */
   conversationId: z.string().max(128).nullable().optional(),
+});
+
+export const actionCancelEventSchema = z.object({
+  type: z.literal("action_cancel"),
+  requestId: z.string().min(1).max(128),
 });
 
 /** A human answers a pending permission request from any surface. */
@@ -389,6 +441,7 @@ export const clientEventSchema = z
     messageReactEventSchema,
     typingEventSchema,
     actionRequestEventSchema,
+    actionCancelEventSchema,
     interactionResolveEventSchema,
     conversationModeSetEventSchema,
   ])
@@ -427,6 +480,7 @@ export type MessageDeleteEvent = z.infer<typeof messageDeleteEventSchema>;
 export type MessageReactEvent = z.infer<typeof messageReactEventSchema>;
 export type TypingEvent = z.infer<typeof typingEventSchema>;
 export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
+export type ActionCancelEvent = z.infer<typeof actionCancelEventSchema>;
 export type InteractionResolveEvent = z.infer<typeof interactionResolveEventSchema>;
 export type ConversationModeSetEvent = z.infer<typeof conversationModeSetEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
@@ -497,6 +551,38 @@ export interface ActionResultEvent {
   code?: AuthzDenyCode;
   error?: string;
   output?: string;
+  executionId?: string;
+}
+
+export interface ProjectSyncEvent {
+  type: "project_sync";
+  projects: Project[];
+}
+
+export interface ProjectUpdatedEvent {
+  type: "project_updated";
+  project: Project;
+}
+
+export interface ProjectAssignmentEvent {
+  type: "project_assignment";
+  assignment: ProjectAssignment;
+  revoked?: boolean;
+}
+
+export interface ProjectAccessEvent {
+  type: "project_access";
+  request: ProjectAccessRequest;
+}
+
+export interface ToolmanNodeSyncEvent {
+  type: "toolman_node_sync";
+  nodes: ToolmanNodeSummary[];
+}
+
+export interface ToolExecutionEvent {
+  type: "tool_execution";
+  execution: ToolExecution;
 }
 
 /**
@@ -662,5 +748,11 @@ export type ServerEvent =
   | InterruptBroadcast
   | RunEndBroadcast
   | ActionResultEvent
+  | ProjectSyncEvent
+  | ProjectUpdatedEvent
+  | ProjectAssignmentEvent
+  | ProjectAccessEvent
+  | ToolmanNodeSyncEvent
+  | ToolExecutionEvent
   | PlanEventEnvelope
   | BoardEventEnvelope;

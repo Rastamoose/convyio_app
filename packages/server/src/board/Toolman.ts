@@ -11,7 +11,7 @@ import {
   type ToolmanAction,
 } from "@workspace/shared";
 import type { BoardService } from "./BoardService";
-import { scopeAllows } from "./scope";
+import { normalizeWorkspacePath, scopeAllows } from "./scope";
 
 export interface ToolmanResult {
   ok: boolean;
@@ -52,12 +52,31 @@ export async function authorizeMutation(
   boardItemRef: string | null,
   action: { name: string; path?: string },
   board: BoardService,
+  options: { chatGrant?: boolean } = {},
 ): Promise<AuthzResult> {
   const mutating = isMutating(action.name);
   if (actor.kind === "human" || !mutating) {
-    return { allow: true, item: undefined as never };
+    return { allow: true, item: undefined };
   }
   if (!boardItemRef) {
+    if (options.chatGrant) {
+      const required = ACTION_CAPABILITY[action.name];
+      if (!required) {
+        return {
+          allow: false,
+          code: "UNKNOWN_ACTION",
+          message: `${action.name} is not a classified capability and cannot be authorized`,
+        };
+      }
+      if (action.path && normalizeWorkspacePath(action.path) === null) {
+        return {
+          allow: false,
+          code: "SCOPE_VIOLATION",
+          message: `${action.path} is outside the workspace sandbox`,
+        };
+      }
+      return { allow: true };
+    }
     return {
       allow: false,
       code: "NO_BOARD_REF",
@@ -79,6 +98,13 @@ export async function authorizeMutation(
       allow: false,
       code: "ITEM_NOT_WORKABLE",
       message: `${item.ref} is ${item.status}; mutating work requires approved or in_progress`,
+    };
+  }
+  if (!item.owner || item.owner !== actor.id) {
+    return {
+      allow: false,
+      code: "OWNER_MISMATCH",
+      message: `${item.ref} is owned by someone else`,
     };
   }
   // The item must grant this class of action. An unclassified tool has no
@@ -140,12 +166,21 @@ export class Toolman {
    * the board would refuse anyway. `execute` re-checks, so this is an early
    * answer rather than a substitute for enforcement.
    */
-  authorize(actor: Actor, action: ToolmanAction, boardItemRef: string | null): Promise<AuthzResult> {
+  authorize(
+    actor: Actor,
+    action: ToolmanAction,
+    boardItemRef: string | null,
+    options: { chatGrant?: boolean } = {},
+  ): Promise<AuthzResult> {
     return authorizeMutation(
       actor,
       boardItemRef,
-      { name: action.kind, path: "path" in action ? action.path : undefined },
+      {
+        name: action.kind,
+        path: "path" in action ? action.path : "from" in action ? action.from : undefined,
+      },
       this.board,
+      options,
     );
   }
 
@@ -153,8 +188,9 @@ export class Toolman {
     actor: Actor,
     action: ToolmanAction,
     boardItemRef: string | null,
+    options: { chatGrant?: boolean } = {},
   ): Promise<ToolmanResult> {
-    const authz = await this.authorize(actor, action, boardItemRef);
+    const authz = await this.authorize(actor, action, boardItemRef, options);
     if (!authz.allow) {
       // Every denial is an audit record.
       console.warn(
@@ -163,7 +199,9 @@ export class Toolman {
       return { ok: false, code: authz.code, error: authz.message };
     }
 
-    const target = this.sandboxed("path" in action ? (action.path ?? ".") : ".");
+    const target = this.sandboxed(
+      "path" in action ? (action.path ?? ".") : "from" in action ? action.from : ".",
+    );
     if (target === null) {
       console.warn(`[toolman] DENY ${actor.displayName} ${action.kind}: path escapes the workspace sandbox`);
       return { ok: false, error: "path escapes the workspace sandbox" };
@@ -212,6 +250,12 @@ export class Toolman {
           ]);
           return result.ok ? result : { ok: true, output: result.output || "(no matches)" };
         }
+        default:
+          return {
+            ok: false,
+            code: "UNKNOWN_ACTION",
+            error: `${action.kind} is not classified and cannot be authorized`,
+          };
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

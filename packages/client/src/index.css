@@ -129,16 +129,24 @@
   -webkit-backdrop-filter: blur(16px) saturate(1.6);
 }
 
-/* The outermost app backdrop. Dark mode adds the one atmospheric moment: a
-   faint amber glow pooling where the sidebar sits — the accent hue as light,
-   so the dark theme has a temperature, not just an absence of it. */
+/* The outermost app backdrop carries the brand's paper texture: the landing
+   page's dot grid, faint enough to read as paper rather than pattern. Dark
+   mode layers the one atmospheric moment over the same dots — a faint amber
+   glow pooling where the sidebar sits, the accent hue as light. */
+:root {
+  --canvas-dot: rgb(24 24 26 / 0.055);
+}
+
 .app-frame {
-  background: var(--color-canvas);
+  background-color: var(--color-canvas);
+  background-image: radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.5px);
+  background-size: 22px 22px;
 }
 html.dark .app-frame {
-  background:
+  background-image:
     radial-gradient(900px 480px at 8% -10%, rgb(240 168 60 / 0.09), transparent 60%),
-    var(--color-canvas);
+    radial-gradient(circle, var(--canvas-dot) 1px, transparent 1.5px);
+  background-size: auto, 22px 22px;
 }
 
 /* Dark theme: the same palette rotated onto a warm charcoal ladder — never
@@ -174,6 +182,7 @@ html.dark {
   --color-away: #ea8a33;
   --color-scrollbar: #3d382f;
   --color-scrollbar-hover: #4e483c;
+  --canvas-dot: rgb(255 250 240 / 0.05);
   /* Lighter than `--color-divider` so the outer edge of a popover reads as a
      step up, not as one more internal rule. The shadow carries almost
      nothing on dark surfaces, so it goes heavier and the border leads. */

@@ -5,3 +5,5 @@ export * from "./agent";
 export * from "./thread";
 export * from "./agentWork";
 export * from "./context";
+export * from "./project";
+export * from "./toolman";

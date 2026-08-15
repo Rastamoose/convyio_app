@@ -99,6 +99,9 @@ export class BoardClient {
     effect: string;
     scopePaths: string[];
     capabilities?: WorkCapability[];
+    planId: string;
+    owner?: string;
+    acceptanceCriteria?: string[];
   }): Promise<BoardItem> {
     const { item } = (await this.api("POST", "/api/board/items", fields)) as { item: BoardItem };
     this.items.set(item.id, item);
@@ -109,8 +112,8 @@ export class BoardClient {
     return this.transition(ref, "start");
   }
 
-  async complete(ref: string): Promise<BoardItem> {
-    return this.transition(ref, "complete");
+  async complete(ref: string, evidence?: string): Promise<BoardItem> {
+    return this.transition(ref, "complete", evidence ? { evidence } : undefined);
   }
 
   async block(ref: string, reason: string): Promise<BoardItem> {

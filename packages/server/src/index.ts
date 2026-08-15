@@ -49,8 +49,8 @@ async function main() {
   const threadEvents = new ThreadEventStore(db);
   const messages = new MessageStore(db, threadEvents);
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
-  const service = new BoardService(db, threadEvents);
   const plans = new PlanService(db, threadEvents);
+  const service = new BoardService(db, threadEvents, plans);
   const context = new ContextStore(db, threadEvents);
   const contextCursors = new ContextCursorStore(db, threadEvents);
   const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
@@ -102,7 +102,7 @@ async function main() {
   const agentConfigUpdater: { update?: (profile: AgentInvite) => void } = {};
   const agentRevoker: { close?: (actorId: string) => void } = {};
   const memberRemover: { close?: (actorId: string) => void } = {};
-  const handleApi = createApiHandler(
+  const handleApi = createApiHandler({
     db,
     service,
     sessions,
@@ -110,16 +110,16 @@ async function main() {
     threadEvents,
     channels,
     attachments,
-    config.corsOrigin,
+    corsOrigin: config.corsOrigin,
     authGate,
     agentInvites,
     runnerRuntime,
-    (profile) => agentConfigUpdater.update?.(profile),
-    (actorId) => agentRevoker.close?.(actorId),
-    (actorId) => memberRemover.close?.(actorId),
+    onUpdateAgent: (profile) => agentConfigUpdater.update?.(profile),
+    onRevokeAgent: (actorId) => agentRevoker.close?.(actorId),
+    onRemoveMember: (actorId) => memberRemover.close?.(actorId),
     snapshot,
     plans,
-  );
+  });
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
     : null;

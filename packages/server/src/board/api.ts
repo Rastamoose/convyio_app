@@ -31,9 +31,29 @@ const createBodySchema = z.object({
   effect: z.string().max(1000).optional(),
   scopePaths: scopePathsSchema.optional(),
   capabilities: capabilitiesSchema.optional(),
+  planId: z.string().min(1).max(128).optional(),
+  owner: z.string().min(1).max(128).optional(),
+  acceptanceCriteria: z.array(z.string().min(1).max(500)).max(40).optional(),
+  impactMap: z
+    .object({
+      protocol: z.enum(["affected", "na"]),
+      server: z.enum(["affected", "na"]),
+      client: z.enum(["affected", "na"]),
+      agent: z.enum(["affected", "na"]),
+      database: z.enum(["affected", "na"]),
+      security: z.enum(["affected", "na"]),
+      deploy: z.enum(["affected", "na"]),
+      tests: z.enum(["affected", "na"]),
+      demos: z.enum(["affected", "na"]),
+      docs: z.enum(["affected", "na"]),
+      notes: z.record(z.string()).default({}),
+    })
+    .optional(),
   // I2: any supplied status is ignored; parsed here only so it is dropped.
   status: z.unknown().optional(),
 });
+const approveBodySchema = z.object({ owner: z.string().min(1).max(128).optional() });
+const completeBodySchema = z.object({ evidence: z.string().min(1).max(4000).optional() });
 
 const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
 const channelPatchBodySchema = z.object({
@@ -83,24 +103,45 @@ export interface AuthGate {
   auth: Auth;
 }
 
-export function createApiHandler(
-  db: WorkspaceDb,
-  service: BoardService,
-  sessions: Sessions,
-  messages: MessageStore,
-  threadEvents: ThreadEventStore,
-  channels: Channels,
-  attachments: Attachments,
-  corsOrigin: string,
-  authGate: AuthGate | null = null,
-  agentInvites: AgentInvites | null = null,
-  runnerRuntime: RunnerRuntime | null = null,
-  onUpdateAgent: ((profile: AgentInvite) => void) | null = null,
-  onRevokeAgent: ((actorId: string) => void) | null = null,
-  onRemoveMember: ((actorId: string) => void) | null = null,
-  snapshot?: WorkspaceSnapshotBuilder | null,
-  plans?: PlanService | null,
-) {
+/** Collaborators the HTTP surface needs. Optional fields stay unset in tests that do not exercise that route. */
+export interface ApiServices {
+  db: WorkspaceDb;
+  service: BoardService;
+  sessions: Sessions;
+  messages: MessageStore;
+  threadEvents: ThreadEventStore;
+  channels: Channels;
+  attachments: Attachments;
+  corsOrigin: string;
+  authGate?: AuthGate | null;
+  agentInvites?: AgentInvites | null;
+  runnerRuntime?: RunnerRuntime | null;
+  onUpdateAgent?: ((profile: AgentInvite) => void) | null;
+  onRevokeAgent?: ((actorId: string) => void) | null;
+  onRemoveMember?: ((actorId: string) => void) | null;
+  snapshot?: WorkspaceSnapshotBuilder | null;
+  plans?: PlanService | null;
+}
+
+export function createApiHandler(services: ApiServices) {
+  const {
+    db,
+    service,
+    sessions,
+    messages,
+    threadEvents,
+    channels,
+    attachments,
+    corsOrigin,
+    authGate = null,
+    agentInvites = null,
+    runnerRuntime = null,
+    onUpdateAgent = null,
+    onRevokeAgent = null,
+    onRemoveMember = null,
+    snapshot = null,
+    plans = null,
+  } = services;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/api/")) return false;
@@ -181,14 +222,9 @@ export function createApiHandler(
         json(res, 200, { ok: true });
       } else {
         const actor = await authenticate(req, db, sessions);
-        await route(
-          req,
-          res,
-          parts,
-          url,
-          actor,
-          service,
+        await route(req, res, parts, url, actor, {
           db,
+          service,
           messages,
           threadEvents,
           channels,
@@ -200,7 +236,7 @@ export function createApiHandler(
           onRemoveMember,
           snapshot,
           plans,
-        );
+        });
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -222,20 +258,37 @@ async function route(
   parts: string[], // ["api", "board", "items", ...]
   url: URL,
   actor: Actor,
-  service: BoardService,
-  db: WorkspaceDb,
-  messages: MessageStore,
-  threadEvents: ThreadEventStore,
-  channels: Channels,
-  attachments: Attachments,
-  agentInvites: AgentInvites | null,
-  runnerRuntime: RunnerRuntime | null,
-  onUpdateAgent: ((profile: AgentInvite) => void) | null,
-  onRevokeAgent: ((actorId: string) => void) | null,
-  onRemoveMember: ((actorId: string) => void) | null,
-  snapshot: WorkspaceSnapshotBuilder | null | undefined,
-  plans: PlanService | null | undefined,
+  services: {
+    db: WorkspaceDb;
+    service: BoardService;
+    messages: MessageStore;
+    threadEvents: ThreadEventStore;
+    channels: Channels;
+    attachments: Attachments;
+    agentInvites: AgentInvites | null;
+    runnerRuntime: RunnerRuntime | null;
+    onUpdateAgent: ((profile: AgentInvite) => void) | null;
+    onRevokeAgent: ((actorId: string) => void) | null;
+    onRemoveMember: ((actorId: string) => void) | null;
+    snapshot: WorkspaceSnapshotBuilder | null;
+    plans: PlanService | null;
+  },
 ): Promise<void> {
+  const {
+    db,
+    service,
+    messages,
+    threadEvents,
+    channels,
+    attachments,
+    agentInvites,
+    runnerRuntime,
+    onUpdateAgent,
+    onRevokeAgent,
+    onRemoveMember,
+    snapshot,
+    plans,
+  } = services;
   const method = req.method ?? "GET";
 
   // GET /api/actors — the member roster, for owner assignment and display.
@@ -487,7 +540,10 @@ async function route(
   // POST /api/board/items
   if (parts.length === 3 && method === "POST") {
     const body = createBodySchema.parse(await readBody(req));
-    const item = await service.create(actor, body);
+    const item = await service.create(actor, {
+      ...body,
+      impactMap: body.impactMap && typeof body.impactMap === "object" ? body.impactMap as import("@workspace/shared").EcosystemImpact : undefined,
+    });
     return json(res, 201, { item });
   }
 
@@ -514,16 +570,20 @@ async function route(
   // POST /api/board/items/:id/<action>
   if (parts.length === 5 && method === "POST") {
     switch (parts[4]) {
-      case "approve":
-        return json(res, 200, { item: await service.approve(actor, id) });
+      case "approve": {
+        const body = approveBodySchema.parse(await readBody(req).catch(() => ({})));
+        return json(res, 200, { item: await service.approve(actor, id, body.owner) });
+      }
       case "deny": {
         const body = denyBodySchema.parse(await readBody(req));
         return json(res, 200, { item: await service.deny(actor, id, body.reason) });
       }
       case "start":
         return json(res, 200, { item: await service.start(actor, id) });
-      case "complete":
-        return json(res, 200, { item: await service.complete(actor, id) });
+      case "complete": {
+        const body = completeBodySchema.parse(await readBody(req).catch(() => ({})));
+        return json(res, 200, { item: await service.complete(actor, id, body.evidence) });
+      }
       case "block": {
         const body = blockBodySchema.parse(await readBody(req));
         return json(res, 200, { item: await service.block(actor, id, body.reason) });

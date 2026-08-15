@@ -1,6 +1,14 @@
 import type { ChatMessage } from "./participant";
 
-export type PermissionMode = "default" | "plan" | "acceptEdits";
+export type PermissionMode = "default" | "plan" | "acceptEdits" | "approveAll" | "bypass";
+
+export const PERMISSION_MODES: readonly PermissionMode[] = [
+  "default",
+  "plan",
+  "acceptEdits",
+  "approveAll",
+  "bypass",
+];
 export type RunRequestStatus = "queued" | "claimed" | "completed" | "cancelled" | "failed";
 
 export interface AgentConversation {
