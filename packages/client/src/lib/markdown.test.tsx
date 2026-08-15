@@ -19,8 +19,8 @@ describe("renderContent", () => {
       <div>{renderContent(content, mentionRegex, true, onRefClick)}</div>,
     );
 
-    expect(container.querySelector(".bg-mention-pill")?.textContent).toBe("@hana");
-    expect(container.querySelector(".text-blurple")?.textContent).toBe("task-42");
+    expect(container.querySelector("[class*='bg-accent/']")?.textContent).toBe("@hana");
+    expect(container.querySelector(".text-accent")?.textContent).toBe("task-42");
   });
 });
 
@@ -32,7 +32,7 @@ describe("renderMessageContent", () => {
     const pre = container.querySelector("pre code");
     expect(pre?.textContent).toBe("const x = **1**; // @hana");
     expect(container.querySelector("strong")).toBeNull();
-    expect(container.querySelector(".bg-mention-pill")).toBeNull();
+    expect(container.querySelector("[class*='bg-accent/']")).toBeNull();
   });
 
   it("renders inline code with no markdown or mentions inside", () => {
@@ -42,7 +42,7 @@ describe("renderMessageContent", () => {
     const code = container.querySelector("code");
     expect(code?.textContent).toBe("**@hana** task-1");
     expect(container.querySelector("strong")).toBeNull();
-    expect(container.querySelector(".bg-mention-pill")).toBeNull();
+    expect(container.querySelector("[class*='bg-accent/']")).toBeNull();
   });
 
   it("renders a blockquote line with a left border", () => {
@@ -100,8 +100,8 @@ describe("renderMessageContent", () => {
     const content = "@hana please look at task-7";
     const { container } = render(<div>{renderMessageContent(content, mentionRegex)}</div>);
 
-    expect(container.querySelector(".bg-mention-pill")?.textContent).toBe("@hana");
-    expect(container.querySelector(".text-blurple")?.textContent).toBe("task-7");
+    expect(container.querySelector("[class*='bg-accent/']")?.textContent).toBe("@hana");
+    expect(container.querySelector(".text-accent")?.textContent).toBe("task-7");
   });
 
   it("renders a raw script tag as literal text, never as an element", () => {

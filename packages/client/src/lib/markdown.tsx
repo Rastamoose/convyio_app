@@ -50,8 +50,8 @@ export function renderContent(
             key={`m${index}`}
             className={
               pill
-                ? "rounded bg-mention-pill px-0.5 font-medium text-mention-text"
-                : "rounded bg-mention-pill font-medium text-mention-text"
+                ? "box-decoration-clone rounded-sm bg-accent/25 px-0.5 font-medium"
+                : "box-decoration-clone rounded-sm bg-accent/25 font-medium"
             }
           >
             {match[0]}
@@ -70,14 +70,14 @@ export function renderContent(
         <span
           key={`t${index}`}
           onClick={() => onRefClick(ref)}
-          className="cursor-pointer rounded bg-input px-1 font-semibold text-blurple"
+          className="cursor-pointer rounded bg-subtle px-1 font-mono text-[0.9em] font-semibold text-accent"
         >
           {ref}
         </span>
       ) : (
         <span
           key={`t${index}`}
-          className="rounded bg-input px-1 font-semibold text-blurple"
+          className="rounded bg-subtle px-1 font-mono text-[0.9em] font-semibold text-accent"
         >
           {ref}
         </span>
@@ -167,7 +167,7 @@ function renderLeaf(
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blurple underline"
+        className="text-accent underline"
       >
         {url}
       </a>,
@@ -206,7 +206,7 @@ function formatInline(
     const [, code, bold, underline, strike, italicStar, italicUnderscore] = match;
     if (code !== undefined) {
       nodes.push(
-        <code key={key} className="rounded bg-input px-1 py-0.5 font-mono text-[0.85em]">
+        <code key={key} className="rounded bg-subtle px-1 py-0.5 font-mono text-[0.85em]">
           {code}
         </code>,
       );
@@ -279,7 +279,7 @@ export function renderMessageContent(
     }
     const code = match[2].replace(/\n$/, "");
     nodes.push(
-      <pre key={`cb${i}`} className="my-1 overflow-x-auto rounded bg-input p-2 font-mono text-[0.85em]">
+      <pre key={`cb${i}`} className="my-1 overflow-x-auto rounded-md bg-subtle p-2 font-mono text-[0.85em]">
         <code>{code}</code>
       </pre>,
     );

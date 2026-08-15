@@ -88,7 +88,7 @@ function EmojiRow({ onPick, size = "text-lg" }: { onPick: (emoji: string) => voi
         <button
           key={emoji}
           onClick={() => onPick(emoji)}
-          className={`rounded p-1 ${size} hover:bg-input`}
+          className={`rounded-md p-1 ${size} hover:bg-subtle-hover`}
         >
           {emoji}
         </button>
@@ -179,7 +179,7 @@ function HoverRail({
   onPin: () => void;
 }) {
   return (
-    <div className="elevated absolute -top-3 right-4 hidden overflow-hidden rounded group-hover:flex">
+    <div className="elevated absolute -top-3 right-4 hidden overflow-hidden rounded-md group-hover:flex">
       <RailButton title="Add reaction" onClick={onReact}>
         <SmileIcon className="h-4 w-4" />
       </RailButton>
@@ -197,7 +197,7 @@ function HoverRail({
         </RailButton>
       )}
       <RailButton title={pinned ? "Unpin message" : "Pin message"} onClick={onPin}>
-        <PinIcon className={`h-3.5 w-3.5 ${pinned ? "text-blurple" : ""}`} />
+        <PinIcon className={`h-3.5 w-3.5 ${pinned ? "text-accent" : ""}`} />
       </RailButton>
     </div>
   );
@@ -234,7 +234,7 @@ function MessageMenuItem({ label, onClick, danger }: { label: string; onClick: (
   return (
     <button
       onClick={onClick}
-      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium hover:bg-input ${danger ? "text-dead" : "text-body"}`}
+      className={`block w-full rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-subtle-hover ${danger ? "text-dead" : "text-body"}`}
     >
       {label}
     </button>
@@ -414,7 +414,7 @@ function InlineEditor({
         }
       }}
       rows={2}
-      className="text-input-no-focus-ring w-full resize-none rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none"
+      className="text-input-no-focus-ring w-full resize-none rounded-md bg-subtle px-2 py-1.5 text-[15px] text-body outline-none"
     />
   );
 }
@@ -439,10 +439,10 @@ function ReactionsRow({
             key={r.emoji}
             title={r.actors.map((a) => a.name).join(", ")}
             onClick={() => onToggle(r.emoji, mine ? "remove" : "add")}
-            className={`rounded-full border px-1.5 py-0.5 text-xs ${
+            className={`rounded-full border px-1.5 py-0.5 text-xs transition ${
               mine
-                ? "bg-blurple text-mention-text"
-                : "border-divider bg-input/50 text-muted hover:bg-input"
+                ? "border-accent/40 bg-accent/10 font-medium text-accent"
+                : "border-divider bg-subtle text-muted hover:bg-subtle-hover"
             }`}
           >
             {r.emoji} {r.actors.length}
@@ -465,7 +465,7 @@ function FailedActions({
   return (
     <div className="mt-1 flex items-center gap-2 text-xs">
       <span className="text-dead">Failed to send</span>
-      <button onClick={() => onRetry(nonce)} className="font-semibold text-blurple hover:underline">
+      <button onClick={() => onRetry(nonce)} className="font-semibold text-accent hover:underline">
         Retry
       </button>
       <button onClick={() => onDiscard(nonce)} className="font-semibold text-muted hover:underline">
@@ -725,15 +725,15 @@ export function MessageList({
         {participant ? (
           <button
             onClick={(e) => openMemberCard(m.authorId, e.currentTarget.getBoundingClientRect())}
-            className="font-medium text-body hover:underline"
+            className="font-semibold text-body hover:underline"
           >
             {m.authorName}
           </button>
         ) : (
-          <span className="font-medium text-body">{m.authorName}</span>
+          <span className="font-semibold text-body">{m.authorName}</span>
         )}
         {m.authorKind === "agent" && <AgentBadge />}
-        <span className="text-xs text-faint">{formatTimestamp(m.timestamp)}</span>
+        <span className="font-mono text-[11px] text-faint">{formatTimestamp(m.timestamp)}</span>
         {m.editedAt != null && <span className="text-[10px] text-faint">(edited)</span>}
         {pinnedIndicator(m)}
       </div>
@@ -751,9 +751,9 @@ export function MessageList({
   };
 
   const rowClasses = (m: LocalMessage, base: string): string => {
-    if (m.failed) return `${base} border-l-2 border-dead bg-mention-bg pl-[14px] hover:bg-mention-bg-hover`;
+    if (m.failed) return `${base} border-l-2 border-dead bg-subtle pl-[14px] hover:bg-subtle-hover`;
     if (mentionsName(m.content, selfName)) {
-      return `${base} border-l-2 border-mention-accent bg-mention-bg pl-[14px] hover:bg-mention-bg-hover`;
+      return `${base} border-l-2 border-accent bg-subtle pl-[14px] hover:bg-subtle-hover`;
     }
     return `${base} hover:bg-chat-hover`;
   };
@@ -829,15 +829,23 @@ export function MessageList({
         className="min-h-0 flex-1 overflow-y-auto pb-4"
       >
         <PinnedMessages messages={messages} onJump={jumpToMessage} />
+        {/* The page: everything in the timeline reads inside one centered
+            column; only the pinned bar spans the full width. */}
+        <div className="mx-auto w-full max-w-3xl">
         {loadingOlder && (
           <div className="py-3 text-center text-xs text-faint">Loading messages…</div>
         )}
         {!hasMore && !loadingOlder && messages.length > 0 && (
-          <div className="py-3 text-center text-xs text-faint">Beginning of #{channel}</div>
+          <div className="py-3 text-center font-serif text-xs text-faint italic">
+            the beginning of #{channel}
+          </div>
         )}
         {messages.length === 0 && activeRuns.length === 0 && (
-          <div className="px-4 pt-10">
-            <h2 className="text-xl font-semibold text-body">{channel}</h2>
+          <div className="px-4 pt-12">
+            <h2 className="font-serif text-4xl font-bold tracking-tight text-body">
+              <span className="text-accent">#</span>
+              {channel}
+            </h2>
             <p className="mt-1 max-w-md text-sm text-muted">
               Nothing here yet.
               {(() => {
@@ -852,8 +860,8 @@ export function MessageList({
         {timeline.map((entry) => {
           if (entry.kind === "board") {
             return (
-              <div key={entry.line.id} className="flex justify-center px-4 py-0.5 text-xs italic text-faint">
-                <span>· {renderContent(entry.line.text, null, true, onRefClick)}</span>
+              <div key={entry.line.id} className="py-0.5 text-center font-serif text-xs text-faint italic">
+                · {renderContent(entry.line.text, null, true, onRefClick)}
               </div>
             );
           }
@@ -877,20 +885,20 @@ export function MessageList({
             <div
               key={m.id}
               id={`msg-${m.id}`}
-              className={`transition ${highlightId === m.id ? "bg-blurple/20" : ""} ${m.pending ? "opacity-50" : ""}`}
+              className={`transition ${highlightId === m.id ? "bg-accent/20" : ""} ${m.pending ? "opacity-50" : ""}`}
             >
               {firstUnread === m.id && (
-                <div className="mx-4 my-2 flex items-center gap-2">
-                  <div className="h-px flex-1 bg-dead" />
-                  <span className="text-[10px] font-bold tracking-wide text-dead uppercase">New</span>
-                  <div className="h-px flex-1 bg-dead" />
+                <div className="my-3 flex items-center justify-center gap-3">
+                  <div className="h-px w-10 bg-accent/50" />
+                  <span className="font-serif text-sm text-accent italic">new</span>
+                  <div className="h-px w-10 bg-accent/50" />
                 </div>
               )}
               {newDay && (
-                <div className="mx-4 mt-4 mb-1 flex items-center gap-2">
-                  <div className="h-px flex-1 bg-divider" />
-                  <span className="text-xs font-semibold text-muted">{formatDivider(m.timestamp)}</span>
-                  <div className="h-px flex-1 bg-divider" />
+                <div className="mt-6 mb-2 flex items-center justify-center gap-3">
+                  <div className="h-px w-10 bg-divider" />
+                  <span className="font-serif text-sm text-muted italic">{formatDivider(m.timestamp)}</span>
+                  <div className="h-px w-10 bg-divider" />
                 </div>
               )}
               {grouped ? (
@@ -898,7 +906,7 @@ export function MessageList({
                   className={rowClasses(m, "group relative flex gap-4 py-0.5 pr-4 pl-4")}
                   onContextMenu={(e) => openContextMenu(e, m.id)}
                 >
-                  <div className="w-10 shrink-0 pt-1 text-right text-[10px] text-faint opacity-0 group-hover:opacity-100">
+                  <div className="w-10 shrink-0 pt-1 text-right font-mono text-[10px] text-faint opacity-0 group-hover:opacity-100">
                     {formatShortTime(m.timestamp)}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -910,7 +918,7 @@ export function MessageList({
                 </div>
               ) : (
                 <div
-                  className={rowClasses(m, "group relative mt-4 flex gap-4 py-0.5 pr-4 pl-4")}
+                  className={rowClasses(m, "group relative mt-5 flex gap-4 py-0.5 pr-4 pl-4")}
                   onContextMenu={(e) => openContextMenu(e, m.id)}
                 >
                   <div className="pt-0.5">
@@ -933,6 +941,7 @@ export function MessageList({
           );
         })}
         <TypingRow typists={typists} />
+        </div>
         {lightbox && (
           <AttachmentLightbox
             attachment={lightbox}
@@ -944,7 +953,7 @@ export function MessageList({
       {newSinceScroll > 0 && (
         <button
           onClick={jumpToBottom}
-          className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-blurple px-3 py-1.5 text-xs font-semibold text-mention-text shadow-lg hover:opacity-90"
+          className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent shadow-lg transition hover:bg-accent-hover"
         >
           {newSinceScroll} new message{newSinceScroll === 1 ? "" : "s"} ↓
         </button>

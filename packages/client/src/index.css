@@ -1,34 +1,43 @@
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/400-italic.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+@import "@fontsource/jetbrains-mono/700.css";
 @import "tailwindcss";
 
 @theme {
-  /* Neutral zinc/ink light theme — settled palette so future tweaks stay
-     consistent. Accent is the one warm note (amber).
+  /* The token layer of the design language in AGENTS/DESIGN.md: tokens are
+     named for their role, never their hue, and components never branch on
+     the active theme — the `html.dark` block below re-points every name.
 
-     Surfaces:  sidebar/userpanel #f7f7f6 | chat #ffffff | chat-hover #f0f0ef
-               input/popup #ffffff | composer/highlight #f2f2f0
-     Ink:       body #18181a | muted #71716e | faint #a3a29d
-     Accents:   blurple #d97706 | mention-bg #f2f2f0 | mention-bg-hover #e8e8e5
+     The app is a frame composition: `canvas` is the outermost backdrop, the
+     sidebar rests directly on it, and chat/board is a rounded panel floating
+     on top. Floating surfaces (menus, popovers, toasts) are glass — see
+     `elevated` below.
+
+     Surfaces:  canvas #eae8e3 | chat #ffffff | chat-hover #f1f0ec
+                input/popup #ffffff | composer #f3f2ef | subtle fills #f2f1ed
+     Ink:       body #18181a | muted #6f6f6a | faint #a3a29c
+     Accent:    amber #d97706 (hover #b45309), ink on it #18181a
      Status:    online #4d7c0f | working #d9a441 | away #d9730d | dead #c0392b */
-  --color-sidebar: #f7f7f6;
-  --color-sidebar-dark: #131313;
-  --color-userpanel: #f7f7f6;
+  --color-canvas: #eae8e3;
+  --color-backdrop: #131313;
   --color-chat: #ffffff;
-  --color-chat-hover: #f0f0ef;
+  --color-chat-hover: #f1f0ec;
   --color-input: #ffffff;
+  --color-subtle: #f2f1ed;
+  --color-subtle-hover: #e9e8e3;
   --color-body: #18181a;
-  --color-muted: #71716e;
-  --color-faint: #a3a29d;
-  --color-blurple: #d97706;
+  --color-muted: #6f6f6a;
+  --color-faint: #a3a29c;
+  --color-accent: #d97706;
+  --color-accent-hover: #b45309;
+  --color-on-accent: #18181a;
   --color-online: #4d7c0f;
-  --color-offline: #a3a29d;
-  --color-divider: #e4e4e1;
-  --color-mention-accent: #d97706;
-  --color-mention-bg: #f2f2f0;
-  --color-mention-bg-hover: #e8e8e5;
-  --color-mention-pill: #d97706;
-  --color-mention-text: #18181a;
+  --color-offline: #a3a29c;
+  --color-divider: #e5e4e0;
   --color-popup: #ffffff;
-  --color-composer: #f2f2f0;
+  --color-composer: #f3f2ef;
   --color-dead: #c0392b;
   --color-working: #d9a441;
   --color-away: #d9730d;
@@ -38,12 +47,6 @@
   --color-scrollbar: #d4d4d1;
   --color-scrollbar-hover: #bfbfbb;
 
-  /* Offset ink shadows for the pressable login/auth buttons and their cards:
-     they pair with `border-2 border-body` and an `active:translate-*` press,
-     so the shadow is a hard offset block, not a blur. */
-  --shadow-hard-sm: 2px 2px 0 var(--color-body);
-  --shadow-hard-lg: 6px 6px 0 var(--color-body);
-
   /* `shadow-popup` for the one floating surface that can't take `elevated`:
      a toast draws its own variant-coloured border, and `.elevated` sorts after
      `border-*` utilities in the output, so it would overwrite that colour.
@@ -52,8 +55,17 @@
      per element rather than a frozen light-mode value. */
   --shadow-popup: var(--popup-shadow);
 
-  --font-sans: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+  /* Sans for reading (SF on macOS), mono for voice: code, board refs and the
+     micro-labels. JetBrains Mono is self-hosted via @fontsource (above). */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
+  /* Editorial display face: headlines and datelines only, never body text.
+     ui-serif resolves to New York on macOS, Georgia elsewhere. */
+  --font-serif: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
 
   /* Shared enter animations — referenced by name across components. */
   --animate-fade-in: fade-in 150ms ease-out;
@@ -93,64 +105,83 @@
   }
 }
 
-/* Edge and lift for surfaces that float above the page. Plain custom
+/* Edge, tint and lift for surfaces that float above the page. Plain custom
    properties rather than `@theme` entries on purpose: Tailwind inlines a
    theme value into the utility it generates, which would freeze the light
    values into `.elevated` and leave dark mode unstyled. As vars they resolve
    at use time, so the `html.dark` block below swaps them. */
 :root {
-  --popup-border: #d4d4d0;
+  --popup-bg: rgb(255 255 255 / 0.82);
+  --popup-border: #dddcd6;
   --popup-shadow:
-    0 10px 30px -6px rgb(24 24 26 / 0.18), 0 2px 8px -2px rgb(24 24 26 / 0.1);
+    0 12px 32px -8px rgb(24 24 26 / 0.14), 0 2px 6px -2px rgb(24 24 26 / 0.08);
 }
 
 /* Every floating surface — popovers, dropdowns, context menus, autocompletes,
-   toasts, modal panels — wears this and nothing else for its background. The
-   border is what actually does the work: `--color-popup` matches `--color-chat`
-   exactly in light mode, so a shadow alone leaves a card dissolving into the
-   message list. Callers still bring their own radius, padding and position. */
+   modal panels — wears this and nothing else for its background. Glass, in
+   the macOS sense: a translucent tint over `backdrop-filter` blur, with the
+   saturation pushed back up so the blur reads as glass rather than dirty
+   plastic. The hairline border keeps the edge crisp where the blur has
+   nothing to sample. Callers still bring their own radius, padding and
+   position. */
 @utility elevated {
-  background: var(--color-popup);
+  background: var(--popup-bg);
   border: 1px solid var(--popup-border);
   box-shadow: var(--popup-shadow);
+  backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
 }
 
-/* Dark theme: the same palette rotated onto dark surfaces. Every surface/ink
-   token above is re-pointed here so components keep addressing colors by
-   semantic name and never branch on the active theme. Toggled by the `dark`
-   class on <html> (see hooks/useTheme.ts); `html.dark` outweighs the `:root`
-   block Tailwind emits for @theme. */
+/* The outermost app backdrop. Dark mode adds the one atmospheric moment: a
+   faint amber glow pooling where the sidebar sits — the accent hue as light,
+   so the dark theme has a temperature, not just an absence of it. */
+.app-frame {
+  background: var(--color-canvas);
+}
+html.dark .app-frame {
+  background:
+    radial-gradient(900px 480px at 8% -10%, rgb(240 168 60 / 0.09), transparent 60%),
+    var(--color-canvas);
+}
+
+/* Dark theme: the same palette rotated onto a warm charcoal ladder — never
+   pure black, each step ~6-8 luminance points up from the canvas so depth
+   comes from light, not borders (the Raycast/Linear rule). Ink warms to
+   match; the accent lifts so it still reads as the hottest thing on screen.
+   Components keep addressing colors by semantic name and never branch on the
+   active theme. Toggled by the `dark` class on <html> (see
+   hooks/useTheme.ts); `html.dark` outweighs the `:root` block Tailwind emits
+   for @theme. */
 html.dark {
-  --color-sidebar: #131315;
-  --color-sidebar-dark: #08080a;
-  --color-userpanel: #131315;
-  --color-chat: #1a1a1d;
-  --color-chat-hover: #242428;
-  --color-input: #242428;
-  --color-body: #ececea;
-  --color-muted: #9b9b97;
-  --color-faint: #6f6f6b;
-  --color-blurple: #f0a83c;
-  --color-online: #7cb342;
-  --color-offline: #6f6f6b;
-  --color-divider: #2c2c30;
-  --color-mention-accent: #f0a83c;
-  --color-mention-bg: #26262a;
-  --color-mention-bg-hover: #303036;
-  --color-mention-pill: #f0a83c;
+  --color-canvas: #15130f;
+  --color-backdrop: #0b0a08;
+  --color-chat: #1f1c17;
+  --color-chat-hover: #29251f;
+  --color-input: #29251f;
+  --color-subtle: #2b2721;
+  --color-subtle-hover: #35302a;
+  --color-body: #edeae4;
+  --color-muted: #a19b91;
+  --color-faint: #706a60;
+  --color-accent: #f0a83c;
+  --color-accent-hover: #f7bc5e;
   /* Unchanged: still ink on an amber pill/button, dark in both themes. */
-  --color-mention-text: #18181a;
-  --color-popup: #212125;
-  --color-composer: #242428;
+  --color-on-accent: #18181a;
+  --color-online: #7cb342;
+  --color-offline: #706a60;
+  --color-divider: #35302a;
+  --color-popup: #2b2721;
+  --color-composer: #29251f;
   --color-dead: #e2584a;
   --color-working: #e0b455;
   --color-away: #ea8a33;
-  --color-scrollbar: #3a3a3f;
-  --color-scrollbar-hover: #4d4d54;
-  /* Lighter than `--color-divider` (#2c2c30) so the outer edge of a popover
-     reads as a step up, not as one more internal rule. The shadow carries
-     almost nothing on dark surfaces, so it goes heavier and the border leads. */
-  --popup-border: #3a3a40;
+  --color-scrollbar: #3d382f;
+  --color-scrollbar-hover: #4e483c;
+  /* Lighter than `--color-divider` so the outer edge of a popover reads as a
+     step up, not as one more internal rule. The shadow carries almost
+     nothing on dark surfaces, so it goes heavier and the border leads. */
+  --popup-bg: rgb(43 39 33 / 0.78);
+  --popup-border: #403a31;
   --popup-shadow:
     0 12px 32px -6px rgb(0 0 0 / 0.65), 0 2px 8px -2px rgb(0 0 0 / 0.45);
 }
@@ -162,7 +193,7 @@ body,
 }
 
 body {
-  @apply bg-chat text-body font-sans antialiased;
+  @apply bg-chat font-sans text-body antialiased;
 }
 
 /* Thin scrollbar */
@@ -189,7 +220,7 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-blurple) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 
 /* Chrome paints autofilled inputs white; repaint with the app's colors. */
@@ -199,7 +230,7 @@ input:-webkit-autofill {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-blurple);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
@@ -210,4 +241,3 @@ input:-webkit-autofill {
 .text-input-no-focus-ring:focus-visible {
   outline: none;
 }
-

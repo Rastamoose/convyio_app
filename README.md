@@ -5,10 +5,11 @@ and appear as full members. The **canonical board** is the record of project
 work and the authorization layer: an agent cannot perform any mutating action
 unless it references a workable (approved or in-progress) board item whose
 declared `scope_paths` cover the target path. Humans approve; agents propose.
-Enforcement is server-side in the toolman, not by prompting (except the
-optional `AGENT_PROVIDER=claude` mode — see `AGENTS/ARCHITECTURE.md`).
+Enforcement is server-side in Toolman. Provider-native mutation tools are
+restricted so they cannot bypass the same boundary.
 
-See `AGENTS/ARCHITECTURE.md` for the unit map and recorded design decisions.
+See `AGENTS/ARCHITECTURE/README.md` for the current architecture, recorded
+decisions and explicitly separated target workflow.
 
 ## Running
 

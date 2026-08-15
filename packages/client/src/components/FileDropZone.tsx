@@ -67,8 +67,8 @@ export function FileDropZone({
     <div className="relative flex min-h-0 flex-1 flex-col">
       {children}
       {dragDepth > 0 && (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-sidebar-dark/70 p-6">
-          <div className="rounded-lg border-2 border-dashed border-blurple bg-popup px-8 py-6 text-center">
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-backdrop/70 p-6">
+          <div className="rounded-xl border-2 border-dashed border-accent bg-popup px-8 py-6 text-center">
             <div className="text-lg font-semibold text-body">
               Drop files to upload
             </div>

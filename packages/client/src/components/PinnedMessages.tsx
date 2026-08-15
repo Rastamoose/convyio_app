@@ -59,7 +59,7 @@ export function PinnedMessages({
         <button
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex items-center gap-1.5 text-xs font-semibold text-muted hover:text-body"
+          className="flex items-center gap-1.5 font-mono text-[11px] font-semibold text-muted hover:text-body"
         >
           <PinIcon className="h-3.5 w-3.5" />
           {pinned.length} pinned
@@ -67,14 +67,14 @@ export function PinnedMessages({
       </div>
       {open && (
         <div className="elevated absolute top-full right-3 z-20 mt-1 max-h-[60vh] w-80 overflow-y-auto rounded-lg p-3">
-          <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
+          <h2 className="mb-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Pinned messages
           </h2>
           <div className="space-y-1">
             {pinned.map((m) => (
               <div
                 key={m.id}
-                className="flex items-start gap-2 rounded bg-mention-bg p-2 hover:bg-mention-bg-hover"
+                className="flex items-start gap-2 rounded-md bg-subtle p-2 hover:bg-subtle-hover"
               >
                 <button
                   onClick={() => {

@@ -37,9 +37,9 @@ const STARTUP_PATIENCE = 5;
  */
 function StartupScreen({ error }: { error: string | null }) {
   return (
-    <div className="flex h-full items-center justify-center bg-chat">
+    <div className="app-frame flex h-full items-center justify-center">
       {error ? (
-        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+        <div className="elevated w-96 rounded-2xl p-8 text-center">
           <h1 className="mb-2 text-lg font-semibold text-body">Can't start</h1>
           <p className="mb-4 text-sm text-muted">{error}</p>
           <p className="mb-4 text-xs text-faint">
@@ -49,7 +49,7 @@ function StartupScreen({ error }: { error: string | null }) {
           </p>
           <button
             onClick={() => window.location.reload()}
-            className="cursor-pointer rounded bg-blurple px-3 py-1.5 text-sm font-medium text-mention-text hover:opacity-90"
+            className="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition hover:bg-accent-hover"
           >
             Reload
           </button>
@@ -200,12 +200,12 @@ export default function App() {
 
   if (!authEnabled) {
     return (
-      <div className="flex h-full items-center justify-center bg-chat">
-        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+      <div className="app-frame flex h-full items-center justify-center">
+        <div className="elevated w-96 rounded-2xl p-8 text-center">
           <h1 className="mb-2 text-2xl font-semibold text-body">Sign-in unavailable</h1>
           <p className="text-muted">
             This workspace isn't configured for sign-in yet. Contact{" "}
-            <a href="mailto:hello@convyio.com" className="font-medium text-blurple hover:underline">
+            <a href="mailto:hello@convyio.com" className="font-medium text-accent hover:underline">
               hello@convyio.com
             </a>{" "}
             for access.
@@ -244,8 +244,8 @@ export default function App() {
 
   if (usernameStatus === "removed") {
     return (
-      <div className="flex h-full items-center justify-center bg-chat">
-        <div className="w-96 rounded-lg bg-sidebar p-8 text-center shadow-2xl">
+      <div className="app-frame flex h-full items-center justify-center">
+        <div className="elevated w-96 rounded-2xl p-8 text-center">
           <h1 className="mb-2 text-2xl font-semibold text-body">No workspaces here</h1>
           <p className="text-muted">
             You've been removed from this workspace, so there's nothing to show you.
@@ -309,7 +309,7 @@ function UsernameStep({
   };
 
   return (
-    <div className="relative flex h-full items-center justify-center bg-chat">
+    <div className="app-frame relative flex h-full items-center justify-center">
       <button
         onClick={onBack}
         aria-label="Back to sign in"
@@ -322,14 +322,14 @@ function UsernameStep({
           className="h-6 w-6"
         />
       </button>
-      <div className="w-96 animate-fade-in rounded-lg bg-sidebar p-8 shadow-2xl">
+      <div className="elevated w-96 animate-fade-in rounded-2xl p-8">
         <h1 className="mb-1 text-2xl font-semibold text-body">Pick a username</h1>
         <p className="mb-6 text-muted">
           This is who you are here, permanently — choose well.
         </p>
         <label
           htmlFor="username"
-          className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase"
+          className="mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase"
         >
           Username
         </label>
@@ -342,7 +342,7 @@ function UsernameStep({
             setError(null);
           }}
           onKeyDown={(e) => e.key === "Enter" && void submit()}
-          className="mb-2 w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+          className="mb-2 w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent"
           placeholder="e.g. harris"
           maxLength={32}
         />
@@ -352,7 +352,7 @@ function UsernameStep({
         <button
           onClick={() => void submit()}
           disabled={!valid || submitting}
-          className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:bg-working disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           Join Workspace
         </button>
@@ -385,12 +385,12 @@ function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
   };
 
   const fieldClass =
-    "w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple";
-  const labelClass = "mb-2 block text-xs font-bold tracking-wide text-muted uppercase";
+    "w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent";
+  const labelClass = "mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase";
 
   return (
-    <div className="flex h-full items-center justify-center bg-chat">
-      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
+    <div className="app-frame flex h-full items-center justify-center">
+      <div className="elevated w-96 animate-fade-in rounded-2xl p-8">
         <h1 className="mb-1 text-2xl font-semibold text-body">Set a new password</h1>
         <p className="mb-6 text-muted">
           Choose a new password for your account ({MIN_PASSWORD_LENGTH}+ characters).
@@ -438,7 +438,7 @@ function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
         <button
           onClick={() => void submit()}
           disabled={!valid || submitting}
-          className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           Save new password
         </button>
@@ -459,6 +459,14 @@ function Workspace() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => window.localStorage.getItem("convyio:sidebar-open") !== "0",
+  );
+  // The board pinned beside the chat — the workbench. The Board tab still
+  // gives it the full window; the pin keeps sign-off visible mid-conversation.
+  const [boardPinned, setBoardPinned] = useState(
+    () => window.localStorage.getItem("convyio:board-pinned") === "1",
+  );
 
   // Switching channels leaves any in-flight reply behind and marks the
   // channel we're entering as read (also covers the initial mount).
@@ -492,7 +500,17 @@ function Workspace() {
     setSwitcherOpen(false);
   };
 
-  // Single window-level listener for the two global shortcuts, registered
+  // Persist the sidebar collapse across sessions, same pattern as the theme.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("convyio:sidebar-open", sidebarOpen ? "1" : "0");
+      window.localStorage.setItem("convyio:board-pinned", boardPinned ? "1" : "0");
+    } catch {
+      // Private-mode storage denial: the toggles still apply for this session.
+    }
+  }, [sidebarOpen, boardPinned]);
+
+  // Single window-level listener for the global shortcuts, registered
   // with useCapture so it runs before MessageInput's own keydown handling —
   // that handler's ArrowUp-to-edit branch has no modifier check, so without
   // capture+stopPropagation an Alt+ArrowUp while composing would fire both.
@@ -501,6 +519,11 @@ function Workspace() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault(); // keep the browser's own search bar from opening
         setSwitcherOpen(true);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault(); // the browser's bookmarks bar stays shut
+        setSidebarOpen((o) => !o);
         return;
       }
       if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -572,38 +595,67 @@ function Workspace() {
   };
 
   return (
-    <div className="flex h-full">
-      <Sidebar
-        channel={channel}
-        onSelectChannel={setChannel}
-        onDiscuss={discussItem}
-        onPrefill={prefillText}
-      />
+    <div className="app-frame flex h-full">
+      {/* The sidebar rests on the canvas; collapsing animates its width to
+          zero while the inner aside holds its fixed 240px width. */}
+      <div
+        className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+          sidebarOpen ? "w-60" : "w-0"
+        }`}
+      >
+        <Sidebar
+          channel={channel}
+          onSelectChannel={setChannel}
+          onDiscuss={discussItem}
+          onPrefill={prefillText}
+        />
+      </div>
       <main className="flex min-w-0 flex-1 flex-col bg-chat">
-        <TopBar channel={channel} view={view} onSetView={setView} />
+        <TopBar
+          channel={channel}
+          view={view}
+          onSetView={setView}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((o) => !o)}
+          boardPinned={boardPinned}
+          onToggleBoardPin={() => setBoardPinned((p) => !p)}
+        />
         {view === "chat" ? (
-          <FileDropZone
-            onFiles={(files) => workspace.addAttachments(channel, files)}
-          >
-            <MessageList
-              channel={channel}
-              onRefClick={handleRefClick}
-              onReply={setReplyTo}
-              editingId={editingId}
-              onEditingIdChange={setEditingId}
-              onDiscuss={discussItem}
-              onPrefill={prefillText}
-            />
-            <MessageInput
-              channel={channel}
-              onSend={handleSend}
-              prefill={prefill}
-              replyTo={replyTo}
-              onCancelReply={() => setReplyTo(null)}
-              editingId={editingId}
-              onRequestEditLast={setEditingId}
-            />
-          </FileDropZone>
+          <div className="flex min-h-0 flex-1">
+            <FileDropZone
+              onFiles={(files) => workspace.addAttachments(channel, files)}
+            >
+              <MessageList
+                channel={channel}
+                onRefClick={handleRefClick}
+                onReply={setReplyTo}
+                editingId={editingId}
+                onEditingIdChange={setEditingId}
+                onDiscuss={discussItem}
+                onPrefill={prefillText}
+              />
+              <MessageInput
+                channel={channel}
+                onSend={handleSend}
+                prefill={prefill}
+                replyTo={replyTo}
+                onCancelReply={() => setReplyTo(null)}
+                editingId={editingId}
+                onRequestEditLast={setEditingId}
+              />
+            </FileDropZone>
+            {boardPinned && (
+              <aside className="flex w-[400px] shrink-0 flex-col border-l border-divider">
+                <BoardView
+                  highlightRef={highlightRef}
+                  openItemId={openItemId}
+                  onOpenItem={setOpenItemId}
+                  onDiscuss={discussItem}
+                  onJumpToTrace={jumpToTrace}
+                />
+              </aside>
+            )}
+          </div>
         ) : (
           <BoardView
             highlightRef={highlightRef}

@@ -85,7 +85,7 @@ const EMOJI_GRID = Object.values(EMOJI_SHORTCODES);
 // Highlighted row in the autocomplete popups. `bg-input` matches `--color-popup`
 // in light mode, so the selection was invisible there; tint with the accent
 // instead, which reads in both themes.
-const SELECTED = "bg-blurple/15 text-body";
+const SELECTED = "bg-accent/15 text-body";
 
 function findCommandQuery(text: string): string | null {
   if (!text.startsWith("/")) return null;
@@ -431,16 +431,19 @@ export function MessageInput({
 
   return (
     <div className="relative shrink-0 px-4 pb-6">
+      {/* The composer follows the timeline's centered reading column; the
+          popups position against this wrapper so they track it. */}
+      <div className="relative mx-auto w-full max-w-3xl">
       {commandOpen && (
-        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Commands
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
             {commandMatches.map((c, i) => (
               <li key={c.name}>
                 <button
-                  className={`flex w-full items-center gap-3 rounded px-2 py-1.5 text-left ${
+                  className={`flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left ${
                     i === highlighted ? SELECTED : ""
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
@@ -463,15 +466,15 @@ export function MessageInput({
         </div>
       )}
       {mentionOpen && (
-        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Members
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
             {matches.map((p, i) => (
               <li key={p.id}>
                 <button
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left ${
+                  className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left ${
                     i === highlighted ? SELECTED : "text-body"
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
@@ -490,15 +493,15 @@ export function MessageInput({
         </div>
       )}
       {shortcodeOpen && (
-        <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 text-xs font-semibold tracking-wide text-muted uppercase">
+        <div className="elevated absolute bottom-full left-0 right-0 z-10 mb-2 overflow-hidden rounded-lg">
+          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
             Emoji
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
             {shortcodeMatches.map(([name, emoji], i) => (
               <li key={name}>
                 <button
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left ${
+                  className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left ${
                     i === highlighted ? SELECTED : ""
                   }`}
                   onMouseEnter={() => setHighlighted(i)}
@@ -518,7 +521,7 @@ export function MessageInput({
       {emojiPickerOpen && (
         <div
           ref={emojiPopupRef}
-          className="elevated absolute bottom-full left-4 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg p-2"
+          className="elevated absolute bottom-full left-0 z-10 mb-2 grid w-64 grid-cols-8 gap-1 rounded-lg p-2"
         >
           {EMOJI_GRID.map((emoji, i) => (
             <button
@@ -527,7 +530,7 @@ export function MessageInput({
                 e.preventDefault();
                 insertEmoji(emoji);
               }}
-              className="rounded p-1 text-lg hover:bg-input"
+              className="rounded-md p-1 text-lg hover:bg-subtle-hover"
             >
               {emoji}
             </button>
@@ -535,9 +538,9 @@ export function MessageInput({
         </div>
       )}
       {replyTo && (
-        <div className="mb-2 flex items-center gap-2 rounded-lg bg-input px-3 py-2">
-          <div className="min-w-0 flex-1 border-l-2 border-blurple pl-2">
-            <div className="text-xs font-semibold text-blurple">
+        <div className="mb-2 flex items-center gap-2 rounded-md bg-subtle px-3 py-2">
+          <div className="min-w-0 flex-1 border-l-2 border-accent pl-2">
+            <div className="text-xs font-semibold text-accent">
               Replying to {replyTo.authorName}
             </div>
             <div className="truncate text-xs text-muted">
@@ -561,7 +564,7 @@ export function MessageInput({
         </div>
       )}
       {attachments.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2 rounded-lg bg-input p-2">
+        <div className="mb-2 flex flex-wrap gap-2 rounded-lg bg-subtle p-2">
           {attachments.map((a) => (
             <div
               key={a.localId}
@@ -624,7 +627,7 @@ export function MessageInput({
               <button
                 onClick={() => removeAttachment(channel, a.localId)}
                 aria-label={`Remove ${a.name}`}
-                className="absolute top-0.5 right-0.5 rounded bg-sidebar-dark/80 p-0.5 text-overlay-ink/70 hover:text-overlay-ink"
+                className="absolute top-0.5 right-0.5 rounded bg-backdrop/80 p-0.5 text-overlay-ink/70 hover:text-overlay-ink"
               >
                 <svg
                   className="h-3 w-3"
@@ -738,13 +741,14 @@ export function MessageInput({
         </div>
         {remaining <= COUNTER_AT && (
           <span
-            className={`pointer-events-none absolute right-2 bottom-1 text-xs ${
+            className={`pointer-events-none absolute right-2 bottom-1 font-mono text-[10px] ${
               remaining < 50 ? "text-dead" : "text-muted"
             }`}
           >
             {remaining}
           </span>
         )}
+      </div>
       </div>
     </div>
   );

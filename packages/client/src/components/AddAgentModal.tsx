@@ -165,7 +165,7 @@ export function AddAgentModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="elevated flex max-h-[85vh] w-full max-w-md flex-col rounded-lg">
+      <div className="elevated flex max-h-[85vh] w-full max-w-md flex-col rounded-xl">
         <div className="flex items-center justify-between border-b border-divider px-4 py-3">
           <h2 className="text-lg font-semibold text-body">
             {step === "create" && "Add an agent"}
@@ -220,7 +220,7 @@ export function AddAgentModal({
 
           {step === "create" && agentInvites.length > 0 && (
             <div className="mt-6">
-              <h3 className="mb-2 text-xs font-bold tracking-wide text-muted uppercase">
+              <h3 className="mb-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
                 Your agents
               </h3>
               <ul className="space-y-1.5">
@@ -228,7 +228,7 @@ export function AddAgentModal({
                   <li key={invite.id}>
                     <button
                       onClick={() => openConfigure(invite.id)}
-                      className="flex w-full cursor-pointer items-center justify-between rounded bg-input px-3 py-2 text-left hover:bg-mention-bg-hover"
+                      className="flex w-full cursor-pointer items-center justify-between rounded-md bg-subtle px-3 py-2 text-left hover:bg-subtle-hover"
                     >
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-body">
@@ -267,7 +267,7 @@ function InstructionsField({
     <div className="mb-4">
       <label
         htmlFor={id}
-        className="mb-1 block text-xs font-bold tracking-wide text-muted uppercase"
+        className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
       >
         Instructions
       </label>
@@ -277,7 +277,7 @@ function InstructionsField({
         onChange={(e) => onChange(e.target.value)}
         rows={5}
         maxLength={20000}
-        className="w-full resize-none rounded border border-divider bg-input px-3 py-2 text-sm text-body outline-none focus:ring-2 focus:ring-blurple"
+        className="w-full resize-none rounded-md border border-divider bg-input px-3 py-2 text-sm text-body outline-none focus:ring-2 focus:ring-accent"
       />
     </div>
   );
@@ -299,9 +299,9 @@ function HarnessOption({
   return (
     <div
       title={title}
-      className={`flex-1 rounded-lg px-3 py-2 text-center text-sm font-medium select-none ${
+      className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-medium select-none ${
         selected
-          ? "bg-blurple text-mention-text"
+          ? "bg-accent text-on-accent"
           : "border border-divider bg-input text-muted"
       } ${disabled ? "opacity-50" : ""}`}
     >
@@ -333,7 +333,7 @@ function CreateStep({
   return (
     <>
       <div className="mb-4">
-        <label className="mb-1 block text-xs font-bold tracking-wide text-muted uppercase">
+        <label className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
           Harness
         </label>
         <div className="flex gap-2">
@@ -350,7 +350,7 @@ function CreateStep({
       <div className="mb-4">
         <label
           htmlFor="agent-name"
-          className="mb-1 block text-xs font-bold tracking-wide text-muted uppercase"
+          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Agent name
         </label>
@@ -361,7 +361,7 @@ function CreateStep({
           onKeyDown={(e) => e.key === "Enter" && onSubmit()}
           maxLength={32}
           placeholder="e.g. claude-helper"
-          className="w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+          className="w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent"
         />
         <p className="mt-1 text-xs text-faint">
           1-32 characters: letters, digits, spaces, - and _
@@ -371,7 +371,7 @@ function CreateStep({
       <InstructionsField id="agent-instructions" value={instructions} onChange={onInstructionsChange} />
 
       {error && (
-        <p className="mb-4 rounded border-l-4 border-dead bg-mention-bg px-3 py-2 text-sm text-dead" role="alert">
+        <p className="mb-4 rounded-md border-l-4 border-dead bg-subtle px-3 py-2 text-sm text-dead" role="alert">
           {error}
         </p>
       )}
@@ -379,7 +379,7 @@ function CreateStep({
       <button
         onClick={onSubmit}
         disabled={!nameValid || creating}
-        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         {creating ? "Creating…" : "Create agent"}
       </button>
@@ -387,34 +387,77 @@ function CreateStep({
   );
 }
 
-function CopyField({
+function Chevron({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+/** A pairing secret or command: Copy is always on the row; the value sits
+ *  behind the same chevron the rest of the product uses for disclosures. */
+function PairingCopyRow({
   label,
   value,
-  copied,
-  onCopy,
   multiline,
 }: {
   label: string;
   value: string;
-  copied: boolean;
-  onCopy: () => void;
   multiline?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // The value stays selectable once the row is opened.
+    }
+  };
+
   return (
-    <div className="mb-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs font-bold tracking-wide text-muted uppercase">{label}</span>
-        <button onClick={onCopy} className="cursor-pointer text-xs font-medium text-blurple hover:underline">
+    <div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left font-mono text-[10px] font-bold tracking-wider text-muted uppercase hover:text-body"
+        >
+          <Chevron expanded={open} />
+          {label}
+        </button>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          aria-label={`Copy ${label}`}
+          className="shrink-0 cursor-pointer rounded-md border border-divider bg-input px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+        >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <div
-        className={`rounded border border-divider bg-input px-2 py-1.5 font-mono text-xs text-body ${
-          multiline ? "whitespace-pre-wrap break-words" : "break-all"
-        }`}
-      >
-        {value}
-      </div>
+      {open && (
+        <pre
+          className={`mt-1.5 overflow-x-auto rounded-md border border-divider bg-composer px-2.5 py-2 font-mono text-xs text-body ${
+            multiline ? "whitespace-pre-wrap break-words" : "whitespace-pre"
+          }`}
+        >
+          {value}
+        </pre>
+      )}
     </div>
   );
 }
@@ -430,23 +473,14 @@ function PairStep({
   apiUrl: string;
   onContinue: () => void;
 }) {
-  const [copied, setCopied] = useState<"code" | "prompt" | null>(null);
-
-  const copy = async (text: string, what: "code" | "prompt") => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(what);
-      window.setTimeout(() => setCopied(null), 1500);
-    } catch {
-      // The value stays visible and selectable either way.
-    }
-  };
-
+  const cliCommand = pairingCode
+    ? `convyio-agent pair --server ${apiUrl} --code ${pairingCode} --workspace .`
+    : "";
   const setupPrompt = pairingCode
     ? [
         "Pair this repository with Convyio so you can act as its workspace agent. Run the real convyio-agent CLI (not a published npm package):",
         "",
-        `convyio-agent pair --server ${apiUrl} --code ${pairingCode} --workspace .`,
+        cliCommand,
         "",
         "If `convyio-agent` isn't on PATH yet, build and link it first from a checkout of this repo:",
         "npm install && npm run build -w @workspace/agent && npm link -w @workspace/agent",
@@ -473,30 +507,19 @@ function PairStep({
   return (
     <>
       <p className="mb-4 text-sm text-muted">
-        Paste this into Claude Code, in the repository you want{" "}
-        <span className="text-body">{agent.name}</span> to work in. The pairing code is
-        shown only once.
+        Pair <span className="text-body">{agent.name}</span> in the repository you want
+        it to work in. The pairing code is shown only once.
       </p>
 
       {pairingCode && (
-        <>
-          <CopyField
-            label="Pairing code"
-            value={pairingCode}
-            copied={copied === "code"}
-            onCopy={() => void copy(pairingCode, "code")}
-          />
-          <CopyField
-            label="Setup prompt"
-            value={setupPrompt}
-            copied={copied === "prompt"}
-            onCopy={() => void copy(setupPrompt, "prompt")}
-            multiline
-          />
-        </>
+        <div className="mb-4 space-y-2">
+          <PairingCopyRow label="Pairing code" value={pairingCode} />
+          <PairingCopyRow label="Setup prompt" value={setupPrompt} multiline />
+          <PairingCopyRow label="CLI" value={cliCommand} />
+        </div>
       )}
 
-      <div className={`mb-4 rounded border-l-4 bg-mention-bg px-3 py-2 text-sm ${statusClass}`}>
+      <div className={`mb-4 rounded-md border-l-4 bg-subtle px-3 py-2 text-sm ${statusClass}`}>
         {statusText}
       </div>
 
@@ -506,7 +529,7 @@ function PairStep({
       <button
         onClick={onContinue}
         disabled={!agent.runtime.connected}
-        className="w-full rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         Continue
       </button>
@@ -597,7 +620,7 @@ function ConfigureStep({
         </div>
         <button
           onClick={onRepair}
-          className="shrink-0 cursor-pointer text-xs font-medium text-blurple hover:underline"
+          className="shrink-0 cursor-pointer text-xs font-medium text-accent hover:underline"
         >
           Re-pair
         </button>
@@ -608,7 +631,7 @@ function ConfigureStep({
       <div className="mb-4">
         <label
           htmlFor="agent-model"
-          className="mb-1 block text-xs font-bold tracking-wide text-muted uppercase"
+          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Model
         </label>
@@ -617,7 +640,7 @@ function ConfigureStep({
           value={model}
           disabled={!modelOption}
           onChange={(e) => setModel(e.target.value)}
-          className="w-full rounded border border-divider bg-input px-3 py-2 text-body outline-none focus:ring-2 focus:ring-blurple disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md border border-divider bg-input px-3 py-2 text-body outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Harness default</option>
           {modelOption?.choices.map((choice) => (
@@ -642,7 +665,7 @@ function ConfigureStep({
       <div className="mb-4">
         <label
           htmlFor="agent-access"
-          className="mb-1 block text-xs font-bold tracking-wide text-muted uppercase"
+          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Who can direct this agent
         </label>
@@ -656,20 +679,20 @@ function ConfigureStep({
               selectedActorIds: mode === "selected" ? access.selectedActorIds : [],
             });
           }}
-          className="w-full rounded border border-divider bg-input px-3 py-2 text-body outline-none focus:ring-2 focus:ring-blurple"
+          className="w-full rounded-md border border-divider bg-input px-3 py-2 text-body outline-none focus:ring-2 focus:ring-accent"
         >
           <option value="workspace">Anyone in the workspace</option>
           <option value="creator">Only the person who added it</option>
           <option value="selected">Selected members</option>
         </select>
         {access.mode === "selected" && (
-          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded border border-divider p-1.5">
+          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-md border border-divider p-1.5">
             {humans.length === 0 && (
               <li className="px-1.5 py-1 text-xs text-faint">No other members yet</li>
             )}
             {humans.map((human) => (
               <li key={human.id}>
-                <label className="flex items-center gap-2 rounded px-1.5 py-1 text-sm text-body hover:bg-mention-bg-hover">
+                <label className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-body hover:bg-subtle-hover">
                   <input
                     type="checkbox"
                     checked={access.selectedActorIds.includes(human.id)}
@@ -687,13 +710,13 @@ function ConfigureStep({
         <button
           onClick={() => void save()}
           disabled={!dirty || saving}
-          className="flex-1 rounded bg-blurple py-2.5 font-medium text-mention-text transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-1 rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? "Saving…" : saved ? "Saved" : "Save changes"}
         </button>
         <button
           onClick={onRevoke}
-          className="shrink-0 cursor-pointer rounded px-3 py-2.5 text-sm font-medium text-dead hover:bg-dead hover:text-mention-text"
+          className="shrink-0 cursor-pointer rounded-md px-3 py-2.5 text-sm font-medium text-dead transition hover:bg-dead hover:text-on-accent"
         >
           Revoke
         </button>

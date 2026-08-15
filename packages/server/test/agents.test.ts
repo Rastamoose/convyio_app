@@ -167,6 +167,46 @@ describe("agent HTTP invites", async () => {
     assert.notEqual(stored.token_hash, success.body.installationToken);
   });
 
+  test("a machine can forget only its own installation credential", async () => {
+    const human = await env.actor("human", "unpair-owner");
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "unpair-agent",
+      provider: PROVIDER,
+    });
+    const exchanged = await exchange(env.baseUrl, created.body.pairingCode);
+    assert.equal(exchanged.status, 200);
+    const token = exchanged.body.installationToken as string;
+
+    const missing = await fetch(`${env.baseUrl}/api/agent-installations`, { method: "DELETE" });
+    assert.equal(missing.status, 401);
+    const wrong = await fetch(`${env.baseUrl}/api/agent-installations`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer not-an-installation" },
+    });
+    assert.equal(wrong.status, 401);
+    const humanAttempt = await fetch(`${env.baseUrl}/api/agent-installations`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${human.token}` },
+    });
+    assert.equal(humanAttempt.status, 401);
+
+    const ok = await fetch(`${env.baseUrl}/api/agent-installations`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(ok.status, 200);
+    const [count] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*) AS count FROM agent_installations WHERE invite_id = ${created.body.id}
+    `;
+    assert.equal(count.count, 0);
+    const again = await fetch(`${env.baseUrl}/api/agent-installations`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(again.status, 401);
+    assert.equal(await env.db.isMember(created.body.actorId), true);
+  });
+
   test("expired and agent-revoked pairings are rejected", async () => {
     const human = await env.actor("human", "pairing-revoker");
     const expired = await env.api("POST", "/api/agents", human.token, {

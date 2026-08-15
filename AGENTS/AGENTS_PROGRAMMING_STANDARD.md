@@ -278,7 +278,7 @@ files, re-read §4.
 
 ## 7. Keep the map itself
 
-One canonical overview — `ARCHITECTURE.md` at the root, or whatever the project already
+One canonical overview — `ARCHITECTURE/README.md` in `AGENTS/`, or whatever the project already
 uses. It earns its place only by carrying what the code cannot say. A directory listing
 is not that; the reader can run `ls`.
 

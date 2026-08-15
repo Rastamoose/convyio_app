@@ -8,11 +8,11 @@ export type ActionTone =
   | "destructive";
 
 const TONE_CLASSES: Record<ActionTone, string> = {
-  approve: "bg-online text-mention-text hover:opacity-90",
-  deny: "bg-dead text-mention-text hover:opacity-90",
-  neutral: "bg-popup text-body hover:bg-mention-bg-hover",
-  primary: "bg-blurple text-mention-text hover:opacity-90",
-  destructive: "border border-dead bg-transparent text-dead hover:bg-dead hover:text-mention-text",
+  approve: "bg-online text-on-accent hover:opacity-90",
+  deny: "bg-dead text-on-accent hover:opacity-90",
+  neutral: "bg-subtle text-body hover:bg-subtle-hover",
+  primary: "bg-accent text-on-accent hover:bg-accent-hover",
+  destructive: "border border-dead bg-transparent text-dead hover:bg-dead hover:text-on-accent",
 };
 
 /** One button style for board item actions (approve/deny/start/…). */
@@ -40,7 +40,7 @@ export function ActionButton({
         lastFired.current = now;
         onClick();
       }}
-      className={`rounded text-xs font-semibold transition duration-150 ${
+      className={`rounded-md text-xs font-semibold transition duration-150 ${
         compact ? "flex-1 px-2 py-1" : "px-3 py-1.5"
       } ${TONE_CLASSES[tone]}`}
     >

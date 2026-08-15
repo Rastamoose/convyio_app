@@ -82,14 +82,14 @@ export function BoardView({
               if (e.key === "Enter") submit();
             }}
             aria-label="New board item title"
-            className="w-64 rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-blurple"
+            className="w-64 rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent"
             placeholder="Add a board item…"
             maxLength={200}
           />
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="rounded bg-blurple px-3 py-1.5 text-sm font-semibold text-mention-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             Add
           </button>
@@ -104,10 +104,10 @@ export function BoardView({
         </div>
         <button
           onClick={() => setShowDenied((o) => !o)}
-          className={`ml-auto rounded px-2 py-1 text-xs font-semibold ${
+          className={`ml-auto rounded-md px-2 py-1 text-xs font-semibold ${
             showDenied
               ? "bg-input text-body"
-              : "text-muted hover:bg-mention-bg hover:text-body"
+              : "text-muted hover:bg-subtle hover:text-body"
           }`}
         >
           {showDenied ? "Hide denied" : "Show denied"}
@@ -118,7 +118,7 @@ export function BoardView({
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
             aria-label="New board item description"
-            className="w-full resize-none rounded bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-blurple"
+            className="w-full resize-none rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent"
             placeholder="Description (optional)"
             maxLength={1000}
           />
@@ -132,23 +132,23 @@ export function BoardView({
           return (
             <div
               key={status}
-              className={`flex max-h-full w-72 shrink-0 flex-col self-start rounded-lg ${
-                proposed ? "border-l-4 border-dead bg-sidebar" : "bg-sidebar"
+              className={`flex max-h-full w-72 shrink-0 flex-col self-start ${
+                proposed ? "border-l-4 border-dead pl-3" : ""
               }`}
             >
-              <div className="flex shrink-0 items-center gap-2 px-3 py-2">
+              <div className="flex shrink-0 items-center gap-2 py-2">
                 <span
-                  className={`text-[11px] font-bold tracking-wide uppercase ${
+                  className={`font-mono text-[10px] font-bold tracking-wider uppercase ${
                     proposed ? "text-dead" : "text-muted"
                   }`}
                 >
                   {ITEM_STATUS_LABEL[status]}
                 </span>
-                <span className="rounded-full bg-input px-1.5 py-px text-[10px] font-bold text-muted">
+                <span className="font-mono text-[10px] font-bold text-faint">
                   {items.length}
                 </span>
               </div>
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-3 pb-2">
                 {items.length === 0 ? (
                   <div className="flex items-center gap-1.5 px-1 py-2 text-xs text-faint">
                     <svg

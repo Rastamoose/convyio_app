@@ -121,7 +121,7 @@ export function MemberCard({
       {isAgent && (
         <>
           <div className="mb-3">
-            <div className="mb-1 text-[10px] font-bold tracking-wide text-muted uppercase">
+            <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
               Permissions in #{channel}
             </div>
             <div className="flex gap-1">
@@ -130,7 +130,7 @@ export function MemberCard({
                   key={mode}
                   title={hint}
                   onClick={() => setPermissionMode(participant.id, channel, mode)}
-                  className="flex-1 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-mention-bg-hover hover:text-body"
+                  className="flex-1 cursor-pointer rounded-md px-1.5 py-1 text-[11px] text-muted select-none hover:bg-subtle-hover hover:text-body"
                 >
                   {label}
                 </button>
@@ -138,12 +138,12 @@ export function MemberCard({
             </div>
           </div>
           <div className="mb-3">
-            <div className="mb-1 text-[10px] font-bold tracking-wide text-muted uppercase">
+            <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
               Current task
             </div>
             {currentTask ? (
               <div className="text-sm text-body">
-                <span className="rounded bg-blurple px-1 py-px text-xs font-bold text-mention-text">
+                <span className="rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
                   {currentTask.ref}
                 </span>{" "}
                 {currentTask.title}
@@ -159,7 +159,7 @@ export function MemberCard({
           </div>
           {pendingItem && (
             <div className="mb-3">
-              <div className="mb-1 text-[10px] font-bold tracking-wide text-dead uppercase">
+              <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-dead uppercase">
                 Pending request
               </div>
               <ProposalCard
@@ -180,13 +180,13 @@ export function MemberCard({
                   .getElementById(jumpId)
                   ?.scrollIntoView({ behavior: "smooth" });
               }}
-              className="flex-1 cursor-pointer rounded bg-input px-2 py-1.5 text-xs font-semibold text-body hover:bg-mention-bg-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-input"
+              className="flex-1 cursor-pointer rounded-md bg-subtle px-2 py-1.5 text-xs font-semibold text-body hover:bg-subtle-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-subtle"
             >
               Jump to trace
             </button>
             <button
               onClick={mention}
-              className="flex-1 cursor-pointer rounded bg-blurple px-2 py-1.5 text-xs font-semibold text-mention-text hover:opacity-90"
+              className="flex-1 cursor-pointer rounded-md bg-accent px-2 py-1.5 text-xs font-semibold text-on-accent transition hover:bg-accent-hover"
             >
               Mention
             </button>

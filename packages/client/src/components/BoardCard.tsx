@@ -29,12 +29,12 @@ export function BoardCard({
     <div
       id={`board-item-${item.ref}`}
       onClick={() => onOpen(item.id)}
-      className={`cursor-pointer rounded bg-input p-3 transition duration-150 hover:ring-1 hover:ring-blurple ${
-        highlighted ? "bg-mention-bg ring-1 ring-blurple" : ""
+      className={`cursor-pointer rounded-lg border border-divider bg-input p-3 transition duration-150 hover:ring-1 hover:ring-accent ${
+        highlighted ? "bg-subtle ring-1 ring-accent" : ""
       }`}
     >
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="shrink-0 rounded bg-blurple px-1 text-[10px] font-bold text-mention-text">
+        <span className="shrink-0 rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
           {item.ref}
         </span>
         {item.ownerName && (
@@ -64,7 +64,7 @@ export function BoardCard({
           {item.scopePaths.join(" · ")}
         </div>
       )}
-      <div className="mt-2 flex items-center gap-2 text-[11px] text-faint">
+      <div className="mt-2 flex items-center gap-2 font-mono text-[10px] text-faint">
         {item.origin === "agent" && <AgentBadge />}
         <span title={formatFullDateTime(item.createdAt)}>
           {relativeTime(item.createdAt)}
@@ -80,7 +80,7 @@ export function BoardCard({
                 e.stopPropagation();
                 onJumpToTrace(liveRun.runId);
               }}
-              className="text-blurple hover:underline"
+              className="text-accent hover:underline"
             >
               live
             </button>

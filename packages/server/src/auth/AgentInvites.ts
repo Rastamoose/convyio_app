@@ -286,6 +286,17 @@ export class AgentInvites {
     return this.resolved(rows[0]);
   }
 
+  /** Forget this machine's durable credential. Does not revoke the agent
+   *  invite — only the installation that presented the token. */
+  async revokeInstallation(token: string): Promise<boolean> {
+    const rows = await this.db.sql`
+      DELETE FROM agent_installations
+      WHERE token_hash = ${hashToken(token)}
+      RETURNING id
+    `;
+    return rows.length > 0;
+  }
+
   async resolveInstallation(token: string): Promise<{ actor: Actor; invite: AgentInvite } | null> {
     const now = Date.now();
     const rows = await this.db.sql<InviteRow[]>`

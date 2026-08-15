@@ -11,8 +11,8 @@ const USERNAME_HINT = "1-32 characters: letters, digits, spaces, - and _";
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-full items-center justify-center bg-chat">
-      <div className="w-96 animate-fade-in rounded-lg border-2 border-body bg-sidebar p-8 shadow-hard-lg">
+    <div className="app-frame flex h-full items-center justify-center">
+      <div className="elevated w-96 animate-fade-in rounded-2xl p-8">
         {children}
       </div>
     </div>
@@ -28,16 +28,39 @@ function Field({
     <div className="mb-4">
       <label
         htmlFor={id}
-        className="mb-2 block text-xs font-bold tracking-wide text-muted uppercase"
+        className="mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase"
       >
         {label}
       </label>
       <input
         id={id}
-        className="w-full rounded border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-blurple"
+        className="w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent"
         {...inputProps}
       />
     </div>
+  );
+}
+
+function GoogleLogo() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"
+      />
+      <path
+        fill="#34A853"
+        d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"
+      />
+      <path
+        fill="#EA4335"
+        d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.47.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"
+      />
+    </svg>
   );
 }
 
@@ -45,7 +68,7 @@ function Divider() {
   return (
     <div className="my-6 flex items-center gap-3">
       <div className="h-px flex-1 bg-divider" />
-      <span className="text-xs font-medium text-faint uppercase">Or</span>
+      <span className="font-mono text-[10px] font-medium tracking-wider text-faint uppercase">Or</span>
       <div className="h-px flex-1 bg-divider" />
     </div>
   );
@@ -100,8 +123,9 @@ export function LoginScreen({
           <button
             onClick={() => void signInWithGoogle()}
             disabled={googleBusy}
-            className="w-full rounded border border-divider bg-input py-2.5 font-medium text-body transition hover:bg-popup disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-3 rounded-md border border-divider bg-input py-2.5 font-medium text-body transition hover:bg-subtle-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <GoogleLogo />
             Sign in with Google
           </button>
         </>
@@ -229,7 +253,7 @@ function EmailAuthForm() {
         </p>
         <button
           onClick={() => switchMode("login")}
-          className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none"
+          className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover"
         >
           Go to sign in
         </button>
@@ -304,7 +328,7 @@ function EmailAuthForm() {
               setRememberMeChecked(e.target.checked);
               setRememberMe(e.target.checked);
             }}
-            className="accent-blurple"
+            className="accent-accent"
           />
           Remember for 30 days
         </label>
@@ -312,7 +336,7 @@ function EmailAuthForm() {
           <button
             type="button"
             onClick={() => setMode("forgot")}
-            className="mt-2 font-medium text-blurple hover:underline"
+            className="mt-2 font-medium text-accent hover:underline"
           >
             Forgot password
           </button>
@@ -322,7 +346,7 @@ function EmailAuthForm() {
       <button
         onClick={() => void submit()}
         disabled={!canSubmit}
-        className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         {mode === "login" ? "Sign in" : "Create account"}
       </button>
@@ -333,7 +357,7 @@ function EmailAuthForm() {
           <button
             type="button"
             onClick={() => switchMode("login")}
-            className="font-medium text-blurple hover:underline"
+            className="font-medium text-accent hover:underline"
           >
             sign in instead
           </button>
@@ -352,7 +376,7 @@ function EmailAuthForm() {
         <button
           type="button"
           onClick={() => switchMode(mode === "login" ? "signup" : "login")}
-          className="font-medium text-blurple hover:underline"
+          className="font-medium text-accent hover:underline"
         >
           {mode === "login" ? "Sign up" : "Sign in"}
         </button>
@@ -405,14 +429,14 @@ function ForgotPasswordForm({ initialEmail, onBack }: { initialEmail: string; on
           <button
             onClick={() => void submit()}
             disabled={!valid || submitting}
-            className="w-full rounded border-2 border-body bg-blurple py-2.5 font-medium text-mention-text shadow-hard-sm transition hover:bg-working active:translate-x-px active:translate-y-px active:shadow-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             Send reset link
           </button>
         </>
       )}
       <p className="mt-6 text-center text-sm text-muted">
-        <button type="button" onClick={onBack} className="font-medium text-blurple hover:underline">
+        <button type="button" onClick={onBack} className="font-medium text-accent hover:underline">
           Back to sign in
         </button>
       </p>

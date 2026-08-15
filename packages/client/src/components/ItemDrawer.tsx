@@ -46,7 +46,7 @@ export function parseScopePaths(text: string): string[] | null {
 
 function Label({ children }: { children: string }) {
   return (
-    <div className="mb-1 text-[10px] font-bold tracking-wide text-muted uppercase">
+    <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
       {children}
     </div>
   );
@@ -55,7 +55,7 @@ function Label({ children }: { children: string }) {
 /** Cmd/Ctrl+Enter-to-save discoverability line under an editing textarea. */
 function EditHint() {
   return (
-    <div className="mt-1 text-xs text-faint">esc to cancel • ⌘↵ to save</div>
+    <div className="mt-1 font-mono text-[10px] text-faint">esc to cancel • ⌘↵ to save</div>
   );
 }
 
@@ -261,13 +261,13 @@ export function ItemDrawer({
         onClick={onClose}
         className="fixed top-12 right-0 bottom-0 left-0 z-30 animate-fade-in bg-black/20"
       />
-      <aside className="fixed top-12 right-0 bottom-0 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto border-l border-divider bg-sidebar p-4">
+      <aside className="elevated fixed top-12 right-0 bottom-0 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto p-4">
         <div className="mb-3 flex items-center gap-2">
-          <span className="rounded bg-blurple px-1 py-px text-[10px] font-bold text-mention-text">
+          <span className="rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
             {item.ref}
           </span>
           <span
-            className={`text-[11px] font-bold tracking-wide uppercase ${ITEM_STATUS_BADGE[item.status]}`}
+            className={`font-mono text-[10px] font-bold tracking-wider uppercase ${ITEM_STATUS_BADGE[item.status]}`}
           >
             {ITEM_STATUS_LABEL[item.status]}
           </span>
@@ -275,7 +275,7 @@ export function ItemDrawer({
             ref={closeRef}
             onClick={onClose}
             aria-label="Close item details"
-            className="ml-auto rounded p-1 text-muted transition duration-150 outline-none hover:bg-input hover:text-body focus-visible:ring-2 focus-visible:ring-blurple"
+            className="ml-auto rounded-md p-1 text-muted transition duration-150 outline-none hover:bg-subtle-hover hover:text-body focus-visible:ring-2 focus-visible:ring-accent"
             title="Close"
           >
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -298,13 +298,13 @@ export function ItemDrawer({
                 setTitleDraft(null);
               }
             }}
-            className="mb-3 w-full rounded bg-input px-2 py-1.5 text-base font-semibold text-body outline-none focus:ring-2 focus:ring-blurple"
+            className="mb-3 w-full rounded-md bg-input px-2 py-1.5 text-base font-semibold text-body outline-none focus:ring-2 focus:ring-accent"
             maxLength={200}
           />
         ) : (
           <button
             onClick={() => setTitleDraft(item.title)}
-            className="mb-3 rounded px-1 py-0.5 text-left text-base font-semibold text-body hover:bg-input/50"
+            className="mb-3 rounded-md px-1 py-0.5 text-left text-base font-semibold text-body hover:bg-subtle-hover"
             title="Click to edit"
           >
             {item.title}
@@ -329,7 +329,7 @@ export function ItemDrawer({
                   }
                 }}
                 rows={4}
-                className="w-full resize-none rounded bg-input px-2 py-1.5 text-sm text-body outline-none focus:ring-2 focus:ring-blurple"
+                className="w-full resize-none rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none focus:ring-2 focus:ring-accent"
                 maxLength={1000}
               />
               <EditHint />
@@ -337,7 +337,7 @@ export function ItemDrawer({
           ) : (
             <button
               onClick={() => setDescDraft(item.description ?? "")}
-              className="w-full rounded px-1 py-0.5 text-left text-sm hover:bg-input/50"
+              className="w-full rounded-md px-1 py-0.5 text-left text-sm hover:bg-subtle-hover"
             >
               {item.description ? (
                 <span className="break-words whitespace-pre-wrap text-body">
@@ -385,7 +385,7 @@ export function ItemDrawer({
                   }
                 }}
                 rows={3}
-                className="w-full resize-none rounded bg-input px-2 py-1.5 font-mono text-xs text-body outline-none focus:ring-2 focus:ring-blurple"
+                className="w-full resize-none rounded-md bg-input px-2 py-1.5 font-mono text-xs text-body outline-none focus:ring-2 focus:ring-accent"
                 placeholder={'One path per line; end with "/" for a subtree. Empty = unrestricted.'}
                 maxLength={2000}
               />
@@ -394,7 +394,7 @@ export function ItemDrawer({
           ) : (
             <button
               onClick={() => setScopeDraft((item.scopePaths ?? []).join("\n"))}
-              className="w-full rounded px-1 py-0.5 text-left hover:bg-input/50"
+              className="w-full rounded-md px-1 py-0.5 text-left hover:bg-subtle-hover"
               title="Click to edit"
             >
               {item.scopePaths && item.scopePaths.length > 0 ? (
@@ -417,7 +417,7 @@ export function ItemDrawer({
           <button
             onClick={openOwnerPicker}
             aria-expanded={ownerOpen}
-            className="flex items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-input/50"
+            className="flex items-center gap-2 rounded-md px-1 py-0.5 text-sm hover:bg-subtle-hover"
           >
             {item.ownerName ? (
               <>
@@ -432,8 +432,8 @@ export function ItemDrawer({
             <div className="elevated absolute top-full left-0 z-50 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg p-1">
               <button
                 onClick={() => assignOwner(null)}
-                className={`block w-full rounded px-2 py-1.5 text-left text-sm text-muted hover:bg-input ${
-                  ownerIndex === 0 ? "bg-input" : ""
+                className={`block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted hover:bg-subtle-hover ${
+                  ownerIndex === 0 ? "bg-subtle" : ""
                 }`}
               >
                 Unassign
@@ -445,8 +445,8 @@ export function ItemDrawer({
                   <button
                     key={actor.id}
                     onClick={() => assignOwner(actor.id)}
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-body hover:bg-input ${
-                      ownerIndex === i + 1 ? "bg-input" : ""
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-body hover:bg-subtle-hover ${
+                      ownerIndex === i + 1 ? "bg-subtle" : ""
                     }`}
                   >
                     <Avatar name={actor.displayName} size={18} />

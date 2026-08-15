@@ -68,7 +68,15 @@ export type ThreadEventKind =
   | "agent.output.delta"
   | "agent.output.completed"
   | "interaction.requested"
-  | "interaction.resolved";
+  | "interaction.resolved"
+  | "plan.created"
+  | "plan.proposed"
+  | "plan.accepted"
+  | "plan.completed"
+  | "plan.cancelled"
+  | "context.created"
+  | "context.superseded"
+  | "context.cursor.acknowledged";
 
 export type ThreadEventPayload = JsonObject;
 

@@ -160,6 +160,21 @@ export function createApiHandler(
           apiUrl,
           wsUrl: websocketUrl(apiUrl),
         });
+      } else if (
+        parts[1] === "agent-installations" &&
+        parts.length === 2 &&
+        method === "DELETE"
+      ) {
+        // The installation token is the only credential the machine has.
+        // Session-auth would let any human delete any runner; this only
+        // forgets the credential that presented itself.
+        if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+        const token = bearerToken(req);
+        if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        if (!(await agentInvites.revokeInstallation(token))) {
+          throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        }
+        json(res, 200, { ok: true });
       } else {
         const actor = await authenticate(req, db, sessions);
         await route(

@@ -96,37 +96,35 @@ export async function saveInstallation(
 }
 
 export async function loadInstallation(
-  agentId: string | undefined,
+  ref: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StoredInstallation> {
-  const root = installationRoot(env);
-  let selected = agentId;
-  if (!selected) {
-    let files: string[];
-    try {
-      files = (await fs.readdir(root)).filter((file) => file.endsWith(".json"));
-    } catch (error) {
-      if (isNotFound(error)) throw new Error("No paired agents found. Run `convyio-agent pair ...` first.");
-      throw error;
-    }
-    if (files.length === 0) throw new Error("No paired agents found. Run `convyio-agent pair ...` first.");
-    if (files.length > 1) throw new Error("More than one paired agent exists. Pass an agent id: `convyio-agent run <agent-id>`.");
-    selected = files[0].slice(0, -5);
+  const installations = await listInstallations(env);
+  if (installations.length === 0) {
+    throw new Error("No paired agents found. Run `convyio-agent pair ...` first.");
   }
-  const file = path.join(root, `${safeAgentId(selected)}.json`);
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, "utf8");
-  } catch (error) {
-    if (isNotFound(error)) throw new Error(`Agent ${JSON.stringify(selected)} is not paired on this machine.`);
-    throw error;
+  if (!ref) {
+    if (installations.length === 1) return installations[0]!;
+    throw new Error(
+      `More than one paired agent. Run one by name, or clear them with \`convyio-agent unpair\`:\n${formatRunHints(installations)}`,
+    );
   }
-  const parsed = storedInstallationSchema.safeParse(JSON.parse(raw));
-  if (!parsed.success) throw new Error(`Stored installation for ${JSON.stringify(selected)} is invalid. Pair the agent again.`);
-  return parsed.data;
+  const byId = installations.find((item) => item.agent.id === ref);
+  if (byId) return byId;
+  const lowered = ref.toLowerCase();
+  const byName = installations.filter((item) => item.agent.name.toLowerCase() === lowered);
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) {
+    throw new Error(
+      `More than one paired agent named ${JSON.stringify(ref)}. Clear the leftovers with \`convyio-agent unpair\`, then pair again.`,
+    );
+  }
+  throw new Error(
+    `No paired agent named ${JSON.stringify(ref)}.\nPaired on this machine:\n${formatPairedNames(installations)}\nRun one with \`convyio-agent run <name>\`.`,
+  );
 }
 
-export async function listInstallationMetadata(env: NodeJS.ProcessEnv = process.env): Promise<Array<Record<string, unknown>>> {
+async function listInstallations(env: NodeJS.ProcessEnv): Promise<StoredInstallation[]> {
   const root = installationRoot(env);
   let files: string[];
   try {
@@ -135,7 +133,56 @@ export async function listInstallationMetadata(env: NodeJS.ProcessEnv = process.
     if (isNotFound(error)) return [];
     throw error;
   }
-  const installations = await Promise.all(files.map((file) => loadInstallation(file.slice(0, -5), env)));
+  return Promise.all(files.map((file) => readInstallation(file.slice(0, -5), env)));
+}
+
+async function readInstallation(agentId: string, env: NodeJS.ProcessEnv): Promise<StoredInstallation> {
+  const file = path.join(installationRoot(env), `${safeAgentId(agentId)}.json`);
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) throw new Error(`Stored installation for ${JSON.stringify(agentId)} is missing. Pair the agent again.`);
+    throw error;
+  }
+  const parsed = storedInstallationSchema.safeParse(JSON.parse(raw));
+  if (!parsed.success) throw new Error(`Stored installation for ${JSON.stringify(agentId)} is invalid. Pair the agent again.`);
+  return parsed.data;
+}
+
+/** Ask the pairing server to forget this machine, then drop the local file.
+ *  The CLI never talks to the database — only the HTTP revoke endpoint. */
+export async function unpairInstallation(
+  installation: StoredInstallation,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const response = await fetcher(new URL("/api/agent-installations", installation.serverOrigin), {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${installation.installationToken}` },
+  });
+  if (response.status === 401 || response.status === 404) return;
+  if (!response.ok) {
+    throw new Error(`Unpair server returned HTTP ${response.status}. The local pairing was left in place.`);
+  }
+}
+
+/** Remove every locally stored pairing after asking each server to forget it. */
+export async function clearInstallations(
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
+): Promise<string[]> {
+  const installations = await listInstallations(env);
+  const names: string[] = [];
+  for (const installation of installations) {
+    await unpairInstallation(installation, fetcher);
+    await fs.unlink(path.join(installationRoot(env), `${safeAgentId(installation.agent.id)}.json`));
+    names.push(installation.agent.name);
+  }
+  return names;
+}
+
+export async function listInstallationMetadata(env: NodeJS.ProcessEnv = process.env): Promise<Array<Record<string, unknown>>> {
+  const installations = await listInstallations(env);
   return installations.map((item) => ({
     agentId: item.agent.id,
     name: item.agent.name,
@@ -146,6 +193,25 @@ export async function listInstallationMetadata(env: NodeJS.ProcessEnv = process.
     installationId: item.installation.id,
     pairedAt: new Date(item.pairedAt).toISOString(),
   }));
+}
+
+function formatPairedNames(installations: StoredInstallation[]): string {
+  return installations.map((item) => `  ${item.agent.name}`).join("\n");
+}
+
+function formatRunHints(installations: StoredInstallation[]): string {
+  return installations
+    .map((item) => {
+      const name = item.agent.name;
+      const nameUnique =
+        installations.filter((other) => other.agent.name.toLowerCase() === name.toLowerCase()).length === 1;
+      return `  convyio-agent run ${nameUnique ? quoteRunName(name) : item.agent.id}`;
+    })
+    .join("\n");
+}
+
+function quoteRunName(name: string): string {
+  return /\s/.test(name) ? `"${name}"` : name;
 }
 
 function validatedServerOrigin(input: string): string {

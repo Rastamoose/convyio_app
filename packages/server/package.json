@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "test": "for f in test/*.test.ts; do npx tsx --test --test-concurrency=1 --test-timeout=30000 \"$f\" || exit 1; done"
+    "test": "npx tsx --test --test-concurrency=1 --test-timeout=30000 test/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

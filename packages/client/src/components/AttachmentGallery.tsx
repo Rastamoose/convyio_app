@@ -80,7 +80,7 @@ export function AttachmentGallery({
       {files.map((a) => (
         <div
           key={a.id}
-          className="flex w-fit max-w-[min(400px,100%)] items-center gap-3 rounded-lg bg-input px-3 py-2"
+          className="flex w-fit max-w-[min(400px,100%)] items-center gap-3 rounded-lg bg-subtle px-3 py-2"
         >
           <svg
             className="h-8 w-8 shrink-0 text-muted"
@@ -100,7 +100,7 @@ export function AttachmentGallery({
               href={attachmentUrl(a)}
               target="_blank"
               rel="noreferrer"
-              className="block truncate font-medium text-blurple hover:underline"
+              className="block truncate font-medium text-accent hover:underline"
             >
               {a.name}
             </a>

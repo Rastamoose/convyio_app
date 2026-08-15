@@ -18,7 +18,7 @@ function NavButton({
         onClick();
       }}
       aria-label={direction === "prev" ? "Previous image" : "Next image"}
-      className={`absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-sidebar-dark/60 p-2 text-overlay-ink transition hover:bg-sidebar-dark/90 ${
+      className={`absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-backdrop/60 p-2 text-overlay-ink transition hover:bg-backdrop/90 ${
         direction === "prev" ? "left-4" : "right-4"
       }`}
     >
@@ -95,7 +95,7 @@ export function AttachmentLightbox({
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-50 flex animate-fade-in flex-col items-center justify-center gap-2 bg-sidebar-dark/80"
+      className="fixed inset-0 z-50 flex animate-fade-in flex-col items-center justify-center gap-2 bg-backdrop/80"
     >
       <div className="relative flex max-h-[90vh] max-w-[90vw] items-center justify-center">
         {canNavigate && <NavButton direction="prev" onClick={goPrev} />}

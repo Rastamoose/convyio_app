@@ -45,6 +45,8 @@ import type { Sessions } from "./board/sessions";
 import type { Toolman, ToolmanResult } from "./board/Toolman";
 import { requestOrigin } from "./requestOrigin";
 import type { RunnerRuntime } from "./RunnerRuntime";
+import type { ContextCursorStore } from "./context/ContextCursorStore";
+import type { ThreadEventStore } from "./chat/ThreadEventStore";
 
 interface Connection {
   socket: WebSocket;
@@ -76,6 +78,9 @@ export interface HubOptions {
    */
   authorizeJoin?: (join: JoinEvent) => Promise<JoinDecision>;
   authorizeAgentWork?: (agentId: string, authorId: string) => Promise<boolean>;
+  /** Sequenced workspace projection used to stamp welcome.snapshotSeq. */
+  threadEvents?: ThreadEventStore;
+  contextCursors?: ContextCursorStore;
 }
 
 /**
@@ -449,10 +454,16 @@ export class Hub {
     // Older messages page in via GET /api/messages.
     const channelInfos = await this.channels.listInfo();
     const channelList = channelInfos.map((channel) => channel.name);
-    const [history, archivedChannels, pinnedChannels] = await Promise.all([
+    const [history, archivedChannels, pinnedChannels, snapshotSeq, contextCursor] = await Promise.all([
       this.messages.recentByChannel(channelList, DEFAULT_HISTORY_LIMIT),
       this.channels.listArchived(),
       this.channels.pinned(),
+      this.options.threadEvents
+        ? this.options.threadEvents.latestSeq(this.options.workspace.id)
+        : Promise.resolve(0),
+      this.options.contextCursors
+        ? this.options.contextCursors.get(participant.id)
+        : Promise.resolve(null),
     ]);
     this.send(conn, {
       type: "welcome",
@@ -467,6 +478,8 @@ export class Hub {
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(participant.id),
       apiUrl: conn.apiUrl,
+      snapshotSeq,
+      ...(contextCursor ? { contextCursor } : {}),
       agentConfig: conn.agentProfile ?? undefined,
     });
     if (kind === "agent" && this.runnerRuntime.isAvailable(participant.id)) {

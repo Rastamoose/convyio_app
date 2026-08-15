@@ -86,6 +86,23 @@ export class ThreadEventStore {
     return row ? toThreadEvent(row) : null;
   }
 
+  async latestSeq(workspaceId: string): Promise<number> {
+    const [row] = await this.store.sql<{ seq: number | null }[]>`
+      SELECT max(seq) AS seq FROM thread_events WHERE workspace_id = ${workspaceId}
+    `;
+    return row?.seq ?? 0;
+  }
+
+  async listAfter(workspaceId: string, afterSeq: number, limit = MAX_THREAD_EVENT_LIMIT): Promise<ThreadEvent[]> {
+    const rows = await this.store.sql<ThreadEventRow[]>`
+      SELECT * FROM thread_events
+      WHERE workspace_id = ${workspaceId} AND seq > ${afterSeq}
+      ORDER BY seq ASC
+      LIMIT ${limit}
+    `;
+    return rows.map(toThreadEvent);
+  }
+
   async list(options: ListThreadEvents): Promise<ThreadEvent[]> {
     const sql = this.store.sql;
     const before = options.beforeSeq === undefined

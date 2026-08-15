@@ -28,6 +28,12 @@ const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "agent_conversations" },
   { table: "agent_run_requests" },
   { table: "interaction_requests" },
+  { table: "board_plans" },
+  { table: "board_items", column: "plan_id" },
+  { table: "board_items", column: "acceptance_criteria" },
+  { table: "board_items", column: "verification_evidence" },
+  { table: "context_entries" },
+  { table: "context_cursors" },
 ];
 
 export class SchemaOutOfDateError extends Error {}

@@ -19,11 +19,11 @@ export function PermissionCard({
   onResolve: (requestId: string, decision: "approve" | "deny") => void;
 }) {
   return (
-    <div className="rounded-lg bg-popup p-2.5">
-      <div className="mb-1 text-[11px] font-bold tracking-wide text-muted uppercase">
+    <div className="rounded-lg bg-subtle p-2.5">
+      <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
         Wants to {CAPABILITY_LABEL[request.capability] ?? request.capability}
       </div>
-      <code className="mb-2 block overflow-x-auto rounded bg-composer px-2 py-1.5 font-mono text-xs whitespace-pre text-body">
+      <code className="mb-2 block overflow-x-auto rounded-md bg-composer px-2 py-1.5 font-mono text-xs whitespace-pre text-body">
         {request.summary}
       </code>
       {request.boardItemRef && (

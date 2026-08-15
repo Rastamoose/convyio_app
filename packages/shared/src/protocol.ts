@@ -4,6 +4,7 @@ import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
 import type { AgentInvite } from "./agent";
 import type { AgentConversation, AgentWorkAssignment, InteractionRequest } from "./agentWork";
 import type { ChannelInfo, ThreadEvent } from "./thread";
+import type { ContextCursor } from "./context";
 
 /**
  * Wire protocol. Every frame is JSON with a discriminating `type` field.
@@ -460,6 +461,14 @@ export interface WelcomeEvent {
   token: string;
   /** Base URL of the HTTP API (same host/port as the websocket). */
   apiUrl: string;
+  /**
+   * Highest thread_events.seq included in this welcome. Live events at or
+   * below it are already represented by the snapshot the client/agent then
+   * loads; they must not be treated as unseen.
+   */
+  snapshotSeq: number;
+  /** The joining actor's acknowledged workspace-event cursor, if any. */
+  contextCursor?: ContextCursor;
   agentConfig?: AgentInvite;
 }
 

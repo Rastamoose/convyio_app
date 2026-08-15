@@ -42,7 +42,7 @@ export function ApprovalQueue({
       ref={ref}
       className="elevated fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg p-3"
     >
-      <h2 className="mb-2 text-[11px] font-bold tracking-wide text-muted uppercase">
+      <h2 className="mb-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
         Awaiting approval — {items.length + interactions.length}
       </h2>
       {sorted.length + interactions.length === 0 ? (

@@ -77,9 +77,9 @@ executes `packages/agent`.
   "$PWD/data:/data"` for `DATA_DIR`) so a login survives container restarts —
   not automated by the current Dockerfile/compose setup.
 
-Also known gap, tracked in `ARCHITECTURE.md`: with this provider, Claude
-Code's native Bash/Write/Edit tools run ungated alongside the board tools,
-so a board approval is not required for every mutation the agent can make.
+Claude's native tools are restricted to read-only operations. Mutations route
+through the server's Toolman path and retain the same board authorization
+boundary; see `ARCHITECTURE/CURRENT_INVARIANTS.md`.
 
 ## Reverse proxy + TLS
 
@@ -152,7 +152,7 @@ authorized JavaScript origins.
   through Supabase's own dashboard/CLI (`supabase db dump`), not this
   container. `DATA_DIR` only holds the agent's file/bash-tool sandbox now.
 - Uploads are unauthenticated capability URLs (the unguessable UUID is the
-  secret, the Discord-CDN model — recorded in ARCHITECTURE.md): the server
-  proxies them from a private Supabase Storage bucket using the secret
-  key, so the bucket itself is never exposed directly.
+  secret, the Discord-CDN model — recorded in `ARCHITECTURE/DECISIONS.md`):
+  the server proxies them from a private Supabase Storage bucket using the
+  secret key, so the bucket itself is never exposed directly.
 - Known gap: no rate limiting yet.

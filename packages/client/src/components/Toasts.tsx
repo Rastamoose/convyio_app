@@ -9,7 +9,7 @@ const CLOSE_FALLBACK_MS = 300;
 
 const KIND_STYLE: Record<ToastKind, { border: string; icon: string; glyph: string }> = {
   error: { border: "border-dead/50", icon: "text-dead", glyph: "M12 8v5m0 3.5h.01" },
-  info: { border: "border-blurple/50", icon: "text-blurple", glyph: "M12 11v5m0-8.5h.01" },
+  info: { border: "border-accent/50", icon: "text-accent", glyph: "M12 11v5m0-8.5h.01" },
   success: { border: "border-online/50", icon: "text-online", glyph: "M8.5 12.5l2.5 2.5 4.5-5" },
 };
 

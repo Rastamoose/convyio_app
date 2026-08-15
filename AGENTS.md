@@ -1,11 +1,12 @@
 # Project notes
 
 ## Rules for all coding agents
-- Also read `AGENTS/` at the repo root: `AGENTS/AGENTS_PROGRAMMING_STANDARD.md` (the code standard — acceptance criteria for every change), `AGENTS/ARCHITECTURE.md` (unit map + recorded decisions), `AGENTS/DEPLOY.md` (deployment).
+- Also read `AGENTS/` at the repo root: `AGENTS/AGENTS_PROGRAMMING_STANDARD.md` (the code standard — acceptance criteria for every change), `AGENTS/ARCHITECTURE/README.md` (the architecture index — follow its current/target status labels), `AGENTS/DEPLOY.md` (deployment), `AGENTS/DESIGN.md` (the visual design language — read before touching any client styling).
 - NEVER push to git remotes (`git push`, `git push --force`, etc.) yourself. Committing locally is fine when asked; pushing is always done by a human.
-- Docs (this file + `AGENTS/*.md`) are updated as the code changes — a change that makes them wrong includes the doc update. But every doc edit goes through the user first: propose the exact wording and wait for approval before writing it.
+- Docs (this file + `AGENTS/**/*.md`) are updated as the code changes — a change that makes them wrong includes the doc update. But every doc edit goes through the user first: propose the exact wording and wait for approval before writing it.
 
-Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/server` (ws hub + HTTP board API, Supabase-backed workspace store, toolman, demo orchestrator), `packages/client` (React/Vite/Tailwind v4), `packages/agent` (LLM agent: Gemini or Claude provider). See `AGENTS/ARCHITECTURE.md` for the unit map and recorded decisions.
+Monorepo (npm workspaces): `packages/shared` (types + wire protocol), `packages/server` (ws hub + HTTP API, Supabase-backed workspace store, toolman, durable work dispatch), `packages/client` (React/Vite/Tailwind v4), `packages/agent` (paired LLM runner: Gemini, Claude SDK or ACP). Start at `AGENTS/ARCHITECTURE/README.md` for the current unit map, flows, invariants, recorded decisions and explicitly separated target architecture.
+Before architecture-affecting work, read every current-state page relevant to the affected packages and `AGENTS/ARCHITECTURE/TARGET_WORKFLOW.md`. Target documentation is approved direction, not evidence that its code exists.
 
 ## Commands
 - Run everything: `npm run dev` (server ws+http on localhost:3001, client http://localhost:5173, agent)

@@ -10,7 +10,7 @@
     "convyio-agent": "dist/cli.js"
   },
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/cli.js && chmod 755 dist/cli.js",
+    "build": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --banner:js=\"import { createRequire as __convyRequire } from 'node:module';const require = __convyRequire(import.meta.url);\" --outfile=dist/cli.js && chmod 755 dist/cli.js",
     "dev": "tsx watch src/index.ts",
     "dev:cli": "tsx src/cli.ts",
     "test": "tsx --test test/*.test.ts"

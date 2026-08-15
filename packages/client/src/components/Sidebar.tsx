@@ -30,7 +30,7 @@ function ContextMenuItem({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`block w-full rounded px-2 py-1.5 text-left text-sm font-medium ${danger ? "text-dead" : "text-body"} ${disabled ? "cursor-not-allowed opacity-40" : "hover:bg-mention-bg-hover"}`}
+      className={`block w-full rounded-md px-2 py-1.5 text-left text-sm font-medium ${danger ? "text-dead" : "text-body"} ${disabled ? "cursor-not-allowed opacity-40" : "hover:bg-subtle-hover"}`}
     >
       {label}
     </button>
@@ -232,14 +232,14 @@ function PresenceDot({ participant }: { participant: Participant }) {
     return (
       <span
         title={label}
-        className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-sidebar transition-colors duration-200 ${color}`}
+        className={`absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-[2.5px] border-canvas transition-colors duration-200 ${color}`}
       />
     );
   }
   return (
     <span
       title={label}
-      className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-sidebar bg-sidebar"
+      className="absolute -right-0.5 -bottom-0.5 flex h-3 w-3 items-center justify-center rounded-full border-[2.5px] border-canvas bg-canvas"
     >
       <span
         className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 transition-colors duration-200 ${color}`}
@@ -267,7 +267,7 @@ function StatusRow({
   const offline = !participant.online;
   return (
     <div
-      className={`flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 select-none hover:bg-mention-bg-hover ${
+      className={`flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 select-none hover:bg-input ${
         offline ? "opacity-40 hover:opacity-100" : ""
       }`}
       onMouseDown={(e) => e.stopPropagation()}
@@ -424,7 +424,7 @@ export function Sidebar({
             if (e.key === "Enter") void submitRename();
           }}
           maxLength={32}
-          className="mb-0.5 w-full rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none placeholder:text-faint"
+          className="mb-0.5 w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
         />
       );
     }
@@ -436,21 +436,21 @@ export function Sidebar({
         aria-selected={c === channel}
         onClick={() => onSelectChannel(c)}
         onContextMenu={(e) => openRoomMenu(e, c)}
-        className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left font-medium select-none ${
+        className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm select-none ${
           c === channel || contextMenu?.channel === c
-            ? "bg-input text-body"
+            ? "bg-input font-semibold text-body"
             : unreads > 0
-              ? "text-body hover:bg-input/70"
-              : "text-muted hover:bg-input/70 hover:text-body"
+              ? "font-medium text-body hover:bg-input"
+              : "text-muted hover:bg-input hover:text-body"
         }`}
       >
-        <span className="shrink-0 text-[15px] text-faint">#</span>
-        <span className="min-w-0 truncate text-[15px]">{c}</span>
+        <span className="shrink-0 font-mono text-faint">#</span>
+        <span className="min-w-0 truncate">{c}</span>
         {pinnedChannels.includes(c) && (
           <PinIcon className="ml-auto h-3 w-3 shrink-0 text-faint" />
         )}
         {unreads > 0 && (
-          <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
+          <span className="ml-auto shrink-0 font-mono text-[11px] font-bold text-accent">
             {unreads > 99 ? "99+" : unreads}
           </span>
         )}
@@ -504,11 +504,11 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-60 flex-col bg-sidebar">
+    <aside className="flex h-full w-60 flex-col border-r border-divider">
       {/* Workspace header */}
-      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-sidebar-dark px-4 select-none">
+      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-divider px-4 select-none">
         <span className="truncate font-semibold text-body">{workspace?.name}</span>
-        <span className="truncate text-[11px] leading-tight text-faint">
+        <span className="truncate font-mono text-[10px] leading-tight tracking-wide text-faint">
           humans &amp; agents, one room
         </span>
       </header>
@@ -519,7 +519,7 @@ export function Sidebar({
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setQueueOpen((o) => !o)}
-            className="mb-1.5 flex w-full cursor-pointer items-center gap-2 rounded-lg bg-dead/20 px-2 py-1.5 text-left text-sm font-semibold text-dead select-none hover:bg-dead/30"
+            className="mb-1.5 flex w-full cursor-pointer items-center gap-2 rounded-md bg-dead/15 px-2 py-1.5 text-left text-sm font-semibold text-dead select-none hover:bg-dead/25"
           >
             <span className="relative flex h-2 w-2 shrink-0">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
@@ -528,7 +528,7 @@ export function Sidebar({
             Awaiting approval ({pendingItems.length + pendingInteractions.length})
           </button>
         )}
-        <h2 className="mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none">
+        <h2 className="mb-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none">
           Online — {online.length}
         </h2>
         {online.map((p) => (
@@ -541,7 +541,7 @@ export function Sidebar({
         ))}
         {offline.length > 0 && (
           <>
-            <h2 className="mt-2 mb-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none">
+            <h2 className="mt-2 mb-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none">
               Offline — {offline.length}
             </h2>
             {offline.map((p) => (
@@ -557,9 +557,9 @@ export function Sidebar({
         {self?.kind === "human" && (
           <button
             onClick={() => setAddAgentOpen(true)}
-            className="mt-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-divider px-2 py-2 text-left text-sm font-medium text-muted hover:border-body hover:text-body select-none"
+            className="mt-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-dashed border-divider px-2 py-2 text-left text-sm font-medium text-muted hover:border-faint hover:text-body select-none"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-dark text-lg font-bold text-muted">
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-subtle text-lg text-muted">
               +
             </span>
             Add agent
@@ -572,7 +572,7 @@ export function Sidebar({
         <div className="mb-1 flex items-center justify-between px-2">
           <button
             onClick={() => setRoomsOpen((o) => !o)}
-            className="flex cursor-pointer items-center gap-1 text-[11px] font-bold tracking-wide text-muted uppercase select-none hover:text-body"
+            className="flex cursor-pointer items-center gap-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
           >
             <span className="w-2.5 shrink-0">{roomsOpen ? "▾" : "▸"}</span>
             Rooms
@@ -602,7 +602,7 @@ export function Sidebar({
             }}
             maxLength={32}
             placeholder="new-room"
-            className="mb-0.5 w-full rounded-lg bg-input px-2 py-1.5 text-[15px] text-body outline-none placeholder:text-faint"
+            className="mb-0.5 w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
           />
         )}
         {roomsOpen && (
@@ -615,7 +615,7 @@ export function Sidebar({
           <>
             <button
               onClick={() => setArchivedOpen((o) => !o)}
-              className="mt-2 mb-1 flex items-center gap-1 px-2 text-[11px] font-bold tracking-wide text-muted uppercase select-none hover:text-body"
+              className="mt-2 mb-1 flex items-center gap-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
             >
               <span className="w-2.5 shrink-0">{archivedOpen ? "▾" : "▸"}</span>
               Archived — {archivedChannels.length}
@@ -630,7 +630,7 @@ export function Sidebar({
       </section>
 
       {/* User panel */}
-      <footer className="flex h-[52px] shrink-0 items-center gap-2 bg-userpanel px-2">
+      <footer className="flex h-[52px] shrink-0 items-center gap-2 border-t border-divider px-2">
         {self && (
           <>
             <div className="relative">
@@ -676,7 +676,7 @@ export function Sidebar({
             {signOut && (
               <button
                 onClick={signOut}
-                className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-[11px] text-muted select-none hover:bg-mention-bg-hover hover:text-body"
+                className="shrink-0 cursor-pointer rounded-md px-1.5 py-1 text-xs text-muted select-none hover:bg-subtle-hover hover:text-body"
               >
                 Sign out
               </button>

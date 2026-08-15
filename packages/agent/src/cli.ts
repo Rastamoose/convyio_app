@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { exchangePairing, listInstallationMetadata, loadInstallation, saveInstallation } from "./installation";
+import { clearInstallations, exchangePairing, listInstallationMetadata, loadInstallation, saveInstallation } from "./installation";
 
 export async function runCli(
   argv: string[],
@@ -16,8 +16,8 @@ export async function runCli(
         await pair(args, io.out);
         return 0;
       case "run": {
-        if (args.length > 1 || args[0]?.startsWith("-")) throw new Error("Usage: convyio-agent run [agent-id]");
-        const installation = await loadInstallation(args[0]);
+        if (args[0]?.startsWith("-")) throw new Error("Usage: convyio-agent run [name]");
+        const installation = await loadInstallation(args.length === 0 ? undefined : args.join(" "));
         const { runAgent } = await import("./runtime");
         await runAgent({ mode: "installation", installation });
         return 0;
@@ -25,6 +25,10 @@ export async function runCli(
       case "status":
         if (args.length > 0) throw new Error("Usage: convyio-agent status");
         await status(io.out);
+        return 0;
+      case "unpair":
+        if (args.length > 0) throw new Error("Usage: convyio-agent unpair");
+        await unpair(io.out);
         return 0;
       case "help":
       case "--help":
@@ -47,7 +51,7 @@ async function pair(args: string[], out: (message: string) => void): Promise<voi
   await saveInstallation(installation);
   out(`Paired ${installation.agent.name} (${installation.agent.id}) with ${installation.workspace.name}.`);
   out(`Workspace: ${installation.workspacePath}`);
-  out(`Start it with: convyio-agent run ${installation.agent.id}`);
+  out(`Start it with: convyio-agent run ${/\s/.test(installation.agent.name) ? `"${installation.agent.name}"` : installation.agent.name}`);
 }
 
 async function status(out: (message: string) => void): Promise<void> {
@@ -59,6 +63,16 @@ async function status(out: (message: string) => void): Promise<void> {
   for (const agent of agents) {
     out(JSON.stringify(agent));
   }
+}
+
+async function unpair(out: (message: string) => void): Promise<void> {
+  const names = await clearInstallations();
+  if (names.length === 0) {
+    out("No paired agents to clear.");
+    return;
+  }
+  out(`Cleared ${names.length} paired agent${names.length === 1 ? "" : "s"}:`);
+  for (const name of names) out(`  ${name}`);
 }
 
 function parsePairArgs(args: string[]): { server: string; code: string; workspace: string } {
@@ -85,8 +99,9 @@ function usage(): string {
   return [
     "Usage:",
     "  convyio-agent pair --server <https-origin> --code <one-time-code> --workspace <path>",
-    "  convyio-agent run [agent-id]",
+    "  convyio-agent run [name]",
     "  convyio-agent status",
+    "  convyio-agent unpair",
   ].join("\n");
 }
 

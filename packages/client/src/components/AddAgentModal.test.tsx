@@ -66,7 +66,7 @@ const modelOption: RunnerConfigOption = {
 };
 
 describe("AddAgentModal", () => {
-  it("shows the pairing code and a setup prompt containing it after creating an agent", async () => {
+  it("shows pairing code, setup prompt, and CLI as collapsed copyable rows after creating an agent", async () => {
     const user = userEvent.setup();
     agentInvites = [];
     createAgent.mockImplementation(async (fields: { name: string }) => {
@@ -79,10 +79,34 @@ describe("AddAgentModal", () => {
     await user.type(screen.getByLabelText("Agent name"), "helper");
     await user.click(screen.getByText("Create agent"));
 
-    expect(await screen.findByText("pair-code-xyz")).toBeInTheDocument();
+    const named = (label: string) => screen.getByRole("button", { name: (n) => n === label });
+    expect(await screen.findByRole("button", { name: (n) => n === "Pairing code" })).toBeInTheDocument();
+    expect(named("Setup prompt")).toBeInTheDocument();
+    expect(named("CLI")).toBeInTheDocument();
+    expect(screen.getByLabelText("Copy Pairing code")).toBeInTheDocument();
+    expect(screen.getByLabelText("Copy Setup prompt")).toBeInTheDocument();
+    expect(screen.getByLabelText("Copy CLI")).toBeInTheDocument();
+    expect(screen.queryByText("pair-code-xyz")).not.toBeInTheDocument();
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await user.click(screen.getByLabelText("Copy CLI"));
+    expect(writeText).toHaveBeenCalledWith(
+      "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz --workspace .",
+    );
+
+    await user.click(named("Pairing code"));
+    expect(screen.getByText("pair-code-xyz")).toBeInTheDocument();
+
+    await user.click(named("Setup prompt"));
+    expect(
+      screen.getByText(/Pair this repository with Convyio so you can act as its workspace agent/),
+    ).toBeInTheDocument();
+
+    await user.click(named("CLI"));
     expect(
       screen.getByText(
-        /convyio-agent pair --server http:\/\/localhost:3001 --code pair-code-xyz --workspace \./,
+        "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz --workspace .",
       ),
     ).toBeInTheDocument();
   });

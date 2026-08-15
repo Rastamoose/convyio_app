@@ -71,10 +71,10 @@ export function QuickSwitcher({
   };
 
   return (
-    <div className="fixed inset-0 z-50 animate-fade-in bg-sidebar-dark/80">
+    <div className="fixed inset-0 z-50 animate-fade-in bg-backdrop/80">
       <div
         ref={ref}
-        className="elevated animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-lg"
+        className="elevated animate-pop-in mx-auto mt-24 w-full max-w-md overflow-hidden rounded-xl"
       >
         <input
           ref={inputRef}
@@ -94,8 +94,8 @@ export function QuickSwitcher({
               return (
                 <li key={c}>
                   <button
-                    className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left ${
-                      i === highlighted ? "bg-input text-body" : "text-body"
+                    className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm ${
+                      i === highlighted ? "bg-subtle text-body" : "text-body"
                     }`}
                     onMouseEnter={() => setHighlighted(i)}
                     onMouseDown={(e) => {
@@ -103,10 +103,10 @@ export function QuickSwitcher({
                       onSelect(c);
                     }}
                   >
-                    <span className="shrink-0 text-[15px] text-faint">#</span>
-                    <span className="min-w-0 flex-1 truncate text-[15px]">{c}</span>
+                    <span className="shrink-0 font-mono text-faint">#</span>
+                    <span className="min-w-0 flex-1 truncate">{c}</span>
                     {unreads > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-working px-2 py-0.5 text-[13px] font-semibold text-mention-text">
+                      <span className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-0.5 font-mono text-[10px] font-bold text-on-accent">
                         {unreads > 99 ? "99+" : unreads}
                       </span>
                     )}
