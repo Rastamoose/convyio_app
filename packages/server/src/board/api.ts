@@ -23,6 +23,7 @@ import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
 import type { ProjectStore } from "../projects/ProjectStore";
 import type { ToolmanNodes } from "../projects/ToolmanNodes";
+import type { ToolExecutionStore } from "../projects/ToolExecutionStore";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 const capabilitiesSchema = z.array(z.enum(WORK_CAPABILITIES as [WorkCapability, ...WorkCapability[]])).max(3);
@@ -148,6 +149,7 @@ export interface ApiServices {
   envelope?: PromptEnvelopeBuilder | null;
   projects?: ProjectStore | null;
   toolmanNodes?: ToolmanNodes | null;
+  executions?: ToolExecutionStore | null;
 }
 
 export function createApiHandler(services: ApiServices) {
@@ -171,6 +173,7 @@ export function createApiHandler(services: ApiServices) {
     envelope = null,
     projects = null,
     toolmanNodes = null,
+    executions = null,
   } = services;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -315,6 +318,7 @@ export function createApiHandler(services: ApiServices) {
           envelope,
           projects,
           toolmanNodes,
+          executions,
         });
       }
     } catch (err) {
@@ -354,6 +358,7 @@ async function route(
     envelope: PromptEnvelopeBuilder | null;
     projects: ProjectStore | null;
     toolmanNodes: ToolmanNodes | null;
+    executions: ToolExecutionStore | null;
   },
 ): Promise<void> {
   const {
@@ -373,6 +378,7 @@ async function route(
     envelope,
     projects,
     toolmanNodes,
+    executions,
   } = services;
   const method = req.method ?? "GET";
 
@@ -643,6 +649,11 @@ async function route(
       return json(res, 201, { request: await projects.requestAccess(actor, parts[2], body.reason) });
     }
     throw new ApiError(404, "NOT_FOUND", "no such route");
+  }
+
+  if (parts[1] === "tool-executions" && parts.length === 2 && method === "GET") {
+    if (!executions) throw new ApiError(501, "NOT_IMPLEMENTED", "executions are not available");
+    return json(res, 200, { executions: await executions.listRecent() });
   }
 
   if (parts[1] === "project-access-requests") {

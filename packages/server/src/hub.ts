@@ -443,6 +443,9 @@ export class Hub {
       case "action_request":
         await this.handleActionRequest(conn, event);
         break;
+      case "action_cancel":
+        this.options.toolmanGateway?.cancel(event.requestId);
+        break;
       case "interaction_resolve":
         await this.handleInteractionResolve(conn.participant!, event);
         break;
@@ -532,6 +535,10 @@ export class Hub {
       ...(contextCursor ? { contextCursor } : {}),
       agentConfig: conn.agentProfile ?? undefined,
     });
+    if (this.options.executions) {
+      const recent = await this.options.executions.listRecent();
+      for (const execution of recent) this.send(conn, { type: "tool_execution", execution });
+    }
     if (kind === "agent" && this.runnerRuntime.isAvailable(participant.id)) {
       await this.sendPendingWork(conn);
     }

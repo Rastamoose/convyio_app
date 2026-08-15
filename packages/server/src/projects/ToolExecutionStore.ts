@@ -117,6 +117,16 @@ export class ToolExecutionStore {
     });
   }
 
+  async listRecent(limit = 100): Promise<ToolExecution[]> {
+    const rows = await this.store.sql<ExecutionRow[]>`
+      SELECT * FROM tool_executions
+      WHERE workspace_id = ${this.store.workspaceId}
+      ORDER BY started_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.reverse().map(toExecution);
+  }
+
   async listForRun(runId: string): Promise<ToolExecution[]> {
     const rows = await this.store.sql<ExecutionRow[]>`
       SELECT * FROM tool_executions

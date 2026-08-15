@@ -5,6 +5,7 @@ import { useWorkspace } from "../hooks/WorkspaceContext";
 interface ProjectDetail {
   project: Project;
   assignments: ProjectAssignment[];
+  mounts?: { id: string }[];
 }
 
 export function ResourcesView() {
@@ -50,6 +51,20 @@ export function ResourcesView() {
     const res = await apiFetch(`/api/projects/${project.id}`);
     if (!res?.ok) return;
     setSelected((await res.json()) as ProjectDetail);
+  };
+
+  const resolveRequest = async (request: ProjectAccessRequest, decision: "approved" | "denied") => {
+    const detailRes = await apiFetch(`/api/projects/${request.projectId}`);
+    const detail = detailRes?.ok ? ((await detailRes.json()) as ProjectDetail) : null;
+    const res = await apiFetch(`/api/project-access-requests/${request.id}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ decision, mountId: detail?.mounts?.[0]?.id }),
+    });
+    if (!res?.ok) {
+      setError("Could not resolve access request");
+      return;
+    }
+    await load();
   };
 
   return (
@@ -121,8 +136,24 @@ export function ResourcesView() {
             <h2 className="mb-3 text-lg font-semibold text-body">Access requests</h2>
             <ul className="space-y-2 text-sm">
               {requests.map((request) => (
-                <li key={request.id} className="rounded-md border border-divider px-3 py-2">
-                  {request.agentName ?? request.agentId} wants {request.projectId}: {request.reason}
+                <li key={request.id} className="flex items-start justify-between gap-3 rounded-md border border-divider px-3 py-2">
+                  <span>
+                    {request.agentName ?? request.agentId} wants {request.projectId}: {request.reason}
+                  </span>
+                  <span className="flex shrink-0 gap-2">
+                    <button
+                      className="cursor-pointer text-xs font-semibold text-accent"
+                      onClick={() => void resolveRequest(request, "approved")}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      className="cursor-pointer text-xs font-semibold text-muted"
+                      onClick={() => void resolveRequest(request, "denied")}
+                    >
+                      Deny
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>

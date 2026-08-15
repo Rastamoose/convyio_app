@@ -107,6 +107,7 @@ async function main() {
   const attachments = new Attachments(db, supabase);
   const agentInvites = new AgentInvites(db);
   const runnerRuntime = new RunnerRuntime();
+  const executions = new ToolExecutionStore(db, threadEvents);
   const agentConfigUpdater: { update?: (profile: AgentInvite) => void } = {};
   const agentRevoker: { close?: (actorId: string) => void } = {};
   const memberRemover: { close?: (actorId: string) => void } = {};
@@ -130,6 +131,7 @@ async function main() {
     envelope,
     projects,
     toolmanNodes,
+    executions,
   });
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -147,7 +149,6 @@ async function main() {
   });
 
   const roster = await Roster.create(db, agentInvites);
-  const executions = new ToolExecutionStore(db, threadEvents);
   const toolmanGateway = new ToolmanGateway(server, toolmanNodes, projects);
   const hub = new Hub(
     server,
