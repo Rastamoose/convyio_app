@@ -43,7 +43,11 @@ import type { Channels } from "./chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, type MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
+import type { ProjectAction } from "@workspace/shared";
 import type { Toolman, ToolmanResult } from "./board/Toolman";
+import type { ProjectStore } from "./projects/ProjectStore";
+import type { ToolmanGateway } from "./projects/ToolmanGateway";
+import type { ToolExecutionStore } from "./projects/ToolExecutionStore";
 import { requestOrigin } from "./requestOrigin";
 import type { RunnerRuntime } from "./RunnerRuntime";
 import type { ContextCursorStore } from "./context/ContextCursorStore";
@@ -82,6 +86,9 @@ export interface HubOptions {
   /** Sequenced workspace projection used to stamp welcome.snapshotSeq. */
   threadEvents?: ThreadEventStore;
   contextCursors?: ContextCursorStore;
+  projects?: ProjectStore;
+  toolmanGateway?: ToolmanGateway;
+  executions?: ToolExecutionStore;
 }
 
 /**
@@ -120,7 +127,18 @@ export class Hub {
     private runnerRuntime: RunnerRuntime,
     private options: HubOptions,
   ) {
-    this.wss = new WebSocketServer({ server });
+    // noServer: ToolmanGateway also upgrades this HTTP server on /toolman.
+    // Two WebSocketServers both attached via `{ server }` both get every
+    // upgrade; the first that doesn't match its path abortHandshake(400)s
+    // the rest — which is why the client/agent join on `/` saw empty data.
+    this.wss = new WebSocketServer({ noServer: true });
+    server.on("upgrade", (req, socket, head) => {
+      const pathname = (req.url ?? "/").split("?")[0];
+      if (pathname === "/toolman") return;
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wss.emit("connection", ws, req);
+      });
+    });
     // ws re-emits the http server's 'error' on itself. Without a listener here
     // that re-emit is an unhandled 'error' event, which kills the process
     // before the http server's own handler can decide what to do — so a
@@ -755,13 +773,59 @@ export class Hub {
     if (gate) {
       return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
     }
-    const result = await this.toolman.execute(
-      actor,
-      event.action,
-      event.boardItemRef ?? null,
-      { chatGrant },
-    );
+    const result = isProjectAction(event.action)
+      ? await this.executeProjectAction(actor.id, event.action)
+      : await this.toolman.execute(actor, event.action, event.boardItemRef ?? null, { chatGrant });
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
+  }
+
+  private async executeProjectAction(agentId: string, action: ProjectAction): Promise<ToolmanResult> {
+    if (!this.options.projects || !this.options.toolmanGateway) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" };
+    }
+    const assignment = await this.options.projects.assignment(action.projectId, agentId);
+    if (!assignment) {
+      return { ok: false, code: "PROJECT_UNASSIGNED", error: "you are not assigned to this project" };
+    }
+    if (assignment.status !== "ready" && assignment.status !== "pending") {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: assignment.lastError ?? "the assigned checkout is not ready" };
+    }
+    const mount = await this.options.toolmanGateway.findMount(assignment.mountId);
+    if (!mount) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned project mount is gone" };
+    }
+    let started: { execution: import("@workspace/shared").ToolExecution; event?: import("@workspace/shared").ThreadEvent } | null = null;
+    if (this.options.executions) {
+      try {
+        started = await this.options.executions.start({
+          agentId,
+          projectId: action.projectId,
+          mountId: assignment.mountId,
+          nodeId: mount.nodeId,
+          boardItemRef: null,
+          action,
+        });
+        this.broadcast({ type: "tool_execution", execution: started.execution });
+        if (started.event) this.broadcast({ type: "thread_event", event: started.event });
+      } catch (err) {
+        console.warn("[hub] could not persist tool execution:", err instanceof Error ? err.message : err);
+      }
+    }
+    const result = await this.options.toolmanGateway.execute(assignment, action);
+    if (started && this.options.executions) {
+      try {
+        const finished = await this.options.executions.finish(started.execution.id, {
+          ok: result.ok,
+          output: result.output,
+          error: result.error,
+        });
+        this.broadcast({ type: "tool_execution", execution: finished.execution });
+        this.broadcast({ type: "thread_event", event: finished.event });
+      } catch (err) {
+        console.warn("[hub] could not finish tool execution:", err instanceof Error ? err.message : err);
+      }
+    }
+    return { ...result, executionId: started?.execution.id };
   }
 
   /**
@@ -1019,6 +1083,10 @@ export class Hub {
       this.wss.close((err) => (err ? reject(err) : resolve()));
     });
   }
+}
+
+function isProjectAction(action: ActionRequestEvent["action"]): action is ProjectAction {
+  return action.kind.startsWith("project_");
 }
 
 /** How long a paused run waits for a human before failing closed. */

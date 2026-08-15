@@ -55,11 +55,16 @@ export class AcpBrain implements Brain {
   private activeRuns = new Map<string, ActiveRun>();
   private requestedModel: string | null = null;
   private stderr = "";
+  private mcpServers: { name: string; url: string; headers?: Record<string, string> }[] = [];
 
   constructor(
     private readonly workspace: string,
     private readonly testAgent?: acp.AgentApp,
   ) {}
+
+  setMcpServers(servers: { name: string; url: string; headers?: Record<string, string> }[]): void {
+    this.mcpServers = servers;
+  }
 
   async preflight(requestedModel: string | null): Promise<AcpReadiness> {
     await this.ensureStarted();
@@ -175,7 +180,8 @@ export class AcpBrain implements Brain {
         cwd: this.workspace,
         mcpServers: [],
       });
-      const state = { sessionId: response.sessionId, configOptions: response.configOptions ?? [] };
+      const created = response as { sessionId: string; configOptions?: SessionConfigOption[] };
+      const state = { sessionId: created.sessionId, configOptions: created.configOptions ?? [] };
       this.sessions.set(state.sessionId, state);
       return state;
     } catch (error) {
@@ -200,7 +206,8 @@ export class AcpBrain implements Brain {
         cwd: this.workspace,
         mcpServers: [],
       });
-      const state = { sessionId: providerSessionId, configOptions: response?.configOptions ?? [] };
+      const loaded = response as { configOptions?: SessionConfigOption[] };
+      const state = { sessionId: providerSessionId, configOptions: loaded.configOptions ?? [] };
       this.sessions.set(providerSessionId, state);
       return state;
     } catch (error) {

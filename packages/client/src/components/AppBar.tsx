@@ -4,28 +4,24 @@ import { ThemeToggle } from "./ThemeToggle";
 export type WorkspaceView = "chat" | "board" | "resources";
 
 /**
- * The application chrome as one slim strip on the canvas above the content
- * panel: brand + sidebar toggle on the left, the view switch dead-center,
- * pending approvals + demo + theme on the right. Everything here operates on
- * the app, never on the conversation; the panel below only ever contains the
- * work (its room tab carries the channel name).
+ * The app-level strip on the canvas above the content panel: brand on the
+ * left, the view switch dead-center, demo playback + the pending-approval
+ * signal + theme on the right. Chrome that operates on the app lives here;
+ * the panel's own header (PanelHeader) carries only the room name and the
+ * sidebar toggle — each control exists in exactly one place.
  */
 export function AppBar({
   view,
   onSetView,
-  sidebarOpen,
-  onToggleSidebar,
   onToggleQueue,
   channel,
 }: {
   view: WorkspaceView;
   onSetView: (view: WorkspaceView) => void;
-  sidebarOpen: boolean;
-  onToggleSidebar: () => void;
   onToggleQueue: () => void;
   channel: string;
 }) {
-  const { board, pendingInteractions, demoChannels, startDemo } = useWorkspace();
+  const { workspace, board, pendingInteractions, demoChannels, startDemo } = useWorkspace();
   const pendingCount =
     board.filter((i) => i.status === "proposed").length + pendingInteractions.length;
 
@@ -52,42 +48,10 @@ export function AppBar({
         draggable={false}
         className="h-6 w-6 shrink-0 select-none"
       />
-      <button
-        onClick={onToggleSidebar}
-        aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-        aria-expanded={sidebarOpen}
-        title="Toggle sidebar (⌘B)"
-        className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition select-none hover:bg-subtle-hover hover:text-body"
-      >
-        <svg
-          className="h-4.5 w-4.5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="M9 4v16" />
-        </svg>
-      </button>
-      {/* Where you are, aligned with the pane's left edge (248px = 240px
-          sidebar + 8px gap; 8px when the sidebar is collapsed). It glides
-          with the sidebar's collapse animation, and rides the bottom of the
-          bar so it belongs to the pane below, not the tabs beside it. */}
-      {view === "chat" && (
-        <span
-          className="absolute bottom-0 truncate text-lg font-bold tracking-tight text-body transition-[left] duration-200 ease-out select-none"
-          style={{ left: sidebarOpen ? 248 : 8 }}
-        >
-          <span className="text-accent">#</span>
-          {channel}
-        </span>
-      )}
-
-      {/* Dead-center: the view switch, where eyes land first. */}
+      <span aria-hidden="true" className="h-4 w-px shrink-0 bg-divider" />
+      <span className="min-w-0 truncate font-mono text-sm font-bold tracking-wider text-body uppercase select-none">
+        {workspace?.name}
+      </span>
       <div
         role="tablist"
         aria-label="Workspace view"
@@ -97,7 +61,6 @@ export function AppBar({
         {tab("board", "Board")}
         {tab("resources", "Resources")}
       </div>
-
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {demoChannels.includes(channel) && (
           <button

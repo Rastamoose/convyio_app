@@ -542,6 +542,7 @@ export function MessageList({
     loadOlder,
     pendingInteractions,
     resolveInteraction,
+    executions,
   } = useWorkspace();
   const selfName = self?.name ?? null;
 
@@ -921,6 +922,7 @@ export function MessageList({
                 interactions={pendingInteractions.filter(
                   (request) => request.agentId === entry.run.agentId,
                 )}
+                executions={executions.filter((execution) => execution.runId === entry.run.runId || !execution.runId)}
                 onResolveInteraction={resolveInteraction}
               />
             );

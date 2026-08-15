@@ -11,6 +11,7 @@ import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
 import { ResourcesView } from "./components/ResourcesView";
 import { ApprovalQueue } from "./components/ApprovalQueue";
+import { PanelHeader } from "./components/PanelHeader";
 import { StatusBar } from "./components/StatusBar";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
@@ -598,8 +599,6 @@ function Workspace() {
       <AppBar
         view={view}
         onSetView={setView}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((o) => !o)}
         onToggleQueue={() => setQueueOpen((o) => !o)}
         channel={channel}
       />
@@ -624,6 +623,12 @@ function Workspace() {
             sidebarOpen ? "" : "ml-2"
           }`}
         >
+        <PanelHeader
+          view={view}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((o) => !o)}
+          channel={channel}
+        />
         {view === "resources" ? (
           <ResourcesView />
         ) : view === "chat" ? (

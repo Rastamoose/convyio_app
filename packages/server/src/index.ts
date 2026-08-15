@@ -33,6 +33,8 @@ import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
 import { PromptEnvelopeBuilder } from "./context/PromptEnvelope";
 import { ProjectStore } from "./projects/ProjectStore";
 import { ToolmanNodes } from "./projects/ToolmanNodes";
+import { ToolmanGateway } from "./projects/ToolmanGateway";
+import { ToolExecutionStore } from "./projects/ToolExecutionStore";
 
 const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 const MIGRATIONS_DIR = path.resolve(
@@ -145,6 +147,8 @@ async function main() {
   });
 
   const roster = await Roster.create(db, agentInvites);
+  const executions = new ToolExecutionStore(db, threadEvents);
+  const toolmanGateway = new ToolmanGateway(server, toolmanNodes, projects);
   const hub = new Hub(
     server,
     roster,
@@ -168,6 +172,9 @@ async function main() {
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
       threadEvents,
       contextCursors,
+      projects,
+      toolmanGateway,
+      executions,
     },
   );
   agentConfigUpdater.update = (profile) => hub.updateAgentConfig(profile);

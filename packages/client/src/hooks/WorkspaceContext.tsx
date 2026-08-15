@@ -14,6 +14,7 @@ import type {
   InteractionRequest,
   PermissionMode,
   Participant,
+  ToolExecution,
   WorkspaceInfo,
 } from "@workspace/shared";
 import { isBoardEnvelope, isPlanEnvelope } from "@workspace/shared";
@@ -45,6 +46,7 @@ export interface WorkspaceState {
   messages: LocalMessage[];
   activeRuns: ActiveRun[];
   runDurations: Map<string, number>;
+  executions: ToolExecution[];
   /** Permission prompts waiting on a human; the same ids every surface shows. */
   pendingInteractions: InteractionRequest[];
   resolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
@@ -171,6 +173,7 @@ export function WorkspaceProvider({
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const chat = useChatMessages();
   const traces = useAgentTraces();
+  const [executions, setExecutions] = useState<ToolExecution[]>([]);
   const interactions = useInteractions();
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
@@ -203,6 +206,7 @@ export function WorkspaceProvider({
       case "welcome":
         chat.replaceAll(event.history);
         traces.reset();
+        setExecutions([]);
         interactions.reset();
         // The session must be bound before the board loads its snapshot.
         api.start(event.apiUrl, event.token);
@@ -232,6 +236,12 @@ export function WorkspaceProvider({
         break;
       case "run_end":
         traces.endRun(event.runId);
+        break;
+      case "tool_execution":
+        setExecutions((prev) => {
+          const next = prev.filter((item) => item.id !== event.execution.id);
+          return [...next, event.execution];
+        });
         break;
       case "interaction_request":
         interactions.open(event.request);
@@ -512,6 +522,7 @@ export function WorkspaceProvider({
     connected: connection.connected,
     messages: chat.messages,
     activeRuns: traces.activeRuns,
+    executions,
     runDurations: traces.runDurations,
     board: board.items,
     plans: board.plans,

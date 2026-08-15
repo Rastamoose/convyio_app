@@ -274,6 +274,14 @@ export class ToolmanNodes {
     return rows.map(toMount);
   }
 
+  async mountsForNode(nodeId: string): Promise<ProjectMount[]> {
+    const rows = await this.store.sql<MountRow[]>`
+      SELECT * FROM project_mounts WHERE node_id = ${nodeId}
+      ORDER BY created_at DESC
+    `;
+    return rows.map(toMount);
+  }
+
   private async requireActiveNode(nodeId: string): Promise<ToolmanNodeSummary> {
     const [row] = await this.store.sql<NodeRow[]>`
       SELECT n.*, a.display_name AS created_by_name

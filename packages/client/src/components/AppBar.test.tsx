@@ -62,11 +62,10 @@ const interaction = (id: string): InteractionRequest => ({
 function renderAppBar() {
   const handlers = {
     onSetView: vi.fn(),
-    onToggleSidebar: vi.fn(),
     onToggleQueue: vi.fn(),
   };
   render(
-    <AppBar view="chat" sidebarOpen channel="general" {...handlers} />,
+    <AppBar view="chat" channel="general" {...handlers} />,
   );
   return handlers;
 }

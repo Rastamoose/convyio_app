@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ChatMessage, InteractionRequest, TraceChunk } from "@workspace/shared";
+import type { ChatMessage, InteractionRequest, ToolExecution, TraceChunk } from "@workspace/shared";
 import { formatElapsed } from "../lib/format";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { PermissionCard } from "./PermissionCard";
+import { ToolCard } from "./ToolCard";
 
 /** Toolman lines are tagged in the trace; everything else is prose. */
 const TOOL_LINE = /^\[toolman\] /;
@@ -49,6 +50,7 @@ export function TraceMessageLive({
   chunks,
   startedAt,
   interactions = [],
+  executions = [],
   onResolveInteraction,
 }: {
   runId: string;
@@ -57,6 +59,7 @@ export function TraceMessageLive({
   startedAt: number;
   /** Prompts this run is paused on; answering here is the same act as anywhere. */
   interactions?: InteractionRequest[];
+  executions?: ToolExecution[];
   onResolveInteraction?: (requestId: string, decision: "approve" | "deny") => void;
 }) {
   // A live run's age is the one thing that changes with no new frames.
@@ -94,7 +97,15 @@ export function TraceMessageLive({
             {formatElapsed(now - startedAt)}
           </span>
         </div>
-        <TraceBody chunks={chunks} />
+        {executions.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            {executions.map((execution) => (
+              <ToolCard key={execution.id} execution={execution} />
+            ))}
+          </div>
+        ) : (
+          <TraceBody chunks={chunks} />
+        )}
         {paused && onResolveInteraction && (
           <div className="mt-2 space-y-2 pl-[52px]">
             {interactions.map((request) => (

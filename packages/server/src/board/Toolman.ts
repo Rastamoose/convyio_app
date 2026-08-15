@@ -18,6 +18,7 @@ export interface ToolmanResult {
   code?: AuthzDenyCode;
   error?: string;
   output?: string;
+  executionId?: string;
 }
 
 /**

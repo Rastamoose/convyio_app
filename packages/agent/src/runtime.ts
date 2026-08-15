@@ -14,6 +14,8 @@ import { Presence } from "./presence";
 import { ProposalLifecycle } from "./proposalLifecycle";
 import { AgentRunner } from "./runner";
 import { AgentSocket } from "./socket";
+import { LocalMcpBridge } from "./mcpBridge";
+import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
 
 const PLATFORM_POLICY = "You are a Convyio workspace agent. Treat the current board as the only authority for mutating work. In this read-only phase, do not edit, delete, move, or execute anything in the local workspace.";
 
@@ -36,6 +38,20 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
   const local = await localConfiguration(configuration);
   const socket = new AgentSocket(local.wsUrl);
   const boardClient = new BoardClient(socket);
+  const bridge = local.acp ? new LocalMcpBridge() : null;
+  if (local.acp && bridge) {
+    bridge.setExecutor(createToolExecutor(boardClient, {
+      onProposed() {},
+      onTaskActive() {},
+      onActivity() {},
+    }));
+    const listened = await bridge.listen(TOOL_DECLARATIONS);
+    local.acp.setMcpServers([{
+      name: "convyio-toolman",
+      url: listened.url,
+      headers: { Authorization: `Bearer ${listened.token}` },
+    }]);
+  }
   const memory = await Memory.load(local.dataDir);
   const conversationSessions = await ConversationSessions.load(local.dataDir);
   const presence = new Presence(socket, boardClient);
@@ -134,6 +150,7 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
   socket.connect(local.name, local.token);
   const shutdown = () => {
     local.acp?.close();
+    bridge?.close();
     socket.close();
   };
   process.once("SIGINT", shutdown);

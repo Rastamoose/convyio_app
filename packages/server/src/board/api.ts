@@ -50,7 +50,7 @@ const createBodySchema = z.object({
       tests: z.enum(["affected", "na"]),
       demos: z.enum(["affected", "na"]),
       docs: z.enum(["affected", "na"]),
-      notes: z.record(z.string()).default({}),
+      notes: z.record(z.string(), z.string()).default({}),
     })
     .optional(),
   // I2: any supplied status is ignored; parsed here only so it is dropped.
@@ -511,7 +511,7 @@ async function route(
     tests: z.enum(["affected", "na"]),
     demos: z.enum(["affected", "na"]),
     docs: z.enum(["affected", "na"]),
-    notes: z.record(z.string()).default({}),
+    notes: z.record(z.string(), z.string()).default({}),
   });
   const planBodySchema = z.object({
     title: z.string().min(1).max(200),

@@ -30,6 +30,13 @@ export async function runCli(
         io.out(`Attached ${added.mount.projectName} (${added.mount.kind}).`);
         return 0;
       }
+      case "run": {
+        const installation = await loadInstallation();
+        const { runNode } = await import("./runtime");
+        io.out(`Toolman node ${installation.node.name} connecting to ${installation.workspace.name}…`);
+        await runNode(installation);
+        return 0;
+      }
       case "status": {
         const installations = await listInstallations();
         if (installations.length === 0) {
@@ -84,6 +91,7 @@ function usage(): string {
     "Usage:",
     "  convyio-toolman pair --server <https-origin> --code <one-time-code>",
     "  convyio-toolman project add <path> [--name <name>]",
+    "  convyio-toolman run",
     "  convyio-toolman status",
     "  convyio-toolman unpair",
   ].join("\n");
