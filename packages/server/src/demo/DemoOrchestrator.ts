@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { BoardEventEnvelope, ChatMessage } from "@workspace/shared";
+import type { BoardEventEnvelope, ChatMessage, PlanEventEnvelope } from "@workspace/shared";
 import type { Hub } from "../hub";
 import type { Roster } from "../roster";
 import type { WorkspaceDb } from "../db";
 import type { BoardService } from "../board/BoardService";
+import type { PlanService } from "../board/PlanService";
 import type { DemoScript } from "./script";
 
 const STEP_DELAY_MS = 4500;
@@ -28,6 +29,7 @@ export class DemoOrchestrator {
   private cancelWaits: (() => void)[] = [];
   /** Ref of the latest agent proposal observed during the current run. */
   private lastProposalRef: string | null = null;
+  private lastPlanRef: string | null = null;
   /** Board refs created by demo runs, cleaned up on the next start. */
   private demoRefs = new Set<string>();
 
@@ -36,6 +38,7 @@ export class DemoOrchestrator {
     private roster: Roster,
     private db: WorkspaceDb,
     private service: BoardService,
+    private plans: PlanService,
     private workspaceDir: string,
     private seedRoot: string,
     private scripts: Map<string, DemoScript>,
@@ -47,6 +50,7 @@ export class DemoOrchestrator {
       }
     };
     hub.onBoardEvent = (envelope) => this.onBoardEvent(envelope);
+    hub.onPlanEvent = (envelope) => this.onPlanEvent(envelope);
   }
 
   get channels(): string[] {
@@ -58,6 +62,12 @@ export class DemoOrchestrator {
       this.demoRefs.add(envelope.item.ref);
       this.lastProposalRef = envelope.item.ref;
       this.proposalWaiter?.(envelope.item.ref);
+    }
+  }
+
+  private onPlanEvent(envelope: PlanEventEnvelope): void {
+    if ((envelope.type === "plan.proposed" || envelope.type === "plan.created") && this.running) {
+      this.lastPlanRef = envelope.plan.ref;
     }
   }
 
@@ -76,6 +86,7 @@ export class DemoOrchestrator {
     }
     this.running = true;
     this.lastProposalRef = null;
+    this.lastPlanRef = null;
     console.log(`[demo] starting scripted demo in #${channel}`);
 
     try {
@@ -99,6 +110,10 @@ export class DemoOrchestrator {
         }
         if (step.await === "approve_proposal") {
           await this.approveProposal(step.author, channel);
+          if (gen !== this.generation) return;
+        }
+        if (step.await === "accept_plan") {
+          await this.acceptPlan(step.author, channel);
           if (gen !== this.generation) return;
         }
       }
@@ -147,9 +162,21 @@ export class DemoOrchestrator {
     if (!item || item.status !== "proposed") {
       throw new Error(`demo proposal ${ref} is not approvable`);
     }
-    await this.service.approve(actor, ref);
-    console.log(`[demo] ${author} approved ${ref}`);
+    const owner = item.owner
+      ?? this.roster.list().find((participant) => participant.kind === "agent")?.id;
+    if (!owner) throw new Error(`demo proposal ${ref} has no owner to assign`);
+    await this.service.approve(actor, ref, owner);
+    console.log(`[demo] ${author} approved ${ref} for ${owner}`);
     await this.waitForAgentReply(channel, WORK_TIMEOUT_MS);
+  }
+
+  private async acceptPlan(author: string, channel: string): Promise<void> {
+    const ref = this.lastPlanRef;
+    if (!ref) throw new Error("demo has no plan to accept");
+    const actor = await this.db.upsertActor("human", author);
+    await this.plans.accept(actor, ref);
+    console.log(`[demo] ${author} accepted ${ref}`);
+    await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
   }
 
   /**

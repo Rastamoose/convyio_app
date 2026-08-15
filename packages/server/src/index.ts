@@ -30,6 +30,7 @@ import { assertSchemaCurrent, SchemaOutOfDateError } from "./schemaCheck";
 import { ContextStore } from "./context/ContextStore";
 import { ContextCursorStore } from "./context/ContextCursorStore";
 import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
+import { PromptEnvelopeBuilder } from "./context/PromptEnvelope";
 
 const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 const MIGRATIONS_DIR = path.resolve(
@@ -54,6 +55,7 @@ async function main() {
   const context = new ContextStore(db, threadEvents);
   const contextCursors = new ContextCursorStore(db, threadEvents);
   const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
+  const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
   const interactions = new InteractionStore(db, threadEvents);
   // Prompts from a previous process have no waiter left to answer them. This
   // is tidying, not a precondition: a transient database hiccup here must not
@@ -119,6 +121,7 @@ async function main() {
     onRemoveMember: (actorId) => memberRemover.close?.(actorId),
     snapshot,
     plans,
+    envelope,
   });
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -176,6 +179,7 @@ async function main() {
     roster,
     db,
     service,
+    plans,
     workspaceDir,
     path.join(ASSETS_DIR, "demo/seed"),
     scripts,

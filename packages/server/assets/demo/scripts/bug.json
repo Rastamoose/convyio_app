@@ -13,7 +13,7 @@
     },
     {
       "author": "maya",
-      "say": "@{agent} before anyone touches code: read the files under billing/ in the workspace, find the root cause of the rounding discrepancy, and file a board proposal with your fix plan. do NOT modify any files yet.",
+      "say": "@{agent} before anyone touches code: read the files under billing/ in the workspace, find the root cause of the rounding discrepancy, propose a megaplan with one clarifying question, then file the next ticket only after that plan is accepted. do NOT modify any files yet.",
       "await": "agent_reply"
     },
     {

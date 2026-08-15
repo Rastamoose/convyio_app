@@ -1,0 +1,19 @@
+{
+  "id": "context-selection",
+  "version": "1",
+  "alwaysInclude": [
+    "platform policy",
+    "current assignment and authorization",
+    "active accepted plans",
+    "live tickets, owners, and blockers",
+    "relevant active context entries"
+  ],
+  "omit": [
+    "routine trace deltas",
+    "tool progress",
+    "token usage",
+    "typing",
+    "reactions",
+    "unrelated channel chatter"
+  ]
+}

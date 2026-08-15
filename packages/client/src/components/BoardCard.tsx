@@ -8,12 +8,14 @@ import { ActionButton } from "./ActionButton";
 export function BoardCard({
   item,
   highlighted,
+  planRef,
   onOpen,
   onDiscuss,
   onJumpToTrace,
 }: {
   item: BoardItem;
   highlighted: boolean;
+  planRef?: string;
   onOpen: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onJumpToTrace: (runId: string) => void;
@@ -37,6 +39,7 @@ export function BoardCard({
         <span className="shrink-0 rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
           {item.ref}
         </span>
+        {planRef && <span className="truncate font-mono text-[10px] text-faint">{planRef}</span>}
         {item.ownerName && (
           <span className="ml-auto shrink-0" title={item.ownerName}>
             <Avatar name={item.ownerName} size={16} />
@@ -93,7 +96,7 @@ export function BoardCard({
             compact
             label="Approve"
             tone="approve"
-            onClick={() => approveItem(item.id)}
+            onClick={() => approveItem(item.id, item.owner ?? undefined)}
           />
           <ActionButton
             compact

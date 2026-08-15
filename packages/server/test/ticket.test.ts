@@ -99,4 +99,27 @@ describe("ticket lifecycle", async () => {
     assert.equal(second.status, 409);
     assert.equal(second.body.error, "LIVE_TICKET_EXISTS");
   });
+
+  test("approving an owned ticket queues durable work for that owner only", async () => {
+    const item = await proposeTicket(env, owner.actor, await acceptedPlan(env, human.token, "dispatch"), {
+      owner: owner.actor.id,
+    });
+    const approved = await env.service.approve(human.actor, item.id, owner.actor.id);
+    const channel = await env.channels.get("general");
+    assert.ok(channel);
+    const queued = await env.agentWork.queueApprovedTicket({
+      actor: human.actor,
+      owner: { id: owner.actor.id, displayName: owner.actor.displayName, kind: "agent" },
+      item: { id: approved.id, ref: approved.ref, title: approved.title },
+      channelId: channel.id,
+      channelName: channel.name,
+    });
+    assert.ok(queued);
+    assert.equal(queued.request.agentId, owner.actor.id);
+    assert.match(queued.message.content, new RegExp(approved.ref));
+    const pending = await env.agentWork.listPending(owner.actor.id);
+    assert.ok(pending.some((row) => row.id === queued.request.id));
+    const otherPending = await env.agentWork.listPending(other.actor.id);
+    assert.equal(otherPending.length, 0);
+  });
 });

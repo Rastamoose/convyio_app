@@ -5,7 +5,6 @@ import { presenceDot, presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { AddAgentModal } from "./AddAgentModal";
-import { ApprovalQueue } from "./ApprovalQueue";
 import { MemberCard } from "./MemberCard";
 import { PinIcon } from "./PinnedMessages";
 
@@ -316,13 +315,11 @@ export function Sidebar({
   onPrefill: (text: string) => void;
 }) {
   const {
-    workspace,
     participants,
     self,
     channels,
     archivedChannels,
     pinnedChannels,
-    board,
     setStatus,
     signOut,
     createChannel,
@@ -335,12 +332,9 @@ export function Sidebar({
     agentInvites,
     revokeAgent,
     removeMember,
-    pendingInteractions,
-    resolveInteraction,
   } = useWorkspace();
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
-  const [queueOpen, setQueueOpen] = useState(false);
   const [selected, setSelected] = useState<{
     participantId: string;
     anchor: DOMRect;
@@ -461,9 +455,6 @@ export function Sidebar({
   const byName = (a: Participant, b: Participant) => a.name.localeCompare(b.name);
   const online = participants.filter((p) => p.online).sort(byName);
   const offline = participants.filter((p) => !p.online).sort(byName);
-  const pendingItems = board
-    .filter((i) => i.status === "proposed")
-    .sort((a, b) => b.createdAt - a.createdAt);
   const selectedMember = selected
     ? (participants.find((p) => p.id === selected.participantId) ?? null)
     : null;
@@ -483,7 +474,6 @@ export function Sidebar({
     : false;
 
   const discuss = (item: BoardItem) => {
-    setQueueOpen(false);
     setSelected(null);
     onDiscuss(item);
   };
@@ -505,29 +495,9 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-divider">
-      {/* Workspace header */}
-      <header className="flex h-12 shrink-0 flex-col justify-center border-b border-divider px-4 select-none">
-        <span className="truncate font-semibold text-body">{workspace?.name}</span>
-        <span className="truncate font-mono text-[10px] leading-tight tracking-wide text-faint">
-          humans &amp; agents, one room
-        </span>
-      </header>
-
-      {/* Status area — top third, becomes the status strip */}
+      {/* Status area — top third, becomes the status strip. The workspace
+          name lives in the StatusBar, not in a sidebar header. */}
       <section className="min-h-0 basis-1/3 overflow-y-auto px-2 pt-3">
-        {pendingItems.length + pendingInteractions.length > 0 && (
-          <button
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => setQueueOpen((o) => !o)}
-            className="mb-1.5 flex w-full cursor-pointer items-center gap-2 rounded-md bg-dead/15 px-2 py-1.5 text-left text-sm font-semibold text-dead select-none hover:bg-dead/25"
-          >
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-dead opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-dead" />
-            </span>
-            Awaiting approval ({pendingItems.length + pendingInteractions.length})
-          </button>
-        )}
         <h2 className="mb-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none">
           Online — {online.length}
         </h2>
@@ -685,15 +655,6 @@ export function Sidebar({
         )}
       </footer>
 
-      {queueOpen && pendingItems.length + pendingInteractions.length > 0 && (
-        <ApprovalQueue
-          items={pendingItems}
-          interactions={pendingInteractions}
-          onResolveInteraction={resolveInteraction}
-          onDiscuss={discuss}
-          onClose={() => setQueueOpen(false)}
-        />
-      )}
       {selectedMember && selected && (
         <MemberCard
           participant={selectedMember}

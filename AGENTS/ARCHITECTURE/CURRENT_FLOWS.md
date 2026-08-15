@@ -29,44 +29,53 @@ from the admitted token. Request bodies never choose the acting actor.
    resulting events and optional agent message.
 6. Claimed work is requeued when the agent reconnects.
 
-Agent-authored mentions do not currently create work. Board ownership does not
-currently dispatch work.
+Agent-authored mentions do not currently create work. Approving a ticket
+whose owner is an agent queues a durable run request for that owner.
 
 ## Current LLM context
 
 1. The server sends an assignment containing its conversation and triggering
    chat message.
-2. `AgentRunner` constructs model context locally from `BoardClient.summary()`
-   and `Memory.context()`.
-3. `Memory` is a rolling fifty-message transcript stored by the runner.
-4. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
-5. The server does not currently construct or version the model's complete
-   context wrapper.
+2. On join the runner loads `/api/workspace/snapshot` and, when available,
+   `/api/workspace/prompt-envelope`.
+3. `BoardClient.summary()` renders that envelope (policy, actor, plans,
+   live tickets, members, context) when one was loaded; otherwise it falls
+   back to a local item list.
+4. `Memory` is a rolling fifty-message transcript stored by the runner.
+5. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
 
-Agents load a cursor-bearing workspace snapshot on join
-(`/api/workspace/snapshot`) and merge it with any board envelopes that
-arrived while the snapshot was in flight. The welcome frame carries
-`snapshotSeq` so later events at or below that sequence are already
-represented. The current compact model summary includes owner names when
-present; the roster is not yet compiled into every run.
+The envelope is compiled at snapshot time, not per run. The actor cursor is
+not yet advanced when a runner acknowledges an envelope.
 
 ## Board and action authorization
 
-1. An agent creates an inert proposal through the board HTTP API.
-2. A human approves or denies it.
-3. Approval of the proposing agent's item is observed by that runner's local
-   `ProposalLifecycle`, which resumes work from `PendingWork`.
+1. Substantial work starts as a Plan. A human accepts it once; acceptance
+   grants no mutating authority.
+2. The next ticket is created against that accepted plan. Every ticket starts
+   proposed, including human-created ones.
+3. A human approves the ticket with an owner, acceptance criteria and a
+   complete impact map. The server then queues work for an agent owner.
 4. For each world action, the agent sends `action_request` with a board item
-   reference.
-5. `Hub` asks Toolman whether the board item is workable and grants the
-   requested path and capability.
+   reference, or without one for an explicit chat grant.
+5. `Hub` asks Toolman whether the action is authorized. A ticket mutation
+   still requires a workable owned item. A chat grant still fails closed on
+   unclassified tools and path escape.
 6. The conversation permission mode either denies the action, allows it, or
-   creates a durable human interaction request.
+   creates a durable human interaction request. Modes never override the
+   hard ceiling.
 7. Toolman rechecks authorization and executes inside the workspace sandbox.
 
-The board grant is currently mandatory for every agent mutation. Chat
-permission can narrow that grant but cannot independently authorize ad-hoc
-work.
+## Approval surfaces
+
+A human decision is made in the conversation. Proposed items render as
+live proposal cards in the chat timeline; a paused run's permission
+prompt renders on that run, or as its own timeline card if the run is
+not visible. The AppBar queue and the Board tab are other views of the
+same records — they do not mint a second copy of the question.
+
+An `item.proposed` envelope therefore does not also become a chat
+system line. Later board events (`item.approved`, `item.denied`, and
+so on) still do.
 
 ## Board synchronization
 

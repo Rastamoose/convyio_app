@@ -1,7 +1,8 @@
 # Target architecture: planning, work and shared context
 
-> Status: agreed architectural direction, not current implementation.
-> Every implementation slice still requires its own approved ticket.
+> Status: agreed architectural direction. Tickets 1–8 have landed in
+> current-state pages; remaining gaps are per-run envelope compilation,
+> cursor acknowledgement, and fuller provider-tool unification.
 > Current behavior remains defined by the `CURRENT_*.md` pages.
 
 ## Goal

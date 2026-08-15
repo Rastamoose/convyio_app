@@ -10,6 +10,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { NormalizedUsage } from "@workspace/shared";
 import { z } from "zod";
+import { isSafeClaudeNativeTool, SAFE_CLAUDE_NATIVE_TOOLS } from "./nativeTools";
 import {
   boundedToolInput,
   buildPromptText,
@@ -30,8 +31,6 @@ import {
 // different unit, so this needs its own, more generous cap rather than
 // reusing that constant.
 export const CLAUDE_MAX_TURNS = 40;
-
-const SAFE_NATIVE_TOOLS = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"];
 
 export class ClaudeBrain implements Brain {
   private query = claudeQuery;
@@ -100,7 +99,7 @@ export class ClaudeBrain implements Brain {
 
     const canUseTool: CanUseTool = async (toolName) => {
       activity.happened = true;
-      if (SAFE_NATIVE_TOOLS.includes(toolName) || boardToolNames.has(toolName)) {
+      if (isSafeClaudeNativeTool(toolName) || boardToolNames.has(toolName)) {
         return { behavior: "allow" };
       }
       return { behavior: "deny", message: `Tool ${toolName} is not approved for native execution.` };
@@ -121,7 +120,7 @@ export class ClaudeBrain implements Brain {
       abortController,
       includePartialMessages: true,
       maxTurns: CLAUDE_MAX_TURNS,
-      tools: SAFE_NATIVE_TOOLS,
+      tools: [...SAFE_CLAUDE_NATIVE_TOOLS],
       canUseTool,
       hooks,
       ...(boardServer ? { mcpServers: { board: boardServer } } : {}),

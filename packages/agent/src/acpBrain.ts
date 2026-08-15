@@ -17,6 +17,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { NormalizedUsage, RunnerConfigOption } from "@workspace/shared";
 import { boundedToolInput, buildPromptText, summarizedToolOutput, type Brain, type BrainCallbacks, type BrainInput, type BrainResult, type BrainRunOptions } from "./brain";
+import { isSafeAcpKind } from "./nativeTools";
 
 export type AcpReadiness = {
   harness: { id: string; version: string };
@@ -306,8 +307,9 @@ export async function readWorkspaceFile(workspace: string, request: ReadTextFile
 
 export async function permissionDecision(workspace: string, request: RequestPermissionRequest) {
   const kind = request.toolCall.kind;
-  const allow = kind === "search" || kind === "think" || kind === "fetch"
-    || (kind === "read" && await readPermissionAllowed(workspace, request.toolCall));
+  const allow = kind === "read"
+    ? await readPermissionAllowed(workspace, request.toolCall)
+    : isSafeAcpKind(kind);
   const desired = allow ? "allow_once" : "reject_once";
   const option = request.options.find((candidate) => candidate.kind === desired)
     ?? request.options.find((candidate) => candidate.kind.startsWith(allow ? "allow" : "reject"));

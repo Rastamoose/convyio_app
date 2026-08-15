@@ -63,6 +63,16 @@ describe("context plane", async () => {
     assert.equal(next.acknowledgedSeq, 9);
   });
 
+  test("GET /api/workspace/prompt-envelope includes hashed policy and live board", async () => {
+    const res = await env.api("GET", "/api/workspace/prompt-envelope", human.token);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.envelope.policy));
+    assert.equal(res.body.envelope.policy[0].id, "agent-workflow");
+    assert.ok(res.body.envelope.policy[0].hash);
+    assert.equal(res.body.envelope.workspace.id, env.db.workspaceId);
+    assert.equal(res.body.envelope.actor.id, human.actor.id);
+  });
+
   test("welcome carries snapshotSeq", async () => {
     const created = await proposeTicket(env, human.actor, await acceptedPlan(env, human.token, "welcome-seq"), {
       title: "welcome-seq",

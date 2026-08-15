@@ -8,6 +8,7 @@ import type {
   Attachment,
   BoardItem,
   BoardItemEvent,
+  BoardPlan,
   ChatMessage,
   ClientEvent,
   InteractionRequest,
@@ -15,7 +16,7 @@ import type {
   Participant,
   WorkspaceInfo,
 } from "@workspace/shared";
-import { isBoardEnvelope } from "@workspace/shared";
+import { isBoardEnvelope, isPlanEnvelope } from "@workspace/shared";
 import type { JoinCredentials } from "../ws";
 import { useConnection } from "./useConnection";
 import { useChatMessages, type LocalMessage } from "./useChatMessages";
@@ -25,7 +26,7 @@ import {
   useAttachmentDrafts,
   type AttachmentDraft,
 } from "./useAttachmentDrafts";
-import { useBoard, type BoardItemEdit, type BoardLine } from "./useBoard";
+import { useBoard, type BoardItemEdit, type BoardLine, type PlanDraft, type TicketDraft } from "./useBoard";
 import { useToasts, type Toast } from "./useToasts";
 import { useTyping, type Typist } from "./useTyping";
 import { useUnreads } from "./useUnreads";
@@ -49,6 +50,7 @@ export interface WorkspaceState {
   resolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
   setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
   board: BoardItem[];
+  plans: BoardPlan[];
   boardLines: BoardLine[];
   toasts: Toast[];
   dismissToast: (id: number) => void;
@@ -97,11 +99,13 @@ export interface WorkspaceState {
   pinChannel: (name: string, pinned: boolean) => Promise<boolean>;
   deleteChannel: (name: string) => Promise<boolean>;
   /** Resolves true when the item landed; false = failure (toast already shown). */
-  createBoardItem: (title: string, description?: string) => Promise<boolean>;
-  approveItem: (itemId: string) => void;
+  createBoardItem: (draft: TicketDraft) => Promise<boolean>;
+  createPlan: (draft: PlanDraft) => Promise<boolean>;
+  acceptPlan: (planId: string) => Promise<boolean>;
+  approveItem: (itemId: string, owner?: string) => void;
   denyItem: (itemId: string) => void;
   startItem: (itemId: string) => void;
-  completeItem: (itemId: string) => void;
+  completeItem: (itemId: string, evidence: string) => void;
   reopenItem: (itemId: string) => void;
   deleteItem: (itemId: string) => void;
   editItem: (itemId: string, fields: BoardItemEdit) => void;
@@ -176,6 +180,10 @@ export function WorkspaceProvider({
   const pendingFramesRef = useRef(new Map<string, ClientEvent>());
 
   const connection = useConnection(credentials, (event) => {
+    if (isPlanEnvelope(event)) {
+      board.applyPlan(event.plan);
+      return;
+    }
     if (isBoardEnvelope(event)) {
       board.applyEnvelope(event);
       // Surface new agent proposals even when the user is looking elsewhere;
@@ -505,6 +513,7 @@ export function WorkspaceProvider({
     activeRuns: traces.activeRuns,
     runDurations: traces.runDurations,
     board: board.items,
+    plans: board.plans,
     boardLines: board.lines,
     toasts,
     dismissToast,
@@ -580,6 +589,8 @@ export function WorkspaceProvider({
     pinChannel,
     deleteChannel,
     createBoardItem: board.createItem,
+    createPlan: board.createPlan,
+    acceptPlan: board.acceptPlan,
     approveItem: board.approve,
     denyItem: board.deny,
     startItem: board.start,

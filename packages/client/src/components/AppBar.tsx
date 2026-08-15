@@ -4,30 +4,28 @@ import { ThemeToggle } from "./ThemeToggle";
 export type WorkspaceView = "chat" | "board";
 
 /**
- * The application chrome: view switch, sidebar toggle, theme, jump-to, and
- * the pending-approval signal — everything that operates on the app rather
- * than on the conversation. Lives on the canvas above both the sidebar and
- * the content panel, so the panel itself only ever contains the work.
- *
- * The brand mark is a mask over `text-body`, not an <img>: the same shape
- * renders as ink in both themes with no theme branching.
+ * The application chrome as one slim strip on the canvas above the content
+ * panel: brand + sidebar toggle on the left, the view switch dead-center,
+ * pending approvals + demo + theme on the right. Everything here operates on
+ * the app, never on the conversation; the panel below only ever contains the
+ * work (its room tab carries the channel name).
  */
 export function AppBar({
   view,
   onSetView,
   sidebarOpen,
   onToggleSidebar,
-  onOpenSwitcher,
   onToggleQueue,
+  channel,
 }: {
   view: WorkspaceView;
   onSetView: (view: WorkspaceView) => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  onOpenSwitcher: () => void;
   onToggleQueue: () => void;
+  channel: string;
 }) {
-  const { board, pendingInteractions } = useWorkspace();
+  const { board, pendingInteractions, demoChannels, startDemo } = useWorkspace();
   const pendingCount =
     board.filter((i) => i.status === "proposed").length + pendingInteractions.length;
 
@@ -36,10 +34,10 @@ export function AppBar({
       role="tab"
       aria-selected={view === target}
       onClick={() => onSetView(target)}
-      className={`cursor-pointer border-b-2 px-2 py-1 font-mono text-[11px] font-bold tracking-wider uppercase transition select-none ${
+      className={`cursor-pointer rounded-md px-4 py-1.5 font-mono text-xs font-bold tracking-wider uppercase transition select-none ${
         view === target
-          ? "border-accent text-body"
-          : "border-transparent text-muted hover:text-body"
+          ? "bg-popup text-body shadow-sm"
+          : "text-muted hover:text-body"
       }`}
     >
       {label}
@@ -48,27 +46,21 @@ export function AppBar({
 
   return (
     <header className="relative flex h-12 shrink-0 items-center gap-3 px-3">
-      <span
-        aria-hidden="true"
-        className="h-5 w-5 shrink-0 bg-body"
-        style={{
-          WebkitMaskImage: "url(/mark-black.svg)",
-          maskImage: "url(/mark-black.svg)",
-          WebkitMaskSize: "contain",
-          maskSize: "contain",
-          WebkitMaskRepeat: "no-repeat",
-          maskRepeat: "no-repeat",
-        }}
+      <img
+        src="/mark-yellow.svg"
+        alt="convyio"
+        draggable={false}
+        className="h-6 w-6 shrink-0 select-none"
       />
       <button
         onClick={onToggleSidebar}
         aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         aria-expanded={sidebarOpen}
         title="Toggle sidebar (⌘B)"
-        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition select-none hover:bg-subtle-hover hover:text-body"
+        className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition select-none hover:bg-subtle-hover hover:text-body"
       >
         <svg
-          className="h-4 w-4"
+          className="h-4.5 w-4.5"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -81,43 +73,38 @@ export function AppBar({
           <path d="M9 4v16" />
         </svg>
       </button>
-      <div role="tablist" aria-label="Workspace view" className="flex items-center gap-1">
+      {/* Dead-center: the view switch, where eyes land first. */}
+      <div
+        role="tablist"
+        aria-label="Workspace view"
+        className="absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg bg-subtle p-0.5"
+      >
         {tab("chat", "Chat")}
         {tab("board", "Board")}
       </div>
 
-      {/* Dead-center: the jump-to field, where eyes land first. */}
-      <button
-        onClick={onOpenSwitcher}
-        aria-label="Jump to a channel (⌘K)"
-        className="absolute left-1/2 flex w-64 -translate-x-1/2 cursor-pointer items-center gap-2 rounded-md border border-divider bg-input px-3 py-1.5 text-sm text-faint transition select-none hover:bg-subtle-hover"
-      >
-        <svg
-          className="h-3.5 w-3.5 shrink-0"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          aria-hidden="true"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="M21 21l-4.35-4.35" />
-        </svg>
-        <span className="flex-1 text-left">Jump to…</span>
-        <kbd className="font-mono text-[10px] text-faint">⌘K</kbd>
-      </button>
-
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {demoChannels.includes(channel) && (
+          <button
+            onClick={() => startDemo(channel)}
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent transition select-none hover:bg-accent-hover"
+            title="Play the scripted demo conversation"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Run demo
+          </button>
+        )}
         {pendingCount > 0 && (
           <button
             onClick={onToggleQueue}
             aria-label={`Review ${pendingCount} pending approvals`}
-            className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent/15 px-2 py-1 font-mono text-[11px] font-bold text-accent transition select-none hover:bg-accent/25"
+            className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent/15 px-2.5 py-1.5 font-mono text-xs font-bold text-accent transition select-none hover:bg-accent/25"
           >
-            <span className="relative flex h-1.5 w-1.5">
+            <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
             </span>
             {pendingCount} waiting
           </button>

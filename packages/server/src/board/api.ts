@@ -20,6 +20,7 @@ import type { WorkspaceDb } from "../db";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
+import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
 const capabilitiesSchema = z.array(z.enum(WORK_CAPABILITIES as [WorkCapability, ...WorkCapability[]])).max(3);
@@ -121,6 +122,7 @@ export interface ApiServices {
   onRemoveMember?: ((actorId: string) => void) | null;
   snapshot?: WorkspaceSnapshotBuilder | null;
   plans?: PlanService | null;
+  envelope?: PromptEnvelopeBuilder | null;
 }
 
 export function createApiHandler(services: ApiServices) {
@@ -141,6 +143,7 @@ export function createApiHandler(services: ApiServices) {
     onRemoveMember = null,
     snapshot = null,
     plans = null,
+    envelope = null,
   } = services;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -236,6 +239,7 @@ export function createApiHandler(services: ApiServices) {
           onRemoveMember,
           snapshot,
           plans,
+          envelope,
         });
       }
     } catch (err) {
@@ -272,6 +276,7 @@ async function route(
     onRemoveMember: ((actorId: string) => void) | null;
     snapshot: WorkspaceSnapshotBuilder | null;
     plans: PlanService | null;
+    envelope: PromptEnvelopeBuilder | null;
   },
 ): Promise<void> {
   const {
@@ -288,6 +293,7 @@ async function route(
     onRemoveMember,
     snapshot,
     plans,
+    envelope,
   } = services;
   const method = req.method ?? "GET";
 
@@ -480,6 +486,12 @@ async function route(
     if (!snapshot) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace snapshot is not available");
     const body: WorkspaceSnapshot = await snapshot.build();
     return json(res, 200, body);
+  }
+
+  // GET /api/workspace/prompt-envelope — typed policy + board context for a run.
+  if (parts[1] === "workspace" && parts[2] === "prompt-envelope" && parts.length === 3 && method === "GET") {
+    if (!envelope) throw new ApiError(501, "NOT_IMPLEMENTED", "prompt envelope is not available");
+    return json(res, 200, { envelope: await envelope.build(actor) });
   }
 
   // GET /api/thread/events?channel_id=&before_seq=&limit= — canonical

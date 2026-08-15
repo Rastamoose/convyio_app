@@ -9,8 +9,11 @@ One JSON file per demo channel, validated against the schema in
 online agent's name. A step may `await`:
 
 - `agent_reply` — pause until an agent posts in the demo channel
-- `approve_proposal` — approve the proposal the agent filed during this run
-  (as the step's author), then wait for the agent's completion reply
+- `approve_proposal` — approve the ticket the agent filed during this run
+  (as the step's author, assigning the online agent as owner), then wait
+  for the agent's completion reply
+- `accept_plan` — accept the plan the agent proposed during this run, then
+  wait for the next agent reply
 
 ## seed/
 

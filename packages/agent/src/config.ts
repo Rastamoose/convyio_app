@@ -46,7 +46,7 @@ export const AGENT_MODEL = modelForProvider(AGENT_PROVIDER, process.env.AGENT_MO
  * Mirrors the server's Toolman sandbox root (packages/server/src/index.ts's
  * `path.join(config.dataDir, "workspace")`, server DATA_DIR defaulting to
  * `<repo root>/data`) — not this process's own DATA_DIR below (this agent's
- * private memory/pending-work store). Resolved against __dirname, not
+ * private memory store). Resolved against __dirname, not
  * process.cwd(), for the same reason CHARTER_PATH is: npm workspaces run
  * this script with cwd = packages/agent, not the repo root.
  */

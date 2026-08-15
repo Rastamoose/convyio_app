@@ -12,7 +12,7 @@ const stepSchema = z.object({
   author: z.string().min(1),
   /** Message text; "{agent}" is replaced with the online agent's name. */
   say: z.string().min(1),
-  await: z.enum(["agent_reply", "approve_proposal"]).optional(),
+  await: z.enum(["agent_reply", "approve_proposal", "accept_plan"]).optional(),
 });
 
 const scriptSchema = z

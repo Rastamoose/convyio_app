@@ -101,6 +101,8 @@ export class Hub {
   onDemoStart: ((channel: string, actorId: string) => void) | null = null;
   /** Optional hook fired for every board event fanned out to clients. */
   onBoardEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
+  /** Optional hook fired for every plan event fanned out to clients. */
+  onPlanEvent: ((envelope: PlanEventEnvelope) => void) | null = null;
 
   /** Runs paused on a human decision, keyed by interaction request id. */
   private pendingApprovals = new Map<string, (verdict: "approved" | "denied" | "expired") => void>();
@@ -135,10 +137,35 @@ export class Hub {
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
     this.broadcast(envelope);
     this.onBoardEvent?.(envelope);
+    if (envelope.type === "item.approved") {
+      void this.dispatchApprovedTicket(envelope).catch((err) => {
+        console.warn("[hub] ticket dispatch failed:", err instanceof Error ? err.message : err);
+      });
+    }
+  }
+
+  private async dispatchApprovedTicket(envelope: BoardEventEnvelope): Promise<void> {
+    const item = envelope.item;
+    if (!item.owner) return;
+    const owner = this.roster.list().find((participant) => participant.id === item.owner);
+    if (!owner || owner.kind !== "agent") return;
+    const channel = (await this.channels.get("general")) ?? (await this.channels.listInfo())[0];
+    if (!channel) return;
+    const queued = await this.agentWork.queueApprovedTicket({
+      actor: { id: envelope.actor.id, displayName: envelope.actor.display_name },
+      owner: { id: owner.id, displayName: owner.name, kind: owner.kind },
+      item: { id: item.id, ref: item.ref, title: item.title },
+      channelId: channel.id,
+      channelName: channel.name,
+    });
+    if (!queued) return;
+    this.broadcast({ type: "message", message: queued.message });
+    this.notifyWork(owner.id, [queued.request.id]);
   }
 
   broadcastPlanEvent(envelope: PlanEventEnvelope): void {
     this.broadcast(envelope);
+    this.onPlanEvent?.(envelope);
   }
 
   broadcastChannelCreated(channel: ChannelInfo): void {

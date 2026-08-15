@@ -37,6 +37,38 @@ export class AgentWorkStore {
     private messages: MessageStore,
   ) {}
 
+  /**
+   * Queue work for an approved ticket owner. Humans stay mention-driven;
+   * this path is how the server, not a local stash, resumes ticket work.
+   */
+  async queueApprovedTicket(input: {
+    actor: { id: string; displayName: string };
+    owner: { id: string; displayName: string; kind: "human" | "agent" };
+    item: { id: string; ref: string; title: string };
+    channelId: string;
+    channelName: string;
+  }): Promise<{ request: AgentRunRequest; message: ChatMessage } | null> {
+    if (input.owner.kind !== "agent") return null;
+    const now = Date.now();
+    const message: ChatMessage = {
+      id: randomUUID(),
+      authorId: input.actor.id,
+      authorName: input.actor.displayName,
+      authorKind: "human",
+      content:
+        `@${input.owner.displayName} ${input.item.ref} ("${input.item.title}") is approved and assigned to you. ` +
+        `Call board_start("${input.item.ref}"), do the authorized work, then board_complete with evidence.`,
+      timestamp: now,
+      channelId: input.channelId,
+      channel: input.channelName,
+      mentions: [input.owner.id],
+    };
+    const [request] = await this.messages.appendAtomically(message, (sql) =>
+      this.queue(sql, message, [input.owner.id]),
+    );
+    return request ? { request, message } : null;
+  }
+
   /** Queue exactly one request per target inside the message transaction. */
   async queue(sql: Sql, message: ChatMessage, agentIds: string[]): Promise<AgentRunRequest[]> {
     if (message.authorKind !== "human" || agentIds.length === 0) return [];

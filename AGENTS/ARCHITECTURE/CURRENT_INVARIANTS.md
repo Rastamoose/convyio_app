@@ -7,12 +7,16 @@ does not supersede them until the corresponding code change lands.
   `Toolman.execute`; tools not known to be read-only are treated as mutating
   (fail closed). `ClaudeBrain` enables only read-only native tools, so native
   Claude Code execution cannot mutate around this.
-- Authorization is two layers, in this order. Layer 1 is the board grant: an
-  item must be workable, cover the path (`scope_paths`) and grant the class of
-  action (`capabilities`). Layer 2 is the conversation's permission mode,
-  which only decides how much of that grant runs without asking — it can never
-  widen layer 1. The Hub settles layer 1 first so no human is asked to approve
-  something the board would refuse anyway.
+- Authorization is two layers, in this order. Layer 1 is the hard ceiling:
+  identity, sandbox, classified tools, and either a workable owned ticket or
+  an explicit chat grant. Layer 2 is the conversation's permission mode,
+  which only decides how much of that ceiling runs without asking — it can
+  never widen layer 1. Plan mode refuses mutations before Toolman.
+- Every ticket starts proposed. Approval is human-only and requires an owner,
+  acceptance criteria and a complete impact map. Only the assigned owner may
+  start, mutate, block, unblock or complete. Completion requires evidence.
+- An accepted Plan may have at most one live ticket. Plan acceptance grants
+  no mutating authority.
 - `shell_repo` is bounded by the sandbox root, not by `scope_paths`: a shell
   command's writes are not statically knowable. That coarseness is the reason
   it is a separate capability a human grants explicitly, rather than something
@@ -35,9 +39,9 @@ does not supersede them until the corresponding code change lands.
   both, or neither can be on.
 - Every board mutation writes exactly one `board_events` row in the same
   transaction (I5) and fans out exactly one `{channel:"board"}` envelope.
-- Agent-origin board items always carry `scope_paths` (enforced at creation);
-  the toolman refuses unscoped agent items rather than treating them as
-  unrestricted. Human items without scope are an explicit unrestricted grant.
+- Tickets always carry `scope_paths` (enforced at creation). An entry ending
+  in `/` grants a subtree; anything else is exactly that file. Chat grants
+  stay inside the workspace sandbox but do not invent a board scope.
 - Toolman file actions are confined to `data/workspace/`.
 - The Hub knows nothing about demos; `DemoOrchestrator` attaches through the
   Hub's three hooks and feeds inputs through the same paths humans use.

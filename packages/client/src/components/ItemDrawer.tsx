@@ -118,6 +118,7 @@ export function ItemDrawer({
   const [ownerIndex, setOwnerIndex] = useState(0);
   const [actors, setActors] = useState<Actor[] | null>(null);
   const [events, setEvents] = useState<BoardItemEvent[]>([]);
+  const [evidence, setEvidence] = useState("");
   const closeRef = useRef<HTMLButtonElement>(null);
   const ownerRef = useRef<HTMLDivElement>(null);
 
@@ -222,7 +223,7 @@ export function ItemDrawer({
   const actions = {
     proposed: (
       <>
-        <ActionButton label="Approve" tone="approve" onClick={() => approveItem(item.id)} />
+        <ActionButton label="Approve" tone="approve" onClick={() => approveItem(item.id, item.owner ?? undefined)} />
         <ActionButton label="Deny" tone="deny" onClick={() => denyItem(item.id)} />
         <ActionButton label="Discuss" tone="neutral" onClick={() => onDiscuss(item)} />
       </>
@@ -235,13 +236,27 @@ export function ItemDrawer({
     ),
     in_progress: (
       <>
-        <ActionButton label="Complete" tone="approve" onClick={() => completeItem(item.id)} />
+        <input
+          value={evidence}
+          onChange={(e) => setEvidence(e.target.value)}
+          aria-label="Verification evidence"
+          placeholder="Evidence"
+          className="min-w-40 flex-1 rounded-md bg-input px-2 py-1 text-sm text-body outline-none focus:ring-2 focus:ring-accent"
+        />
+        <ActionButton label="Complete" tone="approve" onClick={() => evidence.trim() && completeItem(item.id, evidence.trim())} />
         <DeleteButton onDelete={() => deleteItem(item.id)} />
       </>
     ),
     blocked: (
       <>
-        <ActionButton label="Complete" tone="approve" onClick={() => completeItem(item.id)} />
+        <input
+          value={evidence}
+          onChange={(e) => setEvidence(e.target.value)}
+          aria-label="Verification evidence"
+          placeholder="Evidence"
+          className="min-w-40 flex-1 rounded-md bg-input px-2 py-1 text-sm text-body outline-none focus:ring-2 focus:ring-accent"
+        />
+        <ActionButton label="Complete" tone="approve" onClick={() => evidence.trim() && completeItem(item.id, evidence.trim())} />
         <DeleteButton onDelete={() => deleteItem(item.id)} />
       </>
     ),

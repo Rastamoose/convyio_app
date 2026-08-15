@@ -8,8 +8,10 @@ import {
   type BoardPlan,
   type ToolmanAction,
   type WorkCapability,
+  type PromptEnvelope,
   type WorkspaceSnapshot,
 } from "@workspace/shared";
+import { renderPromptEnvelope } from "@workspace/shared";
 import type { AgentSocket } from "./socket";
 
 /** Must exceed the server's approval timeout so an approved run still lands. */
@@ -23,6 +25,7 @@ const APPROVAL_WAIT_MS = 11 * 60 * 1000;
  */
 export class BoardClient {
   private items = new Map<string, BoardItem>();
+  private envelope: PromptEnvelope | null = null;
   private token: string | null = null;
   private apiUrl: string | null = null;
   private actionWaiters = new Map<string, (result: ActionResultEvent) => void>();
@@ -59,6 +62,12 @@ export class BoardClient {
       const merged = mergeLiveItems(snapshot.items, [...this.items.values()]);
       this.items.clear();
       for (const item of merged) this.items.set(item.id, item);
+      try {
+        const body = (await this.api("GET", "/api/workspace/prompt-envelope")) as { envelope: PromptEnvelope };
+        this.envelope = body.envelope;
+      } catch {
+        this.envelope = null;
+      }
       return true;
     } catch (err) {
       console.warn("[agent] board refresh failed:", err);
@@ -191,6 +200,7 @@ export class BoardClient {
 
   /** Compact board summary for the model's context window. */
   summary(): string {
+    if (this.envelope) return renderPromptEnvelope(this.envelope);
     const items = this.list();
     if (items.length === 0) return "(board is empty)";
     return items

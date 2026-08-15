@@ -30,6 +30,7 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     archivedChannels,
     pinnedChannels,
     board,
+    plans: [],
     activeRuns: [],
     messages: [],
     setStatus: vi.fn(),
@@ -48,15 +49,6 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     resolveInteraction: vi.fn(),
     setPermissionMode: vi.fn(),
   }),
-}));
-
-// ApprovalQueue is its own unit; capture the item order it receives.
-const queueItems = vi.fn();
-vi.mock("./ApprovalQueue", () => ({
-  ApprovalQueue: ({ items }: { items: BoardItem[] }) => {
-    queueItems(items.map((i) => i.id));
-    return null;
-  },
 }));
 
 const human = (id: string, name: string, online: boolean): Participant => ({
@@ -93,33 +85,6 @@ const invite = (id: string, actorId: string, name: string): AgentInvite => ({
   revokedAt: null,
 });
 
-const proposal = (id: string, createdAt: number): BoardItem => ({
-  id,
-  workspaceId: "srv-1",
-  ref: id,
-  title: id,
-  description: null,
-  status: "proposed",
-  origin: "agent",
-  createdBy: "agent-1",
-  approvedBy: null,
-  owner: null,
-  planId: null,
-  acceptanceCriteria: [],
-  verificationEvidence: null,
-  impactMap: null,
-  proposalWhy: null,
-  proposalEffect: null,
-  projectId: null,
-  scopePaths: ["x/"],
-  capabilities: null,
-  createdAt,
-  approvedAt: null,
-  startedAt: null,
-  completedAt: null,
-  deletedAt: null,
-});
-
 function renderSidebar(onSelectChannel = vi.fn()) {
   return render(
     <Sidebar
@@ -142,12 +107,6 @@ describe("Sidebar", () => {
     archivedChannels = [];
     pinnedChannels = [];
     agentInvites = [];
-  });
-
-  it("shows the workspace name from context in the header", () => {
-    renderSidebar();
-
-    expect(screen.getByText("test_space")).toBeInTheDocument();
   });
 
   it("groups members into Online/Offline sections with counts", () => {
@@ -201,15 +160,6 @@ describe("Sidebar", () => {
 
     expect(createChannel).toHaveBeenCalledWith("war-room");
     await waitFor(() => expect(onSelectChannel).toHaveBeenCalledWith("war-room"));
-  });
-
-  it("opens the approval queue with proposals newest-first", async () => {
-    const user = userEvent.setup();
-    board = [proposal("older", 1_000), proposal("newer", 2_000)];
-    renderSidebar();
-
-    await user.click(screen.getByRole("button", { name: /Awaiting approval \(2\)/ }));
-    expect(queueItems).toHaveBeenCalledWith(["newer", "older"]);
   });
 
   it("anchors the member card beside the clicked row, clamped into view", async () => {

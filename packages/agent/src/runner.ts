@@ -19,7 +19,6 @@ import {
 } from "./brain";
 import type { Memory } from "./memory";
 import type { BoardClient } from "./boardClient";
-import type { PendingWork } from "./pendingWork";
 import type { Presence } from "./presence";
 import type { ConversationSessions } from "./conversationSessions";
 import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
@@ -67,7 +66,6 @@ export class AgentRunner {
     private brain: Brain,
     private memory: Memory,
     private board: BoardClient,
-    private pendingWork: PendingWork,
     private conversationSessions: ConversationSessions,
     private presence: Presence,
     private systemPrompt: string,
@@ -244,12 +242,7 @@ export class AgentRunner {
     };
 
     const executeTool = createToolExecutor(this.board, {
-      onProposed: (item) => {
-        this.pendingWork.set(item.id, {
-          origin: batch.map((m) => `${m.authorName}: ${m.content}`).join("\n"),
-          channel,
-        });
-      },
+      onProposed: () => {},
       onTaskActive: (item) => {
         if (this.activeTask?.id === item.id) return;
         this.activeTask = item;

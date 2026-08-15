@@ -3,7 +3,6 @@ import { describe, test } from "node:test";
 import type { AgentWorkAssignment, Attachment, ClientEvent } from "@workspace/shared";
 import { AgentRunner } from "../src/runner";
 import { Memory } from "../src/memory";
-import { PendingWork } from "../src/pendingWork";
 import { Presence } from "../src/presence";
 import { ConversationSessions } from "../src/conversationSessions";
 import type { AgentSocket } from "../src/socket";
@@ -46,7 +45,6 @@ describe("AgentRunner", () => {
       brain,
       await Memory.load(dir),
       board,
-      await PendingWork.load(dir),
       await ConversationSessions.load(dir),
       new Presence(socket, board),
       "system prompt",
@@ -109,7 +107,6 @@ describe("AgentRunner attachments", () => {
       brain,
       await Memory.load(dir),
       board,
-      await PendingWork.load(dir),
       await ConversationSessions.load(dir),
       new Presence(socket, board),
       "system prompt",
@@ -272,7 +269,6 @@ describe("AgentRunner durable work protocol", () => {
       brain,
       await Memory.load(dir),
       board,
-      await PendingWork.load(dir),
       sessions,
       new Presence(socket, board),
       "system prompt",

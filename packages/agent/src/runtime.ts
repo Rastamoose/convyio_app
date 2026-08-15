@@ -10,7 +10,6 @@ import { ConversationSessions } from "./conversationSessions";
 import { GeminiBrain } from "./geminiBrain";
 import type { StoredInstallation } from "./installation";
 import { Memory } from "./memory";
-import { PendingWork } from "./pendingWork";
 import { Presence } from "./presence";
 import { ProposalLifecycle } from "./proposalLifecycle";
 import { AgentRunner } from "./runner";
@@ -38,11 +37,10 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
   const socket = new AgentSocket(local.wsUrl);
   const boardClient = new BoardClient(socket);
   const memory = await Memory.load(local.dataDir);
-  const pendingWork = await PendingWork.load(local.dataDir);
   const conversationSessions = await ConversationSessions.load(local.dataDir);
   const presence = new Presence(socket, boardClient);
-  const runner = new AgentRunner(socket, local.brain, memory, boardClient, pendingWork, conversationSessions, presence, local.systemPrompt);
-  const lifecycle = new ProposalLifecycle(boardClient, pendingWork, runner, presence);
+  const runner = new AgentRunner(socket, local.brain, memory, boardClient, conversationSessions, presence, local.systemPrompt);
+  const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";
 
   const profileUpdates = new ProfileUpdateQueue(async (profile, isCurrent) => {

@@ -8,8 +8,11 @@ import { ProposalCard } from "./ProposalCard";
 // unit under test, so only that collaborator is replaced.
 const approveItem = vi.fn();
 const denyItem = vi.fn();
+const fetchActors = vi.fn().mockResolvedValue([
+  { id: "agent-1", kind: "agent", displayName: "noodle", workspaceId: "srv-1" },
+]);
 vi.mock("../hooks/WorkspaceContext", () => ({
-  useWorkspace: () => ({ approveItem, denyItem }),
+  useWorkspace: () => ({ approveItem, denyItem, fetchActors }),
 }));
 
 const item: BoardItem = {
@@ -75,7 +78,7 @@ describe("ProposalCard", () => {
     render(<ProposalCard item={item} onDiscuss={onDiscuss} />);
 
     await user.click(screen.getByRole("button", { name: "Approve" }));
-    expect(approveItem).toHaveBeenCalledWith("item-1");
+    expect(approveItem).toHaveBeenCalledWith("item-1", undefined);
 
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(denyItem).toHaveBeenCalledWith("item-1");

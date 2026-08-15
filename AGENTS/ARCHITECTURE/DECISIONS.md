@@ -126,3 +126,14 @@ why. Current behavior is documented in the current-state pages.
   visible mid-conversation. Consequence: `BoardView` renders at both
   full-window and 400px widths — column layout must stay horizontally
   scrollable rather than assuming room for all five columns.
+- 2026-08-15 — Approvals live in chat. A proposed item is a
+  `ProposalCard` in the conversation timeline; a paused run's
+  `PermissionCard` sits on that run (or in the timeline if the run
+  is not visible). The AppBar "N waiting" chip and the Board tab
+  render the same request/item ids — they are indexes, not a second
+  home. Toast "View" stays in chat and scrolls to the card.
+  Consequence: `item.proposed` no longer writes a chat system line
+  next to the card; `item.approved` / `item.denied` still do.
+  The earlier 2026-08-15 "board pin so approval stays visible
+  mid-conversation" rationale is superseded for sign-off — the
+  conversation is the home.

@@ -6,7 +6,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Attachment, BoardItem, ChatMessage, Participant } from "@workspace/shared";
+import type {
+  Attachment,
+  BoardItem,
+  ChatMessage,
+  InteractionRequest,
+  Participant,
+} from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import type { ActiveRun } from "../hooks/useAgentTraces";
@@ -19,7 +25,9 @@ import { AgentBadge } from "./AgentBadge";
 import { AttachmentGallery } from "./AttachmentGallery";
 import { AttachmentLightbox } from "./AttachmentLightbox";
 import { MemberCard } from "./MemberCard";
+import { PermissionCard } from "./PermissionCard";
 import { PinIcon, PinnedMessages } from "./PinnedMessages";
+import { ProposalCard } from "./ProposalCard";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
 
 function mentionsName(content: string, name: string | null): boolean {
@@ -65,11 +73,15 @@ function layout(messages: LocalMessage[]): Rendered[] {
 type TimelineEntry =
   | ({ kind: "message" } & Rendered)
   | { kind: "board"; line: BoardLine }
-  | { kind: "trace"; run: ActiveRun };
+  | { kind: "trace"; run: ActiveRun }
+  | { kind: "proposal"; item: BoardItem }
+  | { kind: "interaction"; request: InteractionRequest };
 
 function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "message") return entry.message.timestamp;
   if (entry.kind === "board") return entry.line.ts;
+  if (entry.kind === "proposal") return entry.item.createdAt;
+  if (entry.kind === "interaction") return entry.request.createdAt;
   return entry.run.startedAt;
 }
 
@@ -512,6 +524,7 @@ export function MessageList({
 }) {
   const {
     messages: allMessages,
+    board,
     boardLines,
     activeRuns,
     runDurations,
@@ -604,16 +617,30 @@ export function MessageList({
   const firstUnread = firstUnreadId(channel);
   const typists = typistsIn(channel);
 
+  // Decisions live in the conversation. The board and the AppBar queue are
+  // the same records, not a second home — a proposed item or paused run
+  // renders here as the original card, not as a faint system line.
+  const proposedItems = useMemo(
+    () => board.filter((item) => item.status === "proposed"),
+    [board],
+  );
+  const orphanInteractions = useMemo(() => {
+    const liveAgents = new Set(activeRuns.map((run) => run.agentId));
+    return pendingInteractions.filter((request) => !liveAgents.has(request.agentId));
+  }, [pendingInteractions, activeRuns]);
+
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [
       ...layout(messages).map((r) => ({ kind: "message" as const, ...r })),
       ...boardLines.map((line) => ({ kind: "board" as const, line })),
       ...activeRuns.map((run) => ({ kind: "trace" as const, run })),
+      ...proposedItems.map((item) => ({ kind: "proposal" as const, item })),
+      ...orphanInteractions.map((request) => ({ kind: "interaction" as const, request })),
     ];
     // Stable sort: board lines and live traces interleave with messages by
     // when they started, not appended after the fact.
     return entries.sort((a, b) => timelineTs(a) - timelineTs(b));
-  }, [messages, boardLines, activeRuns]);
+  }, [messages, boardLines, activeRuns, proposedItems, orphanInteractions]);
 
   // Scroll model: stick to the bottom only while already there; otherwise
   // leave the view alone and surface a "N new messages" pill. Prepending
@@ -826,7 +853,7 @@ export function MessageList({
         ref={containerRef}
         onScroll={handleScroll}
         data-testid="message-scroll"
-        className="min-h-0 flex-1 overflow-y-auto pb-4"
+        className="min-h-0 flex-1 overflow-y-auto pt-3 pb-4"
       >
         <PinnedMessages messages={messages} onJump={jumpToMessage} />
         {loadingOlder && (
@@ -837,7 +864,10 @@ export function MessageList({
             Beginning of #{channel}
           </div>
         )}
-        {messages.length === 0 && activeRuns.length === 0 && (
+        {messages.length === 0 &&
+          activeRuns.length === 0 &&
+          proposedItems.length === 0 &&
+          orphanInteractions.length === 0 && (
           <div className="px-4 pt-12">
             <h2 className="text-3xl font-bold tracking-tight text-body">
               <span className="text-accent">#</span>
@@ -859,6 +889,24 @@ export function MessageList({
             return (
               <div key={entry.line.id} className="flex justify-center px-4 py-0.5 font-mono text-[11px] text-faint">
                 <span>· {renderContent(entry.line.text, null, true, onRefClick)}</span>
+              </div>
+            );
+          }
+          if (entry.kind === "proposal") {
+            return (
+              <div key={entry.item.id} id={`proposal-${entry.item.id}`} className="px-4 py-2">
+                <ProposalCard item={entry.item} onDiscuss={onDiscuss} />
+              </div>
+            );
+          }
+          if (entry.kind === "interaction") {
+            return (
+              <div
+                key={entry.request.id}
+                id={`interaction-${entry.request.id}`}
+                className="px-4 py-2"
+              >
+                <PermissionCard request={entry.request} onResolve={resolveInteraction} />
               </div>
             );
           }

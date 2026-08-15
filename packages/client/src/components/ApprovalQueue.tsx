@@ -3,6 +3,7 @@ import type { BoardItem, InteractionRequest } from "@workspace/shared";
 import { ProposalCard } from "./ProposalCard";
 import { PermissionCard } from "./PermissionCard";
 
+/** Compact index of the same cards chat already shows. Not a second home. */
 export function ApprovalQueue({
   items,
   interactions,
@@ -40,7 +41,7 @@ export function ApprovalQueue({
   return (
     <div
       ref={ref}
-      className="elevated fixed top-14 left-[248px] z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg p-3"
+      className="elevated fixed top-12 right-3 z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg p-3"
     >
       <h2 className="mb-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
         Awaiting approval — {items.length + interactions.length}

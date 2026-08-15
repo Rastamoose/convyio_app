@@ -58,6 +58,7 @@ async function renderBoard(item: BoardItem) {
     plans: [],
     context: [],
     members: [],
+    projects: [],
   }));
   act(() => {
     rendered.result.current.bindSession("http://api.test", "tok-1");
@@ -136,7 +137,14 @@ describe("useBoard optimistic mutations", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, { item: created }));
     let ok = false;
     await act(async () => {
-      ok = await result.current.createItem("New");
+      ok = await result.current.createItem({
+        title: "New",
+        why: "needed",
+        effect: "done",
+        planId: "plan-1",
+        scopePaths: ["src/"],
+        acceptanceCriteria: ["works"],
+      });
     });
 
     expect(ok).toBe(true);
@@ -152,7 +160,14 @@ describe("useBoard optimistic mutations", () => {
     );
     let ok = true;
     await act(async () => {
-      ok = await result.current.createItem("");
+      ok = await result.current.createItem({
+        title: "",
+        why: "needed",
+        effect: "done",
+        planId: "plan-1",
+        scopePaths: ["src/"],
+        acceptanceCriteria: ["works"],
+      });
     });
 
     expect(ok).toBe(false);
@@ -160,6 +175,26 @@ describe("useBoard optimistic mutations", () => {
     expect(onError).toHaveBeenCalledWith(
       "Could not create the item: title required",
     );
+  });
+
+  it("does not add a chat system line for a proposal — the card is the event", async () => {
+    const { result } = await renderBoard(makeItem({ id: "existing" }));
+    const next = makeItem({ id: "item-2", ref: "task-2", title: "New work" });
+
+    act(() =>
+      result.current.applyEnvelope({
+        channel: "board",
+        type: "item.proposed",
+        workspace_id: "srv-1",
+        actor: { id: "agent-1", kind: "agent", display_name: "noodle" },
+        item: next,
+        payload: {},
+        ts: new Date().toISOString(),
+      }),
+    );
+
+    expect(result.current.items.some((i) => i.id === "item-2")).toBe(true);
+    expect(result.current.lines).toHaveLength(0);
   });
 
   it("applies the server's item when the PATCH succeeds", async () => {

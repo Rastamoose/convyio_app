@@ -27,6 +27,7 @@ import { RunnerRuntime } from "../src/RunnerRuntime";
 import { createTestDb } from "./pgSchema";
 import { ContextStore } from "../src/context/ContextStore";
 import { WorkspaceSnapshotBuilder } from "../src/context/WorkspaceSnapshot";
+import { PromptEnvelopeBuilder } from "../src/context/PromptEnvelope";
 import { PlanService } from "../src/board/PlanService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -119,6 +120,7 @@ export async function createEnv(): Promise<Env> {
     plans,
     new ContextStore(db, threadEvents),
   );
+  const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
   const handler = createApiHandler({
     db,
     service,
@@ -132,6 +134,7 @@ export async function createEnv(): Promise<Env> {
     runnerRuntime,
     snapshot,
     plans,
+    envelope,
   });
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));

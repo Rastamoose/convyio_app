@@ -2,7 +2,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ChatMessage, Participant } from "@workspace/shared";
+import type { BoardItem, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import { MessageList } from "./MessageList";
 
@@ -12,6 +12,8 @@ import { MessageList } from "./MessageList";
 let messages: LocalMessage[] = [];
 let participants: Participant[] = [];
 let self: Participant | null = null;
+let board: BoardItem[] = [];
+let pendingInteractions: InteractionRequest[] = [];
 
 const pinMessage = vi.fn();
 const editMessage = vi.fn();
@@ -28,7 +30,11 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     boardLines: [],
     activeRuns: [],
     runDurations: new Map(),
-    board: [],
+    board,
+    pendingInteractions,
+    resolveInteraction: vi.fn(),
+    // ProposalCard (rendered for proposed items) fetches the owner list.
+    fetchActors: vi.fn().mockResolvedValue([]),
     participants,
     self,
     pinMessage,
@@ -43,6 +49,51 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     loadOlder,
   }),
 }));
+
+const proposal = (overrides: Partial<BoardItem> = {}): BoardItem => ({
+  id: "item-1",
+  workspaceId: "srv-1",
+  ref: "task-1",
+  title: "Fix ICP rounding",
+  description: null,
+  status: "proposed",
+  origin: "agent",
+  createdBy: "agent-1",
+  approvedBy: null,
+  owner: null,
+  planId: null,
+  acceptanceCriteria: [],
+  verificationEvidence: null,
+  impactMap: null,
+  proposalWhy: "Invoices round the wrong way",
+  proposalEffect: "Totals match the ledger",
+  projectId: null,
+  scopePaths: ["billing/"],
+  capabilities: null,
+  createdAt: Date.now(),
+  approvedAt: null,
+  startedAt: null,
+  completedAt: null,
+  deletedAt: null,
+  createdByName: "agent-1",
+  ...overrides,
+});
+
+const interaction = (overrides: Partial<InteractionRequest> = {}): InteractionRequest => ({
+  id: "req-1",
+  workspaceId: "srv-1",
+  channelId: "general",
+  agentId: "agent-1",
+  conversationId: null,
+  summary: "write_file billing/round.ts",
+  capability: "file_write",
+  boardItemRef: "task-1",
+  status: "pending",
+  resolvedBy: null,
+  createdAt: Date.now(),
+  resolvedAt: null,
+  ...overrides,
+});
 
 const human = (id: string, name: string): Participant => ({
   id,
@@ -101,6 +152,8 @@ describe("MessageList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     messages = [];
+    board = [];
+    pendingInteractions = [];
     participants = [human("self-1", "me")];
     self = participants[0];
     Element.prototype.scrollIntoView = vi.fn();
@@ -270,6 +323,26 @@ describe("MessageList", () => {
 
     fireEvent.click(screen.getByText("Delete"));
     expect(discardMessage).toHaveBeenCalledWith("n1");
+  });
+
+  it("renders a proposed item as an approval card in the conversation", () => {
+    board = [proposal()];
+    render(<Harness />);
+
+    expect(screen.getByText("task-1")).toBeInTheDocument();
+    expect(screen.getByText("Fix ICP rounding")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
+    expect(document.getElementById("proposal-item-1")).toBeTruthy();
+  });
+
+  it("renders an orphan permission prompt in the conversation", () => {
+    pendingInteractions = [interaction()];
+    render(<Harness />);
+
+    expect(screen.getByText("write_file billing/round.ts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+    expect(document.getElementById("interaction-req-1")).toBeTruthy();
   });
 
   it("pins an unpinned message and unpins a pinned message", () => {

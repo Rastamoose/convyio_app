@@ -15,6 +15,7 @@ the wire protocol (websocket) and the HTTP board API.
 - `agentWork.ts` — durable agent conversation, run-request, permission-mode and interaction shapes.
 - `thread.ts` — canonical append-only workspace event and channel shapes.
 - `context.ts` — plan, context-entry, cursor and workspace-snapshot shapes.
+- `prompt.ts` — typed Prompt Envelope and its render function.
 - `protocol.ts` — the wire protocol: zod schemas for client→server frames,
   types for server→client frames.
 
@@ -35,8 +36,11 @@ the wire protocol (websocket) and the HTTP board API.
 - `Hub` — routes websocket frames; the single message-posting, agent-dispatch
   and Toolman gateway. → Roster, MessageStore, AgentWorkStore, Channels,
   Attachments, Sessions, Toolman, InteractionStore, RunnerRuntime
-- `BoardService` — every board transition, each with its audit row in one
-  transaction, fanned out after commit.  → WorkspaceDb
+- `BoardService` — every ticket transition, each with its audit row in one
+  transaction, fanned out after commit. Tickets start proposed and require an
+  accepted plan.  → WorkspaceDb, PlanService
+- `PlanService` — persistent megaplan records. Acceptance is human-only and
+  grants no mutating authority.  → WorkspaceDb, ThreadEventStore
 - `Toolman` — the enforcement point for agent actions; sandboxed filesystem
   and shell mechanics. `authorizeMutation` is the pure policy decision.
   `authorize` exposes that decision on its own so the Hub can settle the board
@@ -48,8 +52,8 @@ the wire protocol (websocket) and the HTTP board API.
 - `ThreadEventStore` (`chat/`) — persists and pages the canonical sequenced
   workspace event stream. → WorkspaceDb
 - `AgentWorkStore` (`chat/`) — projects durable agent conversations and
-  mention-triggered run requests, including claim, completion and restart
-  requeue behavior. → WorkspaceDb, ThreadEventStore, MessageStore
+  mention-triggered run requests, including claim, completion, restart
+  requeue and approved-ticket dispatch. → WorkspaceDb, ThreadEventStore, MessageStore
 - `scope.ts` — scope-path semantics: normalize, match, validate.
 - `schemaCheck.ts` — boot-time assertion that the database has what the code
   needs, with the fix in the message. A database a few migrations behind
@@ -84,11 +88,15 @@ the wire protocol (websocket) and the HTTP board API.
 - `ContextCursorStore` (`context/`) — per-actor acknowledged workspace-event
   cursor; never rewinds. → WorkspaceDb, ThreadEventStore
 - `WorkspaceSnapshotBuilder` (`context/`) — cursor-bearing projection of
-  items, members and active context. Captures thread_events.seq first so
+  items, plans, members and active context. Captures thread_events.seq first so
   live events after that seq remain applyable. → WorkspaceDb, BoardService,
-  ContextStore
+  PlanService, ContextStore
+- `PromptEnvelopeBuilder` (`context/`) — hashed policy files plus the live
+  snapshot compiled for a run. Exposed as `GET /api/workspace/prompt-envelope`.
+  → WorkspaceSnapshotBuilder
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
-  pipeline.  → Hub, Roster, BoardService
+  pipeline. Approves tickets with an owner and can accept plans.
+  → Hub, Roster, BoardService, PlanService
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
 
 ### packages/client
@@ -105,7 +113,7 @@ the wire protocol (websocket) and the HTTP board API.
   carries (self, participants, channels, connected).
 - `hooks/useApiSession` — the bearer-token fetch path, bound from the welcome
   frame; every HTTP call goes through it.
-- `hooks/useChatMessages`, `hooks/useBoard` (items + optimistic updates),
+- `hooks/useChatMessages`, `hooks/useBoard` (items, plans, optimistic updates),
   `hooks/useAgentTraces`, `hooks/useToasts`, `hooks/useAttachmentDrafts`
   (per-channel pending uploads: immediate upload, previews, ready-id handoff
   on send) — one state domain each.
@@ -142,8 +150,11 @@ the wire protocol (websocket) and the HTTP board API.
   repo.
 - `runtime.ts` — resolves a stored profile into an effective local
   configuration and reports the result as runner health.
-- `BoardClient` — the agent's view of the board over the HTTP API.
+- `BoardClient` — the agent's view of the board over the HTTP API; loads
+  the Prompt Envelope when present.
 - `ConversationSessions` — persists each conversation's provider-session id
   and permission mode outside the repository.
-- `Memory` / `PendingWork` — rolling transcript / stashed proposal work;
-  static async factories so an uninitialized instance cannot exist.
+- `nativeTools.ts` — provider-neutral ceiling for Claude/ACP native tools.
+  Mutations still go through Toolman.
+- `Memory` — rolling transcript; static async factory so an uninitialized
+  instance cannot exist. Approved ticket work is queued by the server.

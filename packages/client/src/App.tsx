@@ -5,11 +5,12 @@ import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { LoginScreen, MIN_PASSWORD_LENGTH } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
 import { AppBar, type WorkspaceView } from "./components/AppBar";
-import { ChannelHeader } from "./components/ChannelHeader";
 import { FileDropZone } from "./components/FileDropZone";
 import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
+import { ApprovalQueue } from "./components/ApprovalQueue";
+import { PageTabs } from "./components/PageTabs";
 import { StatusBar } from "./components/StatusBar";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
@@ -449,10 +450,24 @@ function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** The workspace shell: view/channel navigation and cross-view jumps. */
+/** The workspace shell: view/channel navigation and cross-view jumps. Rooms
+ *  are pages — an open set with tabs on the panel's top edge; closing the
+ *  last page leaves a blank pane. */
 function Workspace() {
   const workspace = useWorkspace();
   const [channel, setChannel] = useState("general");
+  const [pages, setPages] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem("convyio:pages");
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((p) => typeof p === "string")) {
+        return parsed as string[];
+      }
+    } catch {
+      // Corrupt or unavailable storage: fall through to the default page.
+    }
+    return ["general"];
+  });
   const [prefill, setPrefill] = useState<Prefill | null>(null);
   const [view, setView] = useState<WorkspaceView>("chat");
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -473,28 +488,59 @@ function Workspace() {
     workspace.markRead(channel);
   }, [channel]);
 
-  // The active channel can vanish out from under the viewer (someone else
-  // deletes it); archived channels stay viewable, so only a real delete
-  // needs a fallback.
+  // Persist the open pages across sessions, same pattern as the sidebar.
   useEffect(() => {
-    if (
-      !workspace.channels.includes(channel) &&
-      !workspace.archivedChannels.includes(channel)
-    ) {
-      setChannel("general");
+    try {
+      window.localStorage.setItem("convyio:pages", JSON.stringify(pages));
+    } catch {
+      // Private-mode storage denial: the pages still apply for this session.
     }
-  }, [workspace.channels, workspace.archivedChannels, channel]);
+  }, [pages]);
+
+  // Rooms can vanish out from under open pages (someone else deletes them);
+  // archived rooms stay viewable, so only a real delete prunes a page.
+  // Pruning must wait for the first snapshot: before the welcome frame the
+  // channel list is empty, and filtering against empty would wipe every page.
+  useEffect(() => {
+    if (!workspace.connected) return;
+    setPages((prev) => {
+      const next = prev.filter(
+        (c) => workspace.channels.includes(c) || workspace.archivedChannels.includes(c),
+      );
+      return next.length === prev.length ? prev : next;
+    });
+  }, [workspace.channels, workspace.archivedChannels, workspace.connected]);
+
+  // The active page must always be one of the open pages (while any exist).
+  useEffect(() => {
+    if (pages.length > 0 && !pages.includes(channel)) setChannel(pages[0]);
+  }, [pages, channel]);
+
+  const openPage = (name: string) => {
+    setPages((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    setChannel(name);
+    setView("chat");
+  };
+
+  const closePage = (name: string) => {
+    const idx = pages.indexOf(name);
+    const next = pages.filter((p) => p !== name);
+    setPages(next);
+    if (name === channel && next.length > 0) {
+      setChannel(next[Math.min(idx, next.length - 1)]);
+    }
+  };
 
   const cycleChannel = (dir: -1 | 1) => {
-    const { channels } = workspace;
-    if (channels.length === 0) return;
-    const idx = channels.indexOf(channel);
-    setChannel(channels[(idx + dir + channels.length) % channels.length]);
+    const rooms = workspace.channels;
+    if (rooms.length === 0) return;
+    const idx = rooms.indexOf(channel);
+    const next = rooms[(Math.max(idx, 0) + dir + rooms.length) % rooms.length] ?? rooms[0];
+    openPage(next);
   };
 
   const selectFromSwitcher = (target: string) => {
-    setChannel(target);
-    setView("chat");
+    openPage(target);
     setSwitcherOpen(false);
   };
 
@@ -531,7 +577,7 @@ function Workspace() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [workspace.channels, channel]);
+  }, [pages, channel, workspace.channels]);
 
   const prefillText = (text: string) => setPrefill({ text, nonce: Date.now() });
 
@@ -598,8 +644,8 @@ function Workspace() {
         onSetView={setView}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
-        onOpenSwitcher={() => setSwitcherOpen(true)}
         onToggleQueue={() => setQueueOpen((o) => !o)}
+        channel={channel}
       />
       <div className="flex min-h-0 flex-1">
         {/* The sidebar rests on the canvas, flush to the window edge;
@@ -612,18 +658,41 @@ function Workspace() {
         >
           <Sidebar
             channel={channel}
-            onSelectChannel={setChannel}
+            onSelectChannel={openPage}
             onDiscuss={discussItem}
             onPrefill={prefillText}
           />
         </div>
-        <main
-          className={`mt-1 mb-2 mr-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-divider bg-chat shadow-sm ${
+        <div
+          className={`relative my-2 mr-2 flex min-w-0 flex-1 flex-col ${
             sidebarOpen ? "" : "ml-2"
           }`}
         >
-        {view === "chat" && <ChannelHeader channel={channel} />}
-        {view === "chat" ? (
+        {/* The page tabs sit outside <main>: the panel's overflow-hidden
+            would clip anything grown out of its top edge. */}
+        {view === "chat" && (
+          <PageTabs
+            pages={pages}
+            active={channel}
+            unreadCount={workspace.unreadCount}
+            onSelect={setChannel}
+            onClose={closePage}
+            onNew={() => setSwitcherOpen(true)}
+          />
+        )}
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-divider bg-chat shadow-sm">
+        {view === "chat" && pages.length === 0 ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <div className="text-center select-none">
+              <p className="font-mono text-sm text-faint">
+                — this page intentionally left blank —
+              </p>
+              <p className="mt-2 text-xs text-faint">
+                Open a room from the sidebar, or press ⌘K
+              </p>
+            </div>
+          </div>
+        ) : view === "chat" ? (
           <FileDropZone
             onFiles={(files) => workspace.addAttachments(channel, files)}
           >
@@ -656,6 +725,7 @@ function Workspace() {
           />
         )}
         </main>
+        </div>
       </div>
       <StatusBar channel={channel} view={view} />
       {queueOpen && (
@@ -683,8 +753,13 @@ function Workspace() {
         onDismiss={workspace.dismissToast}
         onAction={(toast) => {
           if (!toast.action) return;
-          setView("board");
-          setOpenItemId(toast.action.itemId);
+          // The card lives in chat; the Board tab is another view of it.
+          setView("chat");
+          window.setTimeout(() => {
+            document
+              .getElementById(`proposal-${toast.action!.itemId}`)
+              ?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
         }}
       />
       {switcherOpen && (

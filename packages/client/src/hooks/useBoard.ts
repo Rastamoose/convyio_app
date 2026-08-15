@@ -4,6 +4,8 @@ import type {
   BoardEventEnvelope,
   BoardItem,
   BoardItemEvent,
+  BoardPlan,
+  EcosystemImpact,
   ItemStatus,
   WorkspaceSnapshot,
 } from "@workspace/shared";
@@ -24,12 +26,34 @@ export interface BoardItemEdit {
   scopePaths?: string[] | null;
 }
 
+export interface TicketDraft {
+  title: string;
+  description?: string;
+  why: string;
+  effect: string;
+  planId: string;
+  owner?: string;
+  scopePaths: string[];
+  acceptanceCriteria: string[];
+  impactMap?: EcosystemImpact;
+}
+
+export interface PlanDraft {
+  title: string;
+  objective: string;
+  outline: string[];
+  clarifications: string[];
+  impactMap?: EcosystemImpact;
+}
+
 function boardLineText(envelope: BoardEventEnvelope): string | null {
   const actor = envelope.actor.display_name;
   const ref = envelope.item.ref;
   switch (envelope.type) {
     case "item.proposed":
-      return `${actor} proposed ${ref} — "${envelope.item.title}"`;
+      // The live ProposalCard in chat is this event. A second system line
+      // would be a copy of the same decision sitting next to the original.
+      return null;
     case "item.approved":
       return `${actor} approved ${ref}`;
     case "item.denied":
@@ -50,6 +74,7 @@ function boardLineText(envelope: BoardEventEnvelope): string | null {
  */
 export function useBoard(onError: (message: string) => void, api: ApiSession) {
   const [items, setItems] = useState<BoardItem[]>([]);
+  const [plans, setPlans] = useState<BoardPlan[]>([]);
   const [lines, setLines] = useState<BoardLine[]>([]);
 
   const fail = (what: string, detail: string) => {
@@ -97,8 +122,17 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
       });
   };
 
+  const upsertPlan = (plan: BoardPlan) => {
+    setPlans((prev) =>
+      prev.some((p) => p.id === plan.id)
+        ? prev.map((p) => (p.id === plan.id ? plan : p))
+        : [plan, ...prev],
+    );
+  };
+
   return {
     items,
+    plans,
     lines,
     /** Welcome frame arrived (API session already bound): load the snapshot. */
     startSession: () => {
@@ -110,12 +144,18 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
           if (!res.ok) throw new Error(await api.errorMessage(res));
           return res.json() as Promise<WorkspaceSnapshot>;
         })
-        .then((snapshot) =>
-          setItems((live) => mergeLiveItems(snapshot.items, live)),
-        )
+        .then((snapshot) => {
+          setItems((live) => mergeLiveItems(snapshot.items, live));
+          setPlans((live) => {
+            const map = new Map(live.map((plan) => [plan.id, plan]));
+            for (const plan of snapshot.plans) map.set(plan.id, plan);
+            return [...map.values()];
+          });
+        })
         .catch((err) => fail("Could not load the board", String(err)));
     },
     /** A board event envelope arrived on the websocket. */
+    applyPlan: (plan: BoardPlan) => upsertPlan(plan),
     applyEnvelope: (envelope: BoardEventEnvelope) => {
       upsertItem(envelope.item);
       const text = boardLineText(envelope);
@@ -127,10 +167,10 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
       }
     },
     /** Resolves true when the item landed — callers gate their form reset on it. */
-    createItem: (title: string, description?: string): Promise<boolean> => {
+    createItem: (draft: TicketDraft): Promise<boolean> => {
       const request = api.fetch("/api/board/items", {
         method: "POST",
-        body: JSON.stringify({ title, description }),
+        body: JSON.stringify(draft),
       });
       if (!request) return Promise.resolve(false);
       return request
@@ -150,10 +190,51 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
           return false;
         });
     },
-    approve: (itemId: string) => transition(itemId, "approve", "approved"),
+    createPlan: (draft: PlanDraft): Promise<boolean> => {
+      const request = api.fetch("/api/board/plans", {
+        method: "POST",
+        body: JSON.stringify(draft),
+      });
+      if (!request) return Promise.resolve(false);
+      return request
+        .then(async (res) => {
+          if (!res.ok) {
+            fail("Could not create the plan", await api.errorMessage(res));
+            return false;
+          }
+          const data = (await res.json().catch(() => null)) as { plan?: BoardPlan } | null;
+          if (data?.plan) upsertPlan(data.plan);
+          return true;
+        })
+        .catch((err) => {
+          fail("Could not create the plan", String(err));
+          return false;
+        });
+    },
+    acceptPlan: (planId: string): Promise<boolean> => {
+      const request = api.fetch(`/api/board/plans/${planId}/accept`, { method: "POST" });
+      if (!request) return Promise.resolve(false);
+      return request
+        .then(async (res) => {
+          if (!res.ok) {
+            fail("Could not accept the plan", await api.errorMessage(res));
+            return false;
+          }
+          const data = (await res.json().catch(() => null)) as { plan?: BoardPlan } | null;
+          if (data?.plan) upsertPlan(data.plan);
+          return true;
+        })
+        .catch((err) => {
+          fail("Could not accept the plan", String(err));
+          return false;
+        });
+    },
+    approve: (itemId: string, owner?: string) =>
+      transition(itemId, "approve", "approved", owner ? { owner } : {}),
     deny: (itemId: string) => transition(itemId, "deny", "denied", {}),
     start: (itemId: string) => transition(itemId, "start", "in_progress"),
-    complete: (itemId: string) => transition(itemId, "complete", "done"),
+    complete: (itemId: string, evidence: string) =>
+      transition(itemId, "complete", "done", { evidence }),
     reopen: (itemId: string) => transition(itemId, "reopen", "approved"),
     deleteItem: (itemId: string) => {
       const previous = items.find((i) => i.id === itemId);

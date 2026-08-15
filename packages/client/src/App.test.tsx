@@ -380,22 +380,27 @@ describe("Workspace keyboard navigation", () => {
     return await screen.findByLabelText("Message general");
   };
 
-  it("Alt+ArrowDown advances the channel and wraps at the end", async () => {
+  it("Alt+ArrowDown advances the open page and wraps at the end", async () => {
     const user = userEvent.setup();
     await bootWorkspace();
+
+    // Rooms become pages when opened from the sidebar; cycling walks pages.
+    const rooms = screen.getByRole("tablist", { name: "Rooms" });
+    await user.click(within(rooms).getByRole("tab", { name: /random/ }));
+    await user.click(within(rooms).getByRole("tab", { name: /bugs/ }));
+
+    // Active page is the last one opened; advancing wraps to the first page.
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    expect(await screen.findByLabelText("Message general")).toBeInTheDocument();
 
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
     expect(await screen.findByLabelText("Message random")).toBeInTheDocument();
 
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
     expect(await screen.findByLabelText("Message bugs")).toBeInTheDocument();
-
-    // Wraps back around to the first channel.
-    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
-    expect(await screen.findByLabelText("Message general")).toBeInTheDocument();
   });
 
-  it("Alt+ArrowUp cycles channels while the composer is focused, without also triggering its own edit-last shortcut", async () => {
+  it("Alt+ArrowUp cycles pages while the composer is focused, without also triggering its own edit-last shortcut", async () => {
     historySeed.push({
       id: "own-msg-1",
       authorId: "u-1",
@@ -407,9 +412,14 @@ describe("Workspace keyboard navigation", () => {
     });
     const user = userEvent.setup();
     const composer = await bootWorkspace();
+
+    // Open bugs as a second page, return to general, then wrap backward.
+    const rooms = screen.getByRole("tablist", { name: "Rooms" });
+    await user.click(within(rooms).getByRole("tab", { name: /bugs/ }));
+    await user.click(within(rooms).getByRole("tab", { name: /general/ }));
     await user.click(composer);
 
-    // Backward from "general" (index 0) wraps to the last channel, "bugs".
+    // Backward from "general" (first page) wraps to the last page, "bugs".
     await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
 
     expect(await screen.findByLabelText("Message bugs")).toBeInTheDocument();

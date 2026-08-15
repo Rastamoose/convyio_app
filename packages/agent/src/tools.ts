@@ -216,7 +216,7 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
 };
 
 export interface ToolHooks {
-  /** Fired when the agent files a proposal (so it can block on it). */
+  /** Fired when the agent files a proposal. */
   onProposed(item: BoardItem): void;
   /** Fired when a tool call runs against a workable item (current task). */
   onTaskActive(item: BoardItem): void;
