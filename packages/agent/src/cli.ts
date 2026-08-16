@@ -50,7 +50,6 @@ async function pair(args: string[], out: (message: string) => void): Promise<voi
   const installation = await exchangePairing(options.server, options.code, options.workspace);
   await saveInstallation(installation);
   out(`Paired ${installation.agent.name} (${installation.agent.id}) with ${installation.workspace.name}.`);
-  out(`Workspace: ${installation.workspacePath}`);
   out(`Start it with: convyio-agent run ${/\s/.test(installation.agent.name) ? `"${installation.agent.name}"` : installation.agent.name}`);
 }
 
@@ -81,24 +80,23 @@ function parsePairArgs(args: string[]): { server: string; code: string; workspac
     const flag = args[index];
     const value = args[index + 1];
     if (!value || !["--server", "--code", "--workspace"].includes(flag)) {
-      throw new Error("Usage: convyio-agent pair --server <https-origin> --code <one-time-code> --workspace <path>");
+      throw new Error("Usage: convyio-agent pair --server <https-origin> --code <one-time-code> [--workspace <path>]");
     }
     if (values.has(flag)) throw new Error(`${flag} may be provided only once.`);
     values.set(flag, value);
   }
   const server = values.get("--server");
   const code = values.get("--code");
-  const workspace = values.get("--workspace");
-  if (!server || !code || !workspace) {
-    throw new Error("Usage: convyio-agent pair --server <https-origin> --code <one-time-code> --workspace <path>");
+  if (!server || !code) {
+    throw new Error("Usage: convyio-agent pair --server <https-origin> --code <one-time-code> [--workspace <path>]");
   }
-  return { server, code, workspace };
+  return { server, code, workspace: values.get("--workspace") ?? process.cwd() };
 }
 
 function usage(): string {
   return [
     "Usage:",
-    "  convyio-agent pair --server <https-origin> --code <one-time-code> --workspace <path>",
+    "  convyio-agent pair --server <https-origin> --code <one-time-code> [--workspace <path>]",
     "  convyio-agent run [name]",
     "  convyio-agent status",
     "  convyio-agent unpair",

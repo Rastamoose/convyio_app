@@ -1,13 +1,16 @@
 /**
- * Logical workspace resources an agent can be assigned. A project is not a
- * checkout: concrete paths stay on a Toolman node and are identified here
- * only by opaque keys.
+ * A shared folder attached to a workspace. The folder is the resource;
+ * a registered device is only the transport that can reach it. Concrete
+ * paths stay on the Toolman node and are identified here only by opaque keys.
  */
 
 export type ProjectKind = "git" | "directory";
 export type CheckoutStatus = "pending" | "ready" | "error" | "offline";
 export type ProjectAccessStatus = "pending" | "approved" | "denied";
 export type MountCleanliness = "clean" | "dirty" | "unknown";
+export type FolderAccessMode = "ask" | "always" | "deny";
+
+export const FOLDER_ACCESS_MODES: readonly FolderAccessMode[] = ["ask", "always", "deny"];
 
 export interface Project {
   id: string;
@@ -20,6 +23,8 @@ export interface Project {
   createdByName?: string;
   createdAt: number;
   archivedAt: number | null;
+  /** Owner policy for local-folder operations. Conversation modes cannot widen this. */
+  accessMode: FolderAccessMode;
 }
 
 export interface ProjectAssignment {

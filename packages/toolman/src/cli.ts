@@ -23,15 +23,18 @@ export async function runCli(
         return 0;
       }
       case "project": {
-        if (args[0] !== "add" || !args[1]) throw new Error("Usage: convyio-toolman project add <path> [--name <name>]");
-        const flags = parseFlags(args.slice(2), ["--name"]);
-        const installation = await loadInstallation();
+        if (args[0] !== "add" || !args[1]) {
+          throw new Error("Usage: convyio-toolman project add <path> [--name <name>] [--node <name-or-id>]");
+        }
+        const flags = parseFlags(args.slice(2), ["--name", "--node"]);
+        const installation = await loadInstallation(flags.get("--node"));
         const added = await addProject(installation, path.resolve(args[1]), flags.get("--name"));
         io.out(`Attached ${added.mount.projectName} (${added.mount.kind}).`);
         return 0;
       }
       case "run": {
-        const installation = await loadInstallation();
+        if (args[0]?.startsWith("-")) throw new Error("Usage: convyio-toolman run [name-or-id]");
+        const installation = await loadInstallation(args.length ? args.join(" ") : undefined);
         const { runNode } = await import("./runtime");
         io.out(`Toolman node ${installation.node.name} connecting to ${installation.workspace.name}…`);
         await runNode(installation);
@@ -90,8 +93,8 @@ function usage(): string {
   return [
     "Usage:",
     "  convyio-toolman pair --server <https-origin> --code <one-time-code>",
-    "  convyio-toolman project add <path> [--name <name>]",
-    "  convyio-toolman run",
+    "  convyio-toolman project add <path> [--name <name>] [--node <name-or-id>]",
+    "  convyio-toolman run [name-or-id]",
     "  convyio-toolman status",
     "  convyio-toolman unpair",
   ].join("\n");

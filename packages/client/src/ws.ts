@@ -5,6 +5,7 @@ type Listener = (event: ServerEvent) => void;
 
 /** How to join: a session token (auth mode) or a self-declared guest name. */
 export interface JoinCredentials {
+  workspaceId: string;
   name?: string;
   authToken?: string;
 }
@@ -30,7 +31,8 @@ export class WorkspaceSocket {
   }
 
   private open(): void {
-    this.socket = new WebSocket(wsUrl());
+    if (!this.credentials) return;
+    this.socket = new WebSocket(wsUrl(this.credentials.workspaceId));
 
     this.socket.onopen = () => {
       this.retryMs = 500;

@@ -10,8 +10,9 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000;
 
-interface Session {
+export interface Session {
   actorId: string;
+  workspaceId: string | null;
   expiresAt: number;
 }
 
@@ -20,26 +21,32 @@ export class Sessions {
 
   constructor(private ttlMs: number = DEFAULT_TTL_MS) {}
 
-  issue(actorId: string): string {
+  issue(actorId: string, workspaceId: string | null = null): string {
     this.sweep();
     const token = randomUUID();
-    this.tokens.set(token, { actorId, expiresAt: Date.now() + this.ttlMs });
+    this.tokens.set(token, { actorId, workspaceId, expiresAt: Date.now() + this.ttlMs });
     return token;
   }
 
-  resolve(token: string): string | null {
+  resolve(token: string): Session | null {
     const session = this.tokens.get(token);
     if (!session) return null;
     if (session.expiresAt <= Date.now()) {
       this.tokens.delete(token);
       return null;
     }
-    return session.actorId;
+    return session;
   }
 
-  revokeFor(actorId: string): void {
+  revoke(token: string): void {
+    this.tokens.delete(token);
+  }
+
+  revokeFor(actorId: string, workspaceId?: string): void {
     for (const [token, session] of this.tokens) {
-      if (session.actorId === actorId) this.tokens.delete(token);
+      if (session.actorId === actorId && (workspaceId === undefined || session.workspaceId === workspaceId)) {
+        this.tokens.delete(token);
+      }
     }
   }
 

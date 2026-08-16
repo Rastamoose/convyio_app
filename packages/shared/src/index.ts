@@ -8,3 +8,4 @@ export * from "./context";
 export * from "./prompt";
 export * from "./project";
 export * from "./toolman";
+export * from "./workspace";

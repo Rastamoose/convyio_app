@@ -34,6 +34,7 @@ import { useUnreads } from "./useUnreads";
 import { useInteractions } from "./useInteractions";
 
 export interface WorkspaceState {
+  workspaceId: string;
   /** Workspace identity from the welcome frame; null until connected. */
   workspace: WorkspaceInfo | null;
   self: Participant | null;
@@ -178,7 +179,6 @@ export function WorkspaceProvider({
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
-  const unreads = useUnreads(chat.messages);
   // Frames stashed by nonce so retry() can re-send the exact same content;
   // cleared once the send resolves (echo) or is discarded.
   const pendingFramesRef = useRef(new Map<string, ClientEvent>());
@@ -211,6 +211,11 @@ export function WorkspaceProvider({
         // The session must be bound before the board loads its snapshot.
         api.start(event.apiUrl, event.token);
         board.startSession();
+        void api.fetch("/api/tool-executions")?.then(async (res) => {
+          if (!res.ok) return;
+          const body = (await res.json()) as { executions?: ToolExecution[] };
+          if (body.executions) setExecutions(body.executions);
+        });
         break;
       case "message":
         chat.append(event.message, event.nonce);
@@ -289,6 +294,11 @@ export function WorkspaceProvider({
   const typing = useTyping(connection.self?.id, (channel) =>
     connection.send({ type: "typing", channel }),
   );
+
+  const baseTitle = connection.workspace
+    ? `${connection.workspace.name} | convyio`
+    : "convyio";
+  const unreads = useUnreads(chat.messages, credentials.workspaceId, baseTitle);
 
   const createChannel = async (name: string): Promise<string | null> => {
     const request = api.fetch("/api/channels", {
@@ -512,6 +522,7 @@ export function WorkspaceProvider({
   // Not memoized on purpose: all workspace state lives in the hooks above, so
   // this component only re-renders when the value would change anyway.
   const value: WorkspaceState = {
+    workspaceId: credentials.workspaceId,
     workspace: connection.workspace,
     self: connection.self,
     participants: connection.participants,
@@ -584,7 +595,9 @@ export function WorkspaceProvider({
     removeAttachment: attachments.remove,
     takeReadyAttachmentIds: attachments.takeReadyIds,
     attachmentUrl: (attachment) => api.url(attachment.url),
-    pendingInteractions: interactions.pending,
+    pendingInteractions: interactions.pending.filter(
+      (request) => !request.targetActorId || request.targetActorId === connection.self?.id,
+    ),
     resolveInteraction: (requestId, decision) =>
       connection.send({ type: "interaction_resolve", requestId, decision }),
     setPermissionMode: (agentId, channel, mode) =>

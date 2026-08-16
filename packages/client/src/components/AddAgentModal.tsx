@@ -220,7 +220,7 @@ export function AddAgentModal({
 
           {step === "create" && agentInvites.length > 0 && (
             <div className="mt-6">
-              <h3 className="mb-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+              <h3 className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
                 Your agents
               </h3>
               <ul className="space-y-1.5">
@@ -267,7 +267,7 @@ function InstructionsField({
     <div className="mb-4">
       <label
         htmlFor={id}
-        className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
+        className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase"
       >
         Instructions
       </label>
@@ -333,7 +333,7 @@ function CreateStep({
   return (
     <>
       <div className="mb-4">
-        <label className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+        <label className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase">
           Harness
         </label>
         <div className="flex gap-2">
@@ -350,7 +350,7 @@ function CreateStep({
       <div className="mb-4">
         <label
           htmlFor="agent-name"
-          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
+          className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Agent name
         </label>
@@ -435,7 +435,7 @@ function PairingCopyRow({
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left font-mono text-[10px] font-bold tracking-wider text-muted uppercase hover:text-body"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left text-[10px] font-bold tracking-wider text-muted uppercase hover:text-body"
         >
           <Chevron expanded={open} />
           {label}
@@ -474,11 +474,11 @@ function PairStep({
   onContinue: () => void;
 }) {
   const cliCommand = pairingCode
-    ? `convyio-agent pair --server ${apiUrl} --code ${pairingCode} --workspace .`
+    ? `convyio-agent pair --server ${apiUrl} --code ${pairingCode}`
     : "";
   const setupPrompt = pairingCode
     ? [
-        "Pair this repository with Convyio so you can act as its workspace agent. Run the real convyio-agent CLI (not a published npm package):",
+        "Pair this Convyio agent. Run the real convyio-agent CLI (not a published npm package):",
         "",
         cliCommand,
         "",
@@ -507,8 +507,8 @@ function PairStep({
   return (
     <>
       <p className="mb-4 text-sm text-muted">
-        Pair <span className="text-body">{agent.name}</span> in the repository you want
-        it to work in. The pairing code is shown only once.
+        Pair <span className="text-body">{agent.name}</span> as a workspace agent.
+        Project checkouts are attached separately with Toolman. The pairing code is shown only once.
       </p>
 
       {pairingCode && (
@@ -631,7 +631,7 @@ function ConfigureStep({
       <div className="mb-4">
         <label
           htmlFor="agent-model"
-          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
+          className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Model
         </label>
@@ -665,7 +665,7 @@ function ConfigureStep({
       <div className="mb-4">
         <label
           htmlFor="agent-access"
-          className="mb-1 block font-mono text-[10px] font-bold tracking-wider text-muted uppercase"
+          className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase"
         >
           Who can direct this agent
         </label>

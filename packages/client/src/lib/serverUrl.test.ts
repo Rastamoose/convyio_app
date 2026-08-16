@@ -9,6 +9,7 @@ describe("wsUrl / apiBaseUrl", () => {
   it("VITE_WS_URL overrides everything, api swaps the scheme", () => {
     vi.stubEnv("VITE_WS_URL", "wss://elsewhere.example:9999");
     expect(wsUrl()).toBe("wss://elsewhere.example:9999");
+    expect(wsUrl("ws-1")).toBe("wss://elsewhere.example:9999/ws/ws-1");
     expect(apiBaseUrl()).toBe("https://elsewhere.example:9999");
   });
 

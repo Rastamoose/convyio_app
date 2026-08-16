@@ -1,5 +1,7 @@
 import { useState } from "react";
+import type { WorkspaceInvitePreview } from "@workspace/shared";
 import { getRememberMe, setRememberMe, supabase } from "../lib/supabase";
+import { invitePath } from "../lib/workspaceNavigation";
 import { apiBaseUrl } from "../lib/serverUrl";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -8,6 +10,9 @@ export const MIN_PASSWORD_LENGTH = 8;
 // Same rule as the server's username claim and App.tsx's UsernameStep.
 const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 const USERNAME_HINT = "1-32 characters: letters, digits, spaces, - and _";
+
+const authRedirectUrl = (inviteToken?: string) =>
+  `${window.location.origin}${inviteToken ? invitePath(inviteToken) : ""}`;
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -28,7 +33,7 @@ function Field({
     <div className="mb-4">
       <label
         htmlFor={id}
-        className="mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase"
+        className="mb-2 block text-[11px] font-bold tracking-wider text-muted uppercase"
       >
         {label}
       </label>
@@ -68,7 +73,7 @@ function Divider() {
   return (
     <div className="my-6 flex items-center gap-3">
       <div className="h-px flex-1 bg-divider" />
-      <span className="font-mono text-[10px] font-medium tracking-wider text-faint uppercase">Or</span>
+      <span className="text-[10px] font-medium tracking-wider text-faint uppercase">Or</span>
       <div className="h-px flex-1 bg-divider" />
     </div>
   );
@@ -84,9 +89,13 @@ function Divider() {
 export function LoginScreen({
   googleAuthEnabled,
   emailAuthEnabled,
+  invitePreview,
+  inviteToken,
 }: {
   googleAuthEnabled: boolean;
   emailAuthEnabled: boolean;
+  invitePreview?: WorkspaceInvitePreview;
+  inviteToken?: string;
 }) {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [googleBusy, setGoogleBusy] = useState(false);
@@ -96,7 +105,7 @@ export function LoginScreen({
     setGoogleError(null);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: authRedirectUrl(inviteToken) },
     });
     if (error) {
       setGoogleError(error.message);
@@ -107,8 +116,15 @@ export function LoginScreen({
 
   return (
     <Card>
+      {invitePreview && (
+        <div className="mb-6 border-b border-divider pb-5">
+          <p className="mb-1 text-[11px] font-bold tracking-wider text-muted uppercase">Workspace invite</p>
+          <h1 className="text-xl font-semibold text-body">Join {invitePreview.workspace.name}</h1>
+          <p className="mt-1 text-sm text-muted">Invited by {invitePreview.inviterName}</p>
+        </div>
+      )}
       {emailAuthEnabled ? (
-        <EmailAuthForm />
+        <EmailAuthForm inviteToken={inviteToken} />
       ) : (
         <>
           <h1 className="mb-1 text-2xl font-semibold text-body">Sign in</h1>
@@ -143,8 +159,12 @@ export function LoginScreen({
  *  (username collected up front, claimed server-side from
  *  user_metadata.desired_username on first session — App.tsx's UsernameStep
  *  stays as the fallback), and requesting a password reset. */
-function EmailAuthForm() {
-  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
+function EmailAuthForm({ inviteToken }: { inviteToken?: string }) {
+  // The landing page's "Start using Convyio" links arrive with ?signup so a
+  // new visitor lands on account creation, not the sign-in form.
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">(() =>
+    new URLSearchParams(window.location.search).has("signup") ? "signup" : "login",
+  );
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -214,7 +234,7 @@ function EmailAuthForm() {
         password,
         options: {
           data: { desired_username: trimmedUsername },
-          emailRedirectTo: window.location.origin,
+          emailRedirectTo: authRedirectUrl(inviteToken),
         },
       });
       if (error) {

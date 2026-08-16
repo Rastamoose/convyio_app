@@ -19,7 +19,9 @@ interface ExecuteFrame {
  * sends them back; the server only ever sees opaque keys and results.
  */
 export async function runNode(installation: StoredToolman): Promise<void> {
-  const socket = new WebSocket(new URL("/toolman", installation.wsUrl));
+  const socketUrl = new URL(installation.wsUrl);
+  if (socketUrl.pathname === "/") socketUrl.pathname = "/toolman";
+  const socket = new WebSocket(socketUrl);
   const inflight = new Map<string, RunningCommand>();
   await new Promise<void>((resolve, reject) => {
     socket.once("open", () => resolve());
@@ -34,6 +36,17 @@ export async function runNode(installation: StoredToolman): Promise<void> {
   });
 
   async function handle(event: Record<string, unknown>): Promise<void> {
+    if (event.type === "toolman_assignment_sync") {
+      const assignments = Array.isArray(event.assignments) ? event.assignments as Array<{ projectId: string; agentId: string; agentName?: string }> : [];
+      for (const assignment of assignments) {
+        const mount = installation.mounts.find((item) => item.projectId === assignment.projectId);
+        if (!mount) continue;
+        await ensureWorktree(installation, mount, assignment.agentId, assignment.agentName ?? assignment.agentId).catch((err) => {
+          console.warn("[toolman] worktree reconcile failed:", err instanceof Error ? err.message : err);
+        });
+      }
+      return;
+    }
     if (event.type === "toolman_cancel" && typeof event.requestId === "string") {
       inflight.get(event.requestId)?.cancel();
       return;

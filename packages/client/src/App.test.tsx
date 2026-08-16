@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -10,10 +10,12 @@ const fetchMock = vi.fn<typeof fetch>();
 // frame and records what the UI sends, so the real Workspace can boot.
 // `historySeed` lets individual tests plant chat history before boot (e.g. an
 // own message to edit); tests reset it in beforeEach.
-const { sent, historySeed, channelsSeed, authState } = vi.hoisted(() => ({
+const { sent, historySeed, channelsSeed, authState, connectedWorkspaces, closedWorkspaces } = vi.hoisted(() => ({
   sent: [] as Array<{ type: string; content?: string; replyToId?: string }>,
   historySeed: [] as unknown[],
   channelsSeed: ["general"] as string[],
+  connectedWorkspaces: [] as string[],
+  closedWorkspaces: [] as string[],
   // The Supabase auth boundary: null = signed out. Tests set this directly
   // instead of seeding localStorage, since App.tsx now sources its session
   // from supabase.auth.getSession()/onAuthStateChange, not stored tokens.
@@ -35,7 +37,10 @@ vi.mock("./lib/supabase", () => ({
 vi.mock("./ws", () => {
   class WorkspaceSocket {
     private listeners = new Set<(event: unknown) => void>();
-    connect() {
+    private workspaceId = "";
+    connect(credentials: { workspaceId: string }) {
+      this.workspaceId = credentials.workspaceId;
+      connectedWorkspaces.push(credentials.workspaceId);
       const self = {
         id: "u-1",
         name: "hana",
@@ -47,7 +52,7 @@ vi.mock("./ws", () => {
       for (const listener of this.listeners) {
         listener({
           type: "welcome",
-          workspace: { id: "ws-1", name: "test_space" },
+          workspace: { id: this.workspaceId, name: this.workspaceId === "ws-1" ? "test_space" : "second_space" },
           self,
           history: historySeed,
           participants: [self],
@@ -71,7 +76,9 @@ vi.mock("./ws", () => {
     onDisconnect() {
       return () => {};
     }
-    close() {}
+    close() {
+      closedWorkspaces.push(this.workspaceId);
+    }
   }
   return { WorkspaceSocket };
 });
@@ -141,6 +148,8 @@ describe("App boot decision", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("localStorage", makeStorage());
+    vi.stubGlobal("sessionStorage", makeStorage());
+    window.history.replaceState({}, "", "/");
     authState.session = null;
   });
   afterEach(() => {
@@ -188,7 +197,7 @@ describe("App boot decision", () => {
     expect(await screen.findByText("Pick a username")).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/api/auth/session"),
+      expect.stringContaining("/api/account"),
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer tok-1",
@@ -197,17 +206,73 @@ describe("App boot decision", () => {
     );
   });
 
-  it("a removed member sees a dead-end screen instead of the workspace", async () => {
+  it("a user without memberships sees the workspace lobby", async () => {
     authState.session = { access_token: "tok-1" };
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }),
     );
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "removed" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: "ok",
+      username: "hana",
+      workspaces: [],
+      accessRequests: [],
+    }));
 
     render(<App />);
 
-    expect(await screen.findByText("No workspaces here")).toBeInTheDocument();
-    expect(screen.queryByText("Pick a username")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Choose a workspace" })).toBeInTheDocument();
+    expect(screen.getByText("No workspace memberships yet. Create one or ask for access below.")).toBeInTheDocument();
+  });
+});
+
+describe("Workspace switching", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("localStorage", makeStorage());
+    vi.stubGlobal("sessionStorage", makeStorage());
+    window.history.replaceState({}, "", "/");
+    window.localStorage.setItem("convyio:last-workspace", "ws-1");
+    authState.session = { access_token: "tok-1" };
+    connectedWorkspaces.length = 0;
+    closedWorkspaces.length = 0;
+    Element.prototype.scrollIntoView = vi.fn();
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/api/auth/config")) {
+        return Promise.resolve(jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: true }));
+      }
+      if (url.includes("/api/account")) {
+        return Promise.resolve(jsonResponse(200, {
+          status: "ok",
+          username: "hana",
+          workspaces: [
+            { id: "ws-1", name: "First Space", publicCode: "FIRST", role: "owner", joinedAt: 1_000 },
+            { id: "ws-2", name: "Second Space", publicCode: "SECOND", role: "member", joinedAt: 2_000 },
+          ],
+          accessRequests: [],
+        }));
+      }
+      return new Promise<Response>(() => {});
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+  });
+
+  it("closes the old workspace session and opens a keyed provider for the new workspace", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("button", { name: "First Space" });
+    await user.click(screen.getByRole("button", { name: "First Space" }));
+    await user.click(screen.getByRole("menuitem", { name: /Second Space/ }));
+
+    await waitFor(() => expect(connectedWorkspaces).toEqual(["ws-1", "ws-2"]));
+    expect(closedWorkspaces).toContain("ws-1");
+    expect(window.location.pathname).toBe("/w/ws-2");
+    expect(window.localStorage.getItem("convyio:last-workspace")).toBe("ws-2");
   });
 });
 
@@ -215,6 +280,8 @@ describe("Workspace composer", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("localStorage", makeStorage());
+    vi.stubGlobal("sessionStorage", makeStorage());
+    window.history.replaceState({}, "", "/");
     sent.length = 0;
     historySeed.length = 0;
     channelsSeed.length = 0;
@@ -234,8 +301,13 @@ describe("Workspace composer", () => {
       if (url.includes("/api/auth/config")) {
         return Promise.resolve(jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: true }));
       }
-      if (url.includes("/api/auth/session")) {
-        return Promise.resolve(jsonResponse(200, { status: "ok" }));
+      if (url.includes("/api/account")) {
+        return Promise.resolve(jsonResponse(200, {
+          status: "ok",
+          username: "hana",
+          workspaces: [{ id: "ws-1", name: "test_space", publicCode: "TEST-SPACE", role: "owner", joinedAt: 1_000 }],
+          accessRequests: [],
+        }));
       }
       // Board snapshot etc.: stay pending, irrelevant to these tests.
       return new Promise<Response>(() => {});
@@ -352,6 +424,8 @@ describe("Workspace keyboard navigation", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("localStorage", makeStorage());
+    vi.stubGlobal("sessionStorage", makeStorage());
+    window.history.replaceState({}, "", "/");
     sent.length = 0;
     historySeed.length = 0;
     channelsSeed.length = 0;
@@ -371,8 +445,13 @@ describe("Workspace keyboard navigation", () => {
       if (url.includes("/api/auth/config")) {
         return Promise.resolve(jsonResponse(200, { googleAuthEnabled: false, emailAuthEnabled: true }));
       }
-      if (url.includes("/api/auth/session")) {
-        return Promise.resolve(jsonResponse(200, { status: "ok" }));
+      if (url.includes("/api/account")) {
+        return Promise.resolve(jsonResponse(200, {
+          status: "ok",
+          username: "hana",
+          workspaces: [{ id: "ws-1", name: "test_space", publicCode: "TEST-SPACE", role: "owner", joinedAt: 1_000 }],
+          accessRequests: [],
+        }));
       }
       return new Promise<Response>(() => {});
     });

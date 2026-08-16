@@ -22,6 +22,7 @@ export class InteractionStore {
     summary: string;
     capability: string;
     boardItemRef: string | null;
+    targetActorId?: string | null;
   }): Promise<InteractionRequest> {
     const id = randomUUID();
     const createdAt = Date.now();
@@ -29,11 +30,11 @@ export class InteractionStore {
       const [row] = await sql<Row[]>`
         INSERT INTO interaction_requests
           (id, workspace_id, channel_id, agent_id, conversation_id, summary,
-           capability, board_item_ref, status, created_at)
+           capability, board_item_ref, target_actor_id, status, created_at)
         VALUES (
           ${id}, ${input.workspaceId}, ${input.channelId}, ${input.agentId},
           ${input.conversationId}, ${input.summary}, ${input.capability},
-          ${input.boardItemRef}, 'pending', ${new Date(createdAt)}
+          ${input.boardItemRef}, ${input.targetActorId ?? null}, 'pending', ${new Date(createdAt)}
         )
         RETURNING *
       `;
@@ -96,6 +97,24 @@ export class InteractionStore {
     return rows.map(toRequest);
   }
 
+  async findPending(workspaceId: string, requestId: string): Promise<InteractionRequest | null> {
+    const [row] = await this.store.sql<Row[]>`
+      SELECT * FROM interaction_requests
+      WHERE id = ${requestId} AND workspace_id = ${workspaceId} AND status = 'pending'
+    `;
+    return row ? toRequest(row) : null;
+  }
+
+  async expireForTarget(workspaceId: string, targetActorId: string): Promise<InteractionRequest[]> {
+    const rows = await this.store.sql<Row[]>`
+      UPDATE interaction_requests
+      SET status = 'expired', resolved_at = now()
+      WHERE workspace_id = ${workspaceId} AND status = 'pending' AND target_actor_id = ${targetActorId}
+      RETURNING *
+    `;
+    return rows.map(toRequest);
+  }
+
   /**
    * A pending request from a previous process has no waiter left to wake, so
    * startup expires it rather than leaving a prompt no answer can reach.
@@ -119,6 +138,7 @@ interface Row {
   summary: string;
   capability: string;
   board_item_ref: string | null;
+  target_actor_id: string | null;
   status: InteractionRequest["status"];
   resolved_by: string | null;
   created_at: Date;
@@ -135,6 +155,7 @@ function toRequest(row: Row): InteractionRequest {
     summary: row.summary,
     capability: row.capability,
     boardItemRef: row.board_item_ref,
+    targetActorId: row.target_actor_id,
     status: row.status,
     resolvedBy: row.resolved_by,
     createdAt: row.created_at.getTime(),

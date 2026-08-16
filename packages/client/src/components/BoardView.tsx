@@ -126,7 +126,7 @@ export function BoardView({
           <div className="flex flex-wrap gap-2">
             {proposedPlans.map((plan) => (
               <div key={plan.id} className="flex items-center gap-2 rounded-md bg-subtle px-2 py-1 text-xs">
-                <span className="font-mono text-[10px] font-bold text-accent">{plan.ref}</span>
+                <span className="text-[10px] font-bold text-accent">{plan.ref}</span>
                 <span className="text-body">{plan.title}</span>
                 <button onClick={() => void acceptPlan(plan.id)} className="font-semibold text-accent hover:underline">Accept</button>
               </div>
@@ -135,7 +135,7 @@ export function BoardView({
         )}
         <div className="grid gap-2 md:grid-cols-2">
           <div className="space-y-1.5">
-            <div className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">New plan</div>
+            <div className="text-[10px] font-bold tracking-wider text-muted uppercase">New plan</div>
             <input value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} aria-label="New plan title" className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Plan title" maxLength={200} />
             <input value={planObjective} onChange={(e) => setPlanObjective(e.target.value)} aria-label="New plan objective" className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Objective" />
             <textarea value={planOutline} onChange={(e) => setPlanOutline(e.target.value)} aria-label="New plan outline" rows={2} className="w-full resize-none rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Outline, one step per line" />
@@ -143,7 +143,7 @@ export function BoardView({
             <button onClick={submitPlan} className="rounded-md bg-input px-3 py-1.5 text-sm font-semibold text-body hover:bg-subtle">Propose plan</button>
           </div>
           <div className="space-y-1.5">
-            <div className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">Next ticket</div>
+            <div className="text-[10px] font-bold tracking-wider text-muted uppercase">Next ticket</div>
             <select aria-label="Ticket plan" value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none focus:ring-2 focus:ring-accent">
               <option value="">Accepted plan…</option>
               {accepted.map((plan) => <option key={plan.id} value={plan.id}>{plan.ref} {plan.title}</option>)}
@@ -169,8 +169,8 @@ export function BoardView({
           return (
             <div key={status} className={`flex max-h-full w-72 shrink-0 flex-col self-start ${proposed ? "border-l-4 border-dead pl-3" : ""}`}>
               <div className="flex shrink-0 items-center gap-2 py-2">
-                <span className={`font-mono text-[10px] font-bold tracking-wider uppercase ${proposed ? "text-dead" : "text-muted"}`}>{ITEM_STATUS_LABEL[status]}</span>
-                <span className="font-mono text-[10px] font-bold text-faint">{items.length}</span>
+                <span className={`text-[10px] font-bold tracking-wider uppercase ${proposed ? "text-dead" : "text-muted"}`}>{ITEM_STATUS_LABEL[status]}</span>
+                <span className="text-[10px] font-bold text-faint">{items.length}</span>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-3 pb-2">
                 {items.length === 0 ? (

@@ -42,7 +42,7 @@ describe("useUnreads", () => {
       msg("m-2", "general", 2_000),
       msg("m-3", "random", 1_500),
     ];
-    const { result } = renderHook(() => useUnreads(messages));
+    const { result } = renderHook(() => useUnreads(messages, "ws-1"));
 
     expect(result.current.unreadCount("general")).toBe(2);
     expect(result.current.unreadCount("random")).toBe(1);
@@ -53,7 +53,7 @@ describe("useUnreads", () => {
       msg("m-1", "general", 1_000),
       msg("m-2", "general", 2_000),
     ];
-    const { result } = renderHook(() => useUnreads(messages));
+    const { result } = renderHook(() => useUnreads(messages, "ws-1"));
 
     act(() => result.current.markRead("general"));
 
@@ -64,7 +64,7 @@ describe("useUnreads", () => {
   it("the active channel stays at zero even as new messages arrive, but locks in on switching away", () => {
     const messages = [msg("m-1", "general", 1_000)];
     const { result, rerender } = renderHook(
-      ({ msgs }) => useUnreads(msgs),
+      ({ msgs }) => useUnreads(msgs, "ws-1"),
       { initialProps: { msgs: messages } },
     );
 
@@ -84,12 +84,12 @@ describe("useUnreads", () => {
 
   it("persists the last-read stamp to localStorage across mounts", () => {
     const messages = [msg("m-1", "general", 1_000)];
-    const { result, unmount } = renderHook(() => useUnreads(messages));
+    const { result, unmount } = renderHook(() => useUnreads(messages, "ws-1"));
 
     act(() => result.current.markRead("general"));
     unmount();
 
-    const { result: second } = renderHook(() => useUnreads(messages));
+    const { result: second } = renderHook(() => useUnreads(messages, "ws-1"));
     // A different channel is active now, so "general" reads via its
     // persisted stamp and stays at zero (m-1 predates it).
     expect(second.current.unreadCount("general")).toBe(0);
@@ -101,7 +101,7 @@ describe("useUnreads", () => {
       msg("m-2", "general", 2_000),
       msg("m-3", "random", 1_500),
     ];
-    const { result } = renderHook(() => useUnreads(messages));
+    const { result } = renderHook(() => useUnreads(messages, "ws-1"));
 
     expect(document.title).toBe("(3) Convyio");
 
@@ -110,5 +110,17 @@ describe("useUnreads", () => {
 
     act(() => result.current.markRead("random"));
     expect(document.title).toBe("Convyio");
+  });
+
+  it("persists unread stamps under workspace-specific keys", () => {
+    const messages = [msg("m-1", "general", 1_000)];
+    const first = renderHook(() => useUnreads(messages, "ws-1"));
+    act(() => first.result.current.markRead("general"));
+    first.unmount();
+
+    const second = renderHook(() => useUnreads(messages, "ws-2"));
+    expect(second.result.current.unreadCount("general")).toBe(1);
+    expect(window.localStorage.getItem("convyio:lastRead:ws-1")).not.toBeNull();
+    expect(window.localStorage.getItem("convyio:lastRead:ws-2")).not.toBeNull();
   });
 });

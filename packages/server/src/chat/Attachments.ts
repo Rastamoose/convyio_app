@@ -42,25 +42,35 @@ export class Attachments {
     const isImage = meta.mime.startsWith("image/");
     const width = isImage ? (meta.width ?? null) : null;
     const height = isImage ? (meta.height ?? null) : null;
-    const { error } = await this.supabase.storage.from(BUCKET).upload(id, bytes, {
+    const storageKey = `${this.store.workspaceId}/${id}`;
+    const { error } = await this.supabase.storage.from(BUCKET).upload(storageKey, bytes, {
       contentType: meta.mime,
     });
     if (error) throw new ApiError(500, "UPLOAD_FAILED", `could not store the file: ${error.message}`);
     await this.store.sql`
       INSERT INTO attachments
-        (id, uploader_id, message_id, name, mime, size, width, height, created_at)
-      VALUES (${id}, ${uploader.id}, NULL, ${name}, ${meta.mime}, ${bytes.length}, ${width}, ${height}, ${Date.now()})
+        (id, workspace_id, storage_key, uploader_id, message_id, name, mime, size, width, height, created_at)
+      VALUES (
+        ${id}, ${this.store.workspaceId}, ${storageKey}, ${uploader.id}, NULL,
+        ${name}, ${meta.mime}, ${bytes.length}, ${width}, ${height}, ${Date.now()}
+      )
     `;
-    return toAttachment({ id, name, mime: meta.mime, size: bytes.length, width, height });
+    return toAttachment(
+      { id, name, mime: meta.mime, size: bytes.length, width, height },
+      this.store.workspaceId,
+    );
   }
 
   async get(id: string): Promise<{ attachment: Attachment; blob: Blob } | null> {
-    const rows = await this.store.sql<AttachmentRow[]>`SELECT * FROM attachments WHERE id = ${id}`;
+    const rows = await this.store.sql<AttachmentRow[]>`
+      SELECT * FROM attachments
+      WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
+    `;
     const row = rows[0];
     if (!row) return null;
-    const { data, error } = await this.supabase.storage.from(BUCKET).download(row.id);
+    const { data, error } = await this.supabase.storage.from(BUCKET).download(row.storage_key);
     if (error || !data) return null;
-    return { attachment: toAttachment(row), blob: data };
+    return { attachment: toAttachment(row, this.store.workspaceId), blob: data };
   }
 
   /**
@@ -72,13 +82,19 @@ export class Attachments {
     return this.store.transaction((sql) =>
       Promise.all(
         ids.map(async (id) => {
-          const rows = await sql<AttachmentRow[]>`SELECT * FROM attachments WHERE id = ${id}`;
+          const rows = await sql<AttachmentRow[]>`
+            SELECT * FROM attachments
+            WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
+          `;
           const row = rows[0];
           if (!row || row.message_id !== null || row.uploader_id !== senderId) {
             throw new ApiError(400, "BAD_ATTACHMENT", `attachment ${id} is not an unbound upload of yours`);
           }
-          await sql`UPDATE attachments SET message_id = ${messageId} WHERE id = ${id}`;
-          return toAttachment(row);
+          await sql`
+            UPDATE attachments SET message_id = ${messageId}
+            WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
+          `;
+          return toAttachment(row, this.store.workspaceId);
         }),
       ),
     );
@@ -86,12 +102,14 @@ export class Attachments {
 
   /** Delete rows and objects for unbound uploads older than the cutoff. */
   async sweepOrphans(olderThanMs = ORPHAN_TTL_MS): Promise<void> {
-    const rows = await this.store.sql<{ id: string }[]>`
-      DELETE FROM attachments WHERE message_id IS NULL AND created_at < ${Date.now() - olderThanMs}
-      RETURNING id
+    const rows = await this.store.sql<{ storage_key: string }[]>`
+      DELETE FROM attachments
+      WHERE workspace_id = ${this.store.workspaceId}
+        AND message_id IS NULL AND created_at < ${Date.now() - olderThanMs}
+      RETURNING storage_key
     `;
     if (rows.length === 0) return;
-    await this.supabase.storage.from(BUCKET).remove(rows.map((r) => r.id));
+    await this.supabase.storage.from(BUCKET).remove(rows.map((row) => row.storage_key));
   }
 }
 
@@ -108,6 +126,8 @@ function sanitizeName(raw: string): string {
 
 interface AttachmentRow {
   id: string;
+  workspace_id: string;
+  storage_key: string;
   uploader_id: string;
   message_id: string | null;
   name: string;
@@ -120,13 +140,14 @@ interface AttachmentRow {
 
 function toAttachment(
   row: Pick<AttachmentRow, "id" | "name" | "mime" | "size" | "width" | "height">,
+  workspaceId: string,
 ): Attachment {
   const attachment: Attachment = {
     id: row.id,
     name: row.name,
     mime: row.mime,
     size: row.size,
-    url: `/api/uploads/${row.id}/${encodeURIComponent(row.name)}`,
+    url: `/api/uploads/${workspaceId}/${row.id}/${encodeURIComponent(row.name)}`,
   };
   if (row.width !== null) attachment.width = row.width;
   if (row.height !== null) attachment.height = row.height;

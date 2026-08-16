@@ -287,6 +287,8 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
   PROJECT_MISMATCH: "That action named the wrong project.",
   PROJECT_UNASSIGNED: "You are not assigned to that project.",
   CHECKOUT_UNAVAILABLE: "The assigned checkout is not ready.",
+  OWNER_OFFLINE: "The folder owner is offline, so local files are unavailable. Wait until they return.",
+  FOLDER_DENIED: "The folder owner has denied local access. Do not retry; ask them to change the folder policy.",
   UNKNOWN_ACTION: "That action is not classified and cannot be authorized.",
   CAPABILITY_MISSING:
     "That item does not grant this kind of action. Propose a new item requesting the capability you need (e.g. shell_repo) and explain why.",

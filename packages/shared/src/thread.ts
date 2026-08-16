@@ -85,6 +85,7 @@ export type ThreadEventKind =
   | "project.assignment.revoked"
   | "project.access.requested"
   | "project.access.resolved"
+  | "project.access_mode.updated"
   | "toolman.node.paired"
   | "toolman.node.revoked"
   | "toolman.mount.registered"

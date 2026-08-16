@@ -88,10 +88,11 @@ design bug.
 - **Sans for reading.** UI text, messages, forms: the system sans stack
   (`ui-sans-serif` → SF on macOS). Weight and size — not color or decoration —
   separate heading from body from caption.
-- **Mono for voice.** JetBrains Mono (self-hosted) appears where the brand
-  speaks: code, board refs (`task-42`), and micro-labels — the tiny uppercase
-  tracking-wide section headers, pills and badges. Mono never sets a sentence
-  a human reads for content.
+- **Mono for code only.** The platform's own mono (`ui-monospace` → SF Mono
+  on macOS) sets literal code: inline code, code blocks, shell commands,
+  invite codes. Everything else — micro-labels, pills, badges, board refs —
+  is sans; hierarchy comes from size, weight and tracking, not a second
+  voice. No webfonts are shipped.
 - **No ad-hoc sizes.** The scale is `text-xs` / `text-sm` / `text-base` /
   `text-lg` / `text-xl` / `text-2xl`; micro-labels use `text-[10-11px]` with
   `uppercase tracking-wide`. A `text-[15px]`-style one-off wants a reason.
@@ -122,6 +123,6 @@ in both themes before a visual change is done.
 ## 7. Personality lives in voice and moments
 
 The playfulness is copy ("Nothing waiting on you", "choose well"), the smiley
-mark, the mono micro-labels, the dashed "add agent" invitation, the amber pulse
+mark, the tiny uppercase micro-labels, the dashed "add agent" invitation, the amber pulse
 of an agent at work. Chrome stays quiet so those moments register. When a
 screen feels bland, fix the words or the moment — do not decorate the chrome.

@@ -24,7 +24,7 @@ describe("useMessageDrafts", () => {
 
   it("keeps drafts separate per channel", () => {
     const { result, rerender } = renderHook(
-      ({ channel }) => useMessageDrafts(channel),
+      ({ channel }) => useMessageDrafts("ws-1", channel),
       { initialProps: { channel: "general" } },
     );
 
@@ -38,18 +38,18 @@ describe("useMessageDrafts", () => {
   });
 
   it("persists to localStorage and restores after a remount", () => {
-    const first = renderHook(() => useMessageDrafts("general"));
+    const first = renderHook(() => useMessageDrafts("ws-1", "general"));
     act(() => first.result.current.setDraft("unsent"));
     first.unmount();
 
-    expect(window.localStorage.getItem("draft:general")).toBe("unsent");
-    const second = renderHook(() => useMessageDrafts("general"));
+    expect(window.localStorage.getItem("draft:ws-1:general")).toBe("unsent");
+    const second = renderHook(() => useMessageDrafts("ws-1", "general"));
     expect(second.result.current.draft).toBe("unsent");
   });
 
   it("clearDraft empties only that channel's draft and stored entry", () => {
     const { result, rerender } = renderHook(
-      ({ channel }) => useMessageDrafts(channel),
+      ({ channel }) => useMessageDrafts("ws-1", channel),
       { initialProps: { channel: "general" } },
     );
     act(() => result.current.setDraft("send me"));
@@ -60,9 +60,22 @@ describe("useMessageDrafts", () => {
     act(() => result.current.clearDraft());
 
     expect(result.current.draft).toBe("");
-    expect(window.localStorage.getItem("draft:general")).toBeNull();
-    expect(window.localStorage.getItem("draft:random")).toBe("keep me");
+    expect(window.localStorage.getItem("draft:ws-1:general")).toBeNull();
+    expect(window.localStorage.getItem("draft:ws-1:random")).toBe("keep me");
     rerender({ channel: "random" });
     expect(result.current.draft).toBe("keep me");
+  });
+
+  it("keeps the same channel separate across workspaces", () => {
+    const first = renderHook(() => useMessageDrafts("ws-1", "general"));
+    act(() => first.result.current.setDraft("workspace one"));
+    first.unmount();
+
+    const second = renderHook(() => useMessageDrafts("ws-2", "general"));
+    expect(second.result.current.draft).toBe("");
+    act(() => second.result.current.setDraft("workspace two"));
+
+    expect(window.localStorage.getItem("draft:ws-1:general")).toBe("workspace one");
+    expect(window.localStorage.getItem("draft:ws-2:general")).toBe("workspace two");
   });
 });

@@ -123,7 +123,7 @@ export function MemberCard({
       {isAgent && (
         <>
           <div className="mb-3">
-            <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+            <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
               Permissions in #{channel}
             </div>
             <div className="flex gap-1">
@@ -140,12 +140,12 @@ export function MemberCard({
             </div>
           </div>
           <div className="mb-3">
-            <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+            <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
               Current task
             </div>
             {currentTask ? (
               <div className="text-sm text-body">
-                <span className="rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
+                <span className="rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">
                   {currentTask.ref}
                 </span>{" "}
                 {currentTask.title}
@@ -161,7 +161,7 @@ export function MemberCard({
           </div>
           {pendingItem && (
             <div className="mb-3">
-              <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-dead uppercase">
+              <div className="mb-1 text-[10px] font-bold tracking-wider text-dead uppercase">
                 Pending request
               </div>
               <ProposalCard

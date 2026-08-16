@@ -16,6 +16,7 @@ import type { Auth } from "./Auth";
  */
 export function createJoinGate(
   auth: Auth,
+  workspaceId: string,
   agentToken: string | null,
   agentInvites: AgentInvites,
 ): (join: JoinEvent) => Promise<JoinDecision> {
@@ -41,8 +42,8 @@ export function createJoinGate(
           }
         : { ok: false };
     }
-    const actor = join.authToken ? await auth.resolveSession(join.authToken) : null;
-    return actor ? { ok: true, name: actor.displayName } : { ok: false };
+    const actor = join.authToken ? await auth.resolveSession(join.authToken, workspaceId) : null;
+    return actor ? { ok: true, name: actor.displayName, actorId: actor.id } : { ok: false };
   };
 }
 

@@ -103,10 +103,10 @@ export function QuickSwitcher({
                       onSelect(c);
                     }}
                   >
-                    <span className="shrink-0 font-mono text-faint">#</span>
+                    <span className="shrink-0 text-faint">#</span>
                     <span className="min-w-0 flex-1 truncate">{c}</span>
                     {unreads > 0 && (
-                      <span className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-0.5 font-mono text-[10px] font-bold text-on-accent">
+                      <span className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-on-accent">
                         {unreads > 99 ? "99+" : unreads}
                       </span>
                     )}

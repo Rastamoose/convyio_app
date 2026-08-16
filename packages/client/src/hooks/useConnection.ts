@@ -103,7 +103,7 @@ export function useConnection(
       socket.close();
       socketRef.current = null;
     };
-  }, [credentials.name, credentials.authToken]);
+  }, [credentials.workspaceId, credentials.name, credentials.authToken]);
 
   return {
     workspace,

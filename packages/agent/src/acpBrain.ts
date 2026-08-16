@@ -55,14 +55,24 @@ export class AcpBrain implements Brain {
   private activeRuns = new Map<string, ActiveRun>();
   private requestedModel: string | null = null;
   private stderr = "";
-  private mcpServers: { name: string; url: string; headers?: Record<string, string> }[] = [];
+  private mcpServers: Array<{
+    type: "http";
+    name: string;
+    url: string;
+    headers: Array<{ name: string; value: string }>;
+  }> = [];
 
   constructor(
     private readonly workspace: string,
     private readonly testAgent?: acp.AgentApp,
   ) {}
 
-  setMcpServers(servers: { name: string; url: string; headers?: Record<string, string> }[]): void {
+  setMcpServers(servers: Array<{
+    type: "http";
+    name: string;
+    url: string;
+    headers: Array<{ name: string; value: string }>;
+  }>): void {
     this.mcpServers = servers;
   }
 
@@ -178,7 +188,7 @@ export class AcpBrain implements Brain {
     try {
       const response = await this.contextOrThrow().request(acp.methods.agent.session.new, {
         cwd: this.workspace,
-        mcpServers: [],
+        mcpServers: this.mcpServers,
       });
       const created = response as { sessionId: string; configOptions?: SessionConfigOption[] };
       const state = { sessionId: created.sessionId, configOptions: created.configOptions ?? [] };
@@ -204,7 +214,7 @@ export class AcpBrain implements Brain {
       const response = await this.contextOrThrow().request(acp.methods.agent.session.load, {
         sessionId: providerSessionId,
         cwd: this.workspace,
-        mcpServers: [],
+        mcpServers: this.mcpServers,
       });
       const loaded = response as { configOptions?: SessionConfigOption[] };
       const state = { sessionId: providerSessionId, configOptions: loaded.configOptions ?? [] };

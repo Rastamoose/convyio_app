@@ -20,7 +20,7 @@ export function StatusBar({
   const online = participants.filter((p) => p.online).length;
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-divider px-3 font-mono text-[10px] tracking-wide text-faint select-none">
+    <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-divider px-3 text-[10px] tracking-wide text-faint select-none">
       <span className="flex items-center gap-1.5">
         <span
           className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-online" : "animate-pulse bg-dead"}`}

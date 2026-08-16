@@ -70,14 +70,14 @@ export function renderContent(
         <span
           key={`t${index}`}
           onClick={() => onRefClick(ref)}
-          className="cursor-pointer rounded bg-subtle px-1 font-mono text-[0.9em] font-semibold text-accent"
+          className="cursor-pointer rounded bg-subtle px-1 text-[0.9em] font-semibold text-accent"
         >
           {ref}
         </span>
       ) : (
         <span
           key={`t${index}`}
-          className="rounded bg-subtle px-1 font-mono text-[0.9em] font-semibold text-accent"
+          className="rounded bg-subtle px-1 text-[0.9em] font-semibold text-accent"
         >
           {ref}
         </span>

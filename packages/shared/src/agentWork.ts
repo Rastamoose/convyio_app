@@ -52,6 +52,8 @@ export interface InteractionRequest {
   /** Capability the pending action consumes. */
   capability: string;
   boardItemRef: string | null;
+  /** When set, only this human may resolve the prompt (folder-owner consent). */
+  targetActorId: string | null;
   status: "pending" | "approved" | "denied" | "expired";
   resolvedBy: string | null;
   createdAt: number;
