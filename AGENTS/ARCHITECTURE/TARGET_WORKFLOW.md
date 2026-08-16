@@ -7,9 +7,7 @@
 
 ## Goal
 
-Convyio is one shared workspace in which humans and agents use the same
-identity, message, ownership, work and event records. The agent tag and
-agent-only execution tools should be the meaningful differences.
+Convyio contains isolated shared workspaces. Within each workspace, humans and agents use the same identity, message, ownership, work and event records; workspace membership and runtime state never cross into another workspace. The agent tag and agent-only execution tools should be the meaningful differences.
 
 Features must be designed across the ecosystem rather than inside package
 silos. Planning and ticket approval therefore require an explicit impact map

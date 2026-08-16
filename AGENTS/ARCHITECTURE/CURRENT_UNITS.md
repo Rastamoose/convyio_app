@@ -20,10 +20,11 @@ the wire protocol (websocket) and the HTTP board API.
   types for server→client frames.
 
 ### packages/server
-- `WorkspaceDb` (`db.ts`) — owns the Supabase Postgres connection: queries,
-  transactions, the single workspace row, global actors + workspace
-  membership, per-workspace ref allocation. Schema/migrations live in
-  `supabase/migrations/`, applied via the Supabase CLI, not in this file.
+- `WorkspaceDb` (`db.ts`) — a workspace-scoped view over the shared Supabase Postgres connection. It stamps one verified workspace identity onto actors and every domain store; scoped instances share the root connection rather than opening one pool per workspace.
+- `AccountStore` (`auth/AccountStore.ts`) — global human identity plus membership and role lookup. It never selects an active workspace for the user.
+- `WorkspaceAccess` (`auth/WorkspaceAccess.ts`) — workspace creation, public-code access requests, expiring single-use invites, owner/member role transitions and last-owner enforcement. Every accepted membership change and access decision is transactional and audited in `thread_events`.
+- `WorkspaceRegistry` — lazily creates one `WorkspaceRuntime` per active workspace and routes `/ws/:workspaceId`, `/toolman/:workspaceId`, pairing credentials and workspace-bound API sessions to it.
+- `WorkspaceRuntime` — composes one workspace's roster, Hub, stores, Toolman sandbox, projects, context and demos. A runtime broadcasts only to its own connections.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
 - `Channels` (`chat/`) — the set of chat channels: seeds defaults, validates
   names, records new ones.  → WorkspaceDb
@@ -100,6 +101,10 @@ the wire protocol (websocket) and the HTTP board API.
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
 
 ### packages/client
+- `App.tsx` — account boot and workspace navigation: sign-in, permanent username, invite continuation, membership lobby, persisted last-workspace selection and keyed `WorkspaceProvider` remounts.
+- `WorkspaceLobby` — lists memberships and pending/denied requests; creates workspaces and submits access requests by public code.
+- `WorkspaceInviteFlow` — previews an invite before auth, preserves it across OAuth/email redirects and accepts it after identity is established.
+- `WorkspaceSettings` — workspace code, invite links, access decisions, roles, member removal and self-service leave.
 - `ws.ts` `WorkspaceSocket` — exists so UI code never handles raw WebSocket
   frames or reconnection. Joins with a guest name or an authToken; treats
   the server's `unauthenticated` verdict as fatal (no reconnect loop).
@@ -117,8 +122,7 @@ the wire protocol (websocket) and the HTTP board API.
   `hooks/useAgentTraces`, `hooks/useToasts`, `hooks/useAttachmentDrafts`
   (per-channel pending uploads: immediate upload, previews, ready-id handoff
   on send) — one state domain each.
-- `hooks/WorkspaceContext` — composes the hooks; components consume context,
-  never the socket or fetch.
+- `WorkspaceContext` — one selected workspace's state only. Drafts, unread cursors, HTTP credentials, messages, board state and sockets are discarded or namespace-scoped when switching.
 - `lib/format.ts`, `lib/status.ts` — the only copies of date formatting and
   status→label/color mappings.
 - `index.css` — the design-token layer (Tailwind v4 `@theme`): every color a

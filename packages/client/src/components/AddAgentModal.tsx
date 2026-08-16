@@ -478,11 +478,12 @@ function PairStep({
     : "";
   const setupPrompt = pairingCode
     ? [
-        "Install the Convyio agent CLI:",
-        "npm install -g convyio-agent",
+        "Pair this Convyio agent. Run the real convyio-agent CLI (not a published npm package):",
         "",
-        "Pair this workspace agent:",
         cliCommand,
+        "",
+        "If `convyio-agent` isn't on PATH yet, build and link it first from a checkout of this repo:",
+        "npm install && npm run build -w @workspace/agent && npm link -w @workspace/agent",
       ].join("\n")
     : "";
 

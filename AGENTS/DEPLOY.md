@@ -11,7 +11,7 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | Variable                    | Used by | Default                    | Meaning                                                                 |
 | ---------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------ |
 | `PORT`                      | server  | `3001`                     | HTTP + websocket port.                                                  |
-| `DATA_DIR`                  | server  | `./data` (`/data` in image)| Agent file/bash-tool sandbox only (`Toolman`) — the database and uploads live in Supabase, not here. |
+| `DATA_DIR`                  | server  | `./data` (`/data` in image)| Parent for isolated server-local Toolman sandboxes at `workspaces/<sha256(workspace-id)>/`; the database and uploads live in Supabase. |
 | `SUPABASE_URL`              | server  | — (required)                | Supabase project URL.                                                    |
 | `SUPABASE_SECRET_KEY`       | server  | — (required)                | Secret (service-role) key: verifies user JWTs and reads/writes Storage server-side. Never expose to the client. |
 | `SUPABASE_DB_URL`           | server  | — (required)                | Postgres connection string (Supabase project settings → Database).      |
@@ -113,7 +113,7 @@ location / {
 1. Create a project at [supabase.com](https://supabase.com) (the free tier is enough for this app's scale).
 2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or run every file in `supabase/migrations/` in filename order with `psql "$SUPABASE_DB_URL" -f <file>` — later migrations add `agent_invites`, enable deny-all RLS, and split out `workspaces`/`workspace_members`, so the init file alone is not enough), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
 3. Copy the project's URL and keys (Project Settings → API) into `.env`: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `VITE_SUPABASE_URL` (same as `SUPABASE_URL`), `VITE_SUPABASE_PUBLISHABLE_KEY` (same as `SUPABASE_PUBLISHABLE_KEY`); copy the Postgres connection string (Project Settings → Database → Connection string → URI) into `SUPABASE_DB_URL`.
-4. In Authentication → Providers, enable Email (for `EMAIL_AUTH=1`) and/or Google (for `GOOGLE_AUTH_ENABLED=1` — see "Google Sign-In" below for the OAuth client setup Google itself requires).
+4. In Authentication → Providers, enable Email (for `EMAIL_AUTH=1`) and/or Google (for `GOOGLE_AUTH_ENABLED=1` — see "Google Sign-In" below for the OAuth client setup Google itself requires). Add `https://app.convyio.com/**` to Supabase Authentication → URL Configuration → Redirect URLs so `/invite/:token` survives Google OAuth, email confirmation and password recovery redirects.
 5. **After pulling changes, re-apply migrations** (`npx supabase db push`). New migrations land with the code that needs them, so a database left behind is the usual cause of a local environment that worked yesterday and does not today. The server checks this at boot and refuses to start with the exact list of what is missing rather than failing later, feature by feature.
 6. If email/password sign-in is enabled, decide whether Authentication → Settings → "Confirm email" should be on. With it on, the UI shows "Account created — check your email for a confirmation link" after signup, and the user signs in once confirmed. Leaving it off gives zero-friction signup (account + session immediately).
 
@@ -150,9 +150,9 @@ authorized JavaScript origins.
 
 - The database, auth, and uploaded files all live in Supabase — back up
   through Supabase's own dashboard/CLI (`supabase db dump`), not this
-  container. `DATA_DIR` only holds the agent's file/bash-tool sandbox now.
+  container. `DATA_DIR` holds isolated server-local Toolman sandboxes under `workspaces/<sha256(workspace-id)>/`.
 - Uploads are unauthenticated capability URLs (the unguessable UUID is the
   secret, the Discord-CDN model — recorded in `ARCHITECTURE/DECISIONS.md`):
   the server proxies them from a private Supabase Storage bucket using the
   secret key, so the bucket itself is never exposed directly.
-- Known gap: no rate limiting yet.
+- API and websocket abuse controls are in-memory and per shell process. They bound account, pairing, upload and message traffic but are not a distributed quota system.

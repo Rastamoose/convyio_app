@@ -30,6 +30,12 @@ does not supersede them until the corresponding code change lands.
   child process or its output.
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
+- Every workspace-scoped runtime and store carries one immutable workspace id. Chat rows, channels, attachments, plans, board data, context, agent work, projects and Toolman records are filtered and constrained by it.
+- HTTP workspace tokens contain both actor id and workspace id; every request rechecks membership. A token issued in one workspace cannot select another.
+- Each Hub instance belongs to one `WorkspaceRuntime`, so presence and websocket broadcasts cannot cross workspace boundaries.
+- A global account with no memberships remains valid and may create or request another workspace; removal from one workspace never removes the account or its other memberships.
+- Only owners manage human membership and invites. A workspace must always retain at least one owner.
+- Client drafts and unread cursors include the workspace id in their storage key, and switching workspaces remounts the complete workspace state tree.
 - Auth mode is a config switch, not a flag: GOOGLE_AUTH_ENABLED and/or
   EMAIL_AUTH set = sign-in required (the Hub only admits joins its
   `authorizeJoin` gate resolves — humans by a verified Supabase session, agents by
@@ -42,7 +48,7 @@ does not supersede them until the corresponding code change lands.
 - Tickets always carry `scope_paths` (enforced at creation). An entry ending
   in `/` grants a subtree; anything else is exactly that file. Chat grants
   stay inside the workspace sandbox but do not invent a board scope.
-- Toolman file actions are confined to `data/workspace/`.
+- Server-local Toolman actions are confined to `data/workspaces/<sha256(workspace-id)>/`; paired node, project, mount, assignment and execution records remain workspace-scoped.
 - The Hub knows nothing about demos; `DemoOrchestrator` attaches through the
   Hub's three hooks and feeds inputs through the same paths humans use.
 - `messages.author_id` has no FK to `actors`: kept loose so a message and

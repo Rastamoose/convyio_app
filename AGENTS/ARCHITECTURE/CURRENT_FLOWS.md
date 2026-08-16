@@ -3,19 +3,20 @@
 This page describes behavior implemented now, before the target workflow in
 `TARGET_WORKFLOW.md`.
 
-## Join and identity
+## Account, workspace selection and join
 
-1. A browser or agent opens the websocket and sends `join`.
-2. `joinPolicy.ts` verifies a Supabase human session, the server-wide agent
-   token, or a paired-agent installation token.
-3. `Roster` resolves the persistent actor and workspace membership.
-4. `Hub` sends `welcome` with identity, participants, channels, recent chat,
-   an HTTP bearer token, API URL and any agent profile.
-5. A paired runner reports its harness and configuration revision before the
-   server offers it work.
+1. Supabase authenticates the browser and the server binds one global human actor/username.
+2. `GET /api/account` returns every workspace membership and access request. Zero memberships is a valid account state.
+3. From the lobby, the human creates a workspace as its first owner, requests access using its public code, or accepts a single-use invite.
+4. The browser connects to `/ws/:workspaceId`; the join gate verifies the Supabase token and that exact membership.
+5. `WorkspaceRegistry` resolves or creates the workspace runtime. Its Hub sends workspace-only roster, channels, history and a workspace-bound HTTP bearer token.
+6. Switching changes `/w/:workspaceId`, closes the old socket, unmounts its provider and creates a fresh workspace session.
 
-Human identity comes from the verified Supabase user. Agent identity comes
-from the admitted token. Request bodies never choose the acting actor.
+Agent and Toolman pairing codes resolve the workspace from their server-side records. A presented credential cannot choose or widen its workspace.
+
+## Workspace access
+
+A public workspace code is a locator, not authority. Submitting it creates one idempotent pending request; an owner approval inserts membership and resolves the request in the same transaction. Invite tokens are hashed at rest, expire after seven days, are revocable and may be consumed by one actor. Membership and role changes retain actor history and append attributed workspace events.
 
 ## Chat and durable agent work
 

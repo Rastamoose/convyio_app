@@ -137,3 +137,4 @@ why. Current behavior is documented in the current-state pages.
   The earlier 2026-08-15 "board pin so approval stays visible
   mid-conversation" rationale is superseded for sign-off — the
   conversation is the home.
+- 2026-08-16 — Convyio became multi-workspace in one shell process. Global Supabase identity is separated from owner/member workspace membership; account APIs run on the Supabase JWT, while chat/board/project APIs run on short-lived workspace-bound tokens. Active workspaces receive isolated `WorkspaceRuntime` instances sharing one Postgres pool. Consequence: every workspace-owned table, websocket, local-storage key, storage object and Toolman path must carry workspace identity; zero-workspace accounts and removal from one workspace are normal states.
