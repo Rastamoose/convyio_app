@@ -62,4 +62,13 @@ describe("Roster.create preload", () => {
       undefined,
     );
   });
+
+  test("adding a member is immediate and does not overwrite live presence", async () => {
+    const newcomer = await db.createHuman(randomUUID(), "Newcomer", "newcomer@example.com");
+    await roster.addOffline(newcomer.id);
+    assert.equal(roster.list().find((participant) => participant.id === newcomer.id)?.online, false);
+    await roster.join("human", newcomer.displayName, newcomer.id);
+    await roster.addOffline(newcomer.id);
+    assert.equal(roster.list().find((participant) => participant.id === newcomer.id)?.online, true);
+  });
 });

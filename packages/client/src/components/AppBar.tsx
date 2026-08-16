@@ -71,7 +71,7 @@ export function AppBar({
   );
 
   return (
-    <header className="relative flex h-10 shrink-0 items-center gap-3 px-3">
+    <header className="relative flex h-10 shrink-0 items-end gap-3 px-3">
       <img
         src="/mark-yellow.svg"
         alt="convyio"

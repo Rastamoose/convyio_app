@@ -5,6 +5,8 @@ import { WorkspaceAccess } from "../src/auth/WorkspaceAccess";
 import { ApiError } from "../src/board/BoardService";
 import { createTestDb } from "./pgSchema";
 
+const REUSABLE_INVITES_MIGRATION = "20260816210000_reusable_workspace_invites.sql";
+
 describe("workspace access lifecycle", () => {
   let drop: () => Promise<void>;
   let accounts: AccountStore;
@@ -39,7 +41,7 @@ describe("workspace access lifecycle", () => {
     assert.deepEqual(await access.resolveRequest(workspace.id, first.id, owner.id, "approved"), approved);
   });
 
-  test("single-use invites are revocable and idempotent only for their consumer", async () => {
+  test("reusable invites add multiple members and remain revocable", async () => {
     const workspace = await access.createWorkspace(owner, "Invite Test");
     const invited = await accounts.createHuman("invite-consumer", "invite-consumer", null);
     const other = await accounts.createHuman("invite-other", "invite-other", null);
@@ -48,14 +50,71 @@ describe("workspace access lifecycle", () => {
     const accepted = await access.acceptInvite(invited, created.token);
     assert.equal(accepted.role, "member");
     assert.deepEqual(await access.acceptInvite(invited, created.token), accepted);
+    assert.equal((await access.acceptInvite(other, created.token)).role, "member");
+    const [invite] = await access.listInvites(workspace.id, owner.id);
+    assert.equal(invite.uses, 2);
+    assert.equal(invite.maxUses, 0);
+    assert.equal(await access.revokeInvite(workspace.id, created.invite.id, owner.id), true);
+    assert.equal(await access.previewInvite(created.token), null);
+    assert.equal(await access.revokeInvite(workspace.id, "missing", owner.id), false);
+  });
+
+  test("invite use limits stop new memberships without charging retries", async () => {
+    const workspace = await access.createWorkspace(owner, "Limited Invite Test");
+    const invited = await accounts.createHuman("limited-consumer", "limited-consumer", null);
+    const other = await accounts.createHuman("limited-other", "limited-other", null);
+    const created = await access.createInvite(workspace.id, owner.id, { maxAgeSeconds: 1_800, maxUses: 1 });
+    const accepted = await access.acceptInvite(invited, created.token);
+    assert.deepEqual(await access.acceptInvite(invited, created.token), accepted);
+    assert.equal(await access.previewInvite(created.token), null);
     await assert.rejects(
       access.acceptInvite(other, created.token),
       (error) => error instanceof ApiError && error.code === "INVITE_UNAVAILABLE",
     );
+    const [invite] = await access.listInvites(workspace.id, owner.id);
+    assert.equal(invite.uses, 1);
+    assert.equal(invite.maxUses, 1);
+  });
 
-    const revoked = await access.createInvite(workspace.id, owner.id);
-    assert.equal(await access.revokeInvite(workspace.id, revoked.invite.id, owner.id), true);
-    assert.equal(await access.previewInvite(revoked.token), null);
+  test("the reusable-invite migration preserves legacy link availability", async () => {
+    const migrated = await createTestDb({
+      beforeMigration: REUSABLE_INVITES_MIGRATION,
+      seed: async (sql) => {
+        await sql`
+          INSERT INTO actors (id, kind, display_name)
+          VALUES ('legacy-inviter', 'human', 'legacy-inviter')
+        `;
+        await sql`
+          INSERT INTO workspaces (id, name, public_code, created_by, created_at, updated_at)
+          VALUES ('legacy-workspace', 'Legacy', 'CV-LEGACY01', 'legacy-inviter', 1000, 1000)
+        `;
+        await sql`
+          INSERT INTO workspace_invites (
+            id, workspace_id, token_hash, created_by, created_at, expires_at,
+            consumed_by, consumed_at, revoked_at
+          ) VALUES
+            ('legacy-unused', 'legacy-workspace', 'legacy-unused-hash', 'legacy-inviter', 1000, 5000, NULL, NULL, NULL),
+            ('legacy-used', 'legacy-workspace', 'legacy-used-hash', 'legacy-inviter', 1000, 5000, 'legacy-inviter', 2000, NULL)
+        `;
+      },
+    });
+    try {
+      const invites = await migrated.db.sql<{ id: string; uses: number; max_uses: number }[]>`
+        SELECT id, uses, max_uses FROM workspace_invites ORDER BY id
+      `;
+      assert.deepEqual([...invites], [
+        { id: "legacy-unused", uses: 0, max_uses: 0 },
+        { id: "legacy-used", uses: 1, max_uses: 1 },
+      ]);
+      const legacyColumns = await migrated.db.sql<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'workspace_invites'
+          AND column_name IN ('consumed_by', 'consumed_at')
+      `;
+      assert.equal(legacyColumns.length, 0);
+    } finally {
+      await migrated.drop();
+    }
   });
 
   test("last-owner protection survives self-service leave and demotion", async () => {

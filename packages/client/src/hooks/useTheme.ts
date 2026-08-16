@@ -13,12 +13,9 @@ function storedTheme(): Theme | null {
   }
 }
 
-/** Stored choice wins; otherwise follow the OS until the user picks one. */
+/** Stored choice wins; otherwise light, whatever the OS prefers. */
 export function initialTheme(): Theme {
-  return (
-    storedTheme() ??
-    (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-  );
+  return storedTheme() ?? "light";
 }
 
 /**

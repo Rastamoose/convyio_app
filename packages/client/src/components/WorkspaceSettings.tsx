@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
-import type {
-  WorkspaceAccessRequest,
-  WorkspaceInvite,
-  WorkspaceMember,
-  WorkspaceRole,
-  WorkspaceSummary,
+import {
+  DEFAULT_WORKSPACE_INVITE_OPTIONS,
+  WORKSPACE_INVITE_MAX_AGE_SECONDS,
+  WORKSPACE_INVITE_MAX_USES,
+  type WorkspaceAccessRequest,
+  type WorkspaceInvite,
+  type WorkspaceInviteMaxAgeSeconds,
+  type WorkspaceInviteMaxUses,
+  type WorkspaceMember,
+  type WorkspaceRole,
+  type WorkspaceSummary,
 } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { responseMessage } from "../lib/accountApi";
 import { formatFullDateTime } from "../lib/format";
+
+const INVITE_EXPIRY_LABELS: Record<WorkspaceInviteMaxAgeSeconds, string> = {
+  1_800: "30 minutes",
+  3_600: "1 hour",
+  21_600: "6 hours",
+  43_200: "12 hours",
+  86_400: "1 day",
+  604_800: "7 days",
+};
 
 export function WorkspaceSettings({
   summary,
@@ -26,6 +40,8 @@ export function WorkspaceSettings({
   const [invites, setInvites] = useState<WorkspaceInvite[]>([]);
   const [requests, setRequests] = useState<WorkspaceAccessRequest[]>([]);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [inviteMaxAge, setInviteMaxAge] = useState<WorkspaceInviteMaxAgeSeconds>(DEFAULT_WORKSPACE_INVITE_OPTIONS.maxAgeSeconds);
+  const [inviteMaxUses, setInviteMaxUses] = useState<WorkspaceInviteMaxUses>(DEFAULT_WORKSPACE_INVITE_OPTIONS.maxUses);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -88,7 +104,10 @@ export function WorkspaceSettings({
     setBusy("create-invite");
     setError(null);
     try {
-      const response = await apiFetch("/api/workspace/invites", { method: "POST" });
+      const response = await apiFetch("/api/workspace/invites", {
+        method: "POST",
+        body: JSON.stringify({ maxAgeSeconds: inviteMaxAge, maxUses: inviteMaxUses }),
+      });
       if (!response) return;
       if (!response.ok) {
         setError(await responseMessage(response));
@@ -215,7 +234,8 @@ export function WorkspaceSettings({
   };
 
   const activeInvites = invites.filter(
-    (invite) => !invite.revokedAt && !invite.consumedAt && invite.expiresAt > Date.now(),
+    (invite) => !invite.revokedAt && invite.expiresAt > Date.now()
+      && (invite.maxUses === 0 || invite.uses < invite.maxUses),
   );
   const pendingRequests = requests.filter((request) => request.status === "pending");
 
@@ -247,11 +267,23 @@ export function WorkspaceSettings({
           {summary.role === "owner" && (
             <>
           <section className="mb-8 border-t border-divider pt-6">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold text-body">Invite links</h2>
-                <p className="mt-1 text-sm text-muted">Each link can be used once and expires after seven days.</p>
-              </div>
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-body">Invite links</h2>
+              <p className="mt-1 text-sm text-muted">Create a reusable link, then revoke it whenever you want to stop new joins.</p>
+            </div>
+            <div className="mb-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+              <label className="text-sm font-medium text-body">
+                <span className="mb-1 block">Expires after</span>
+                <select aria-label="Invite expiry" value={inviteMaxAge} onChange={(event) => setInviteMaxAge(Number(event.target.value) as WorkspaceInviteMaxAgeSeconds)} className="w-full rounded-md border border-divider bg-input px-2 py-2 text-sm text-body outline-none focus:ring-2 focus:ring-accent">
+                  {WORKSPACE_INVITE_MAX_AGE_SECONDS.map((seconds) => <option key={seconds} value={seconds}>{INVITE_EXPIRY_LABELS[seconds]}</option>)}
+                </select>
+              </label>
+              <label className="text-sm font-medium text-body">
+                <span className="mb-1 block">Max uses</span>
+                <select aria-label="Invite max uses" value={inviteMaxUses} onChange={(event) => setInviteMaxUses(Number(event.target.value) as WorkspaceInviteMaxUses)} className="w-full rounded-md border border-divider bg-input px-2 py-2 text-sm text-body outline-none focus:ring-2 focus:ring-accent">
+                  {WORKSPACE_INVITE_MAX_USES.map((uses) => <option key={uses} value={uses}>{uses === 0 ? "No limit" : `${uses} ${uses === 1 ? "use" : "uses"}`}</option>)}
+                </select>
+              </label>
               <button onClick={() => void createInvite()} disabled={busy === "create-invite"} className="shrink-0 rounded-md bg-accent px-3 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50">
                 Create link
               </button>
@@ -264,11 +296,16 @@ export function WorkspaceSettings({
                 </button>
               </div>
             )}
-            {activeInvites.length > 0 && (
+            {activeInvites.length === 0 ? (
+              <p className="text-sm text-muted">No active invite links.</p>
+            ) : (
               <ul className="divide-y divide-divider border-y border-divider">
                 {activeInvites.map((invite) => (
                   <li key={invite.id} className="flex items-center gap-3 py-3 text-sm">
-                    <span className="min-w-0 flex-1 text-muted">Expires {formatFullDateTime(invite.expiresAt)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-body">{invite.maxUses === 0 ? `${invite.uses} ${invite.uses === 1 ? "use" : "uses"}` : `${invite.uses} of ${invite.maxUses} uses`}</div>
+                      <div className="mt-0.5 text-xs text-muted">Expires {formatFullDateTime(invite.expiresAt)}</div>
+                    </div>
                     <button onClick={() => void revokeInvite(invite.id)} disabled={busy === invite.id} className="rounded-md px-2 py-1 text-dead hover:bg-dead/10 disabled:opacity-50">Revoke</button>
                   </li>
                 ))}

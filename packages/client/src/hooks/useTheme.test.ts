@@ -33,17 +33,16 @@ describe("useTheme", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("falls back to the OS preference with nothing stored", () => {
+  it("defaults to light with nothing stored, whatever the OS prefers", () => {
     expect(initialTheme()).toBe("light");
     stubPrefersDark(true);
-    expect(initialTheme()).toBe("dark");
+    expect(initialTheme()).toBe("light");
   });
 
-  it("prefers a stored choice over the OS preference", () => {
-    stubPrefersDark(true);
-    window.localStorage.setItem("convyio:theme", "light");
+  it("prefers a stored choice over the light default", () => {
+    window.localStorage.setItem("convyio:theme", "dark");
 
-    expect(initialTheme()).toBe("light");
+    expect(initialTheme()).toBe("dark");
   });
 
   it("toggling paints <html> and persists the choice", () => {

@@ -1,18 +1,19 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type {
-  JsonValue,
-  WorkspaceAccessRequest,
-  WorkspaceAccessRequestStatus,
-  WorkspaceInvite,
-  WorkspaceInvitePreview,
-  WorkspaceRole,
-  WorkspaceSummary,
+import {
+  DEFAULT_WORKSPACE_INVITE_OPTIONS,
+  type JsonValue,
+  type WorkspaceAccessRequest,
+  type WorkspaceAccessRequestStatus,
+  type WorkspaceInvite,
+  type WorkspaceInviteOptions,
+  type WorkspaceInvitePreview,
+  type WorkspaceRole,
+  type WorkspaceSummary,
 } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { Sql } from "../db";
 import type { AccountIdentity, AccountStore } from "./AccountStore";
 
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_OWNED_WORKSPACES = 20;
 const MAX_PENDING_REQUESTS = 20;
 const MAX_ACTIVE_INVITES = 50;
@@ -197,17 +198,23 @@ export class WorkspaceAccess {
     }) as Promise<WorkspaceAccessRequest>;
   }
 
-  async createInvite(workspaceId: string, actorId: string): Promise<{ invite: WorkspaceInvite; token: string }> {
+  async createInvite(
+    workspaceId: string,
+    actorId: string,
+    options: WorkspaceInviteOptions = DEFAULT_WORKSPACE_INVITE_OPTIONS,
+  ): Promise<{ invite: WorkspaceInvite; token: string }> {
     await this.requireOwner(workspaceId, actorId);
     const token = randomBytes(32).toString("hex");
     const now = Date.now();
+    const expiresAt = now + options.maxAgeSeconds * 1000;
     return this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
       await sql`SELECT id FROM workspaces WHERE id = ${workspaceId} FOR UPDATE`;
       const [{ count }] = await sql<{ count: number }[]>`
         SELECT count(*)::int AS count FROM workspace_invites
         WHERE workspace_id = ${workspaceId}
-          AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at > ${now}
+          AND revoked_at IS NULL AND expires_at > ${now}
+          AND (max_uses = 0 OR uses < max_uses)
       `;
       if (count >= MAX_ACTIVE_INVITES) {
         throw new ApiError(409, "INVITE_LIMIT", `a workspace can have at most ${MAX_ACTIVE_INVITES} active invites`);
@@ -215,10 +222,10 @@ export class WorkspaceAccess {
       const [row] = await sql<InviteRow[]>`
         INSERT INTO workspace_invites (
           id, workspace_id, token_hash, created_by, created_at, expires_at,
-          consumed_by, consumed_at, revoked_at
+          uses, max_uses, revoked_at
         ) VALUES (
           ${randomUUID()}, ${workspaceId}, ${hashToken(token)}, ${actorId}, ${now},
-          ${now + INVITE_TTL_MS}, NULL, NULL, NULL
+          ${expiresAt}, 0, ${options.maxUses}, NULL
         )
         RETURNING *
       `;
@@ -246,7 +253,7 @@ export class WorkspaceAccess {
       const rows = await sql`
         UPDATE workspace_invites SET revoked_at = ${Date.now()}
         WHERE id = ${inviteId} AND workspace_id = ${workspaceId}
-          AND revoked_at IS NULL AND consumed_at IS NULL
+          AND revoked_at IS NULL
         RETURNING id
       `;
       if (rows.length > 0) {
@@ -267,8 +274,8 @@ export class WorkspaceAccess {
       JOIN actors a ON a.id = i.created_by
       WHERE i.token_hash = ${hashToken(token)}
         AND i.revoked_at IS NULL
-        AND i.consumed_at IS NULL
         AND i.expires_at > ${Date.now()}
+        AND (i.max_uses = 0 OR i.uses < i.max_uses)
     `;
     return row
       ? {
@@ -284,7 +291,7 @@ export class WorkspaceAccess {
     return this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
       const [invite] = await sql<InviteAcceptStateRow[]>`
-        SELECT i.workspace_id, i.consumed_by, i.consumed_at, i.revoked_at, i.expires_at,
+        SELECT i.id, i.workspace_id, i.uses, i.max_uses, i.revoked_at, i.expires_at,
                w.name, w.public_code
         FROM workspace_invites i
         JOIN workspaces w ON w.id = i.workspace_id
@@ -292,32 +299,39 @@ export class WorkspaceAccess {
         FOR UPDATE
       `;
       if (!invite || invite.revoked_at || invite.expires_at <= now) {
-        throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or already used");
+        throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or no longer available");
       }
-      if (invite.consumed_by && invite.consumed_by !== actor.id) {
-        throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or already used");
-      }
-      if (!invite.consumed_at) {
-        await sql`
-          UPDATE workspace_invites
-          SET consumed_by = ${actor.id}, consumed_at = ${now}
-          WHERE token_hash = ${hashToken(token)} AND workspace_id = ${invite.workspace_id}
-        `;
-      }
-      await sql`
-        INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
-        VALUES (${invite.workspace_id}, ${actor.id}, 'member', ${now})
-        ON CONFLICT (workspace_id, actor_id) DO NOTHING
-      `;
-      const [membership] = await sql<{ role: WorkspaceRole; joined_at: number }[]>`
+      let [membership] = await sql<{ role: WorkspaceRole; joined_at: number }[]>`
         SELECT role, joined_at FROM workspace_members
         WHERE workspace_id = ${invite.workspace_id} AND actor_id = ${actor.id}
       `;
-      if (!invite.consumed_at) {
-        await appendAccessEvent(sql, invite.workspace_id, actor.id, "workspace.invite_accepted", {
-          actorId: actor.id,
-        });
+      if (!membership) {
+        if (invite.max_uses > 0 && invite.uses >= invite.max_uses) {
+          throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or no longer available");
+        }
+        [membership] = await sql<{ role: WorkspaceRole; joined_at: number }[]>`
+          INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+          VALUES (${invite.workspace_id}, ${actor.id}, 'member', ${now})
+          ON CONFLICT (workspace_id, actor_id) DO NOTHING
+          RETURNING role, joined_at
+        `;
+        if (membership) {
+          await sql`
+            UPDATE workspace_invites SET uses = uses + 1
+            WHERE id = ${invite.id}
+          `;
+          await appendAccessEvent(sql, invite.workspace_id, actor.id, "workspace.invite_accepted", {
+            actorId: actor.id,
+            inviteId: invite.id,
+          });
+        } else {
+          [membership] = await sql<{ role: WorkspaceRole; joined_at: number }[]>`
+            SELECT role, joined_at FROM workspace_members
+            WHERE workspace_id = ${invite.workspace_id} AND actor_id = ${actor.id}
+          `;
+        }
       }
+      if (!membership) throw new Error("invite acceptance lost its workspace membership");
       return {
         id: invite.workspace_id,
         name: invite.name,
@@ -425,8 +439,8 @@ interface InviteRow {
   created_by: string;
   created_at: number;
   expires_at: number;
-  consumed_by: string | null;
-  consumed_at: number | null;
+  uses: number;
+  max_uses: number;
   revoked_at: number | null;
 }
 
@@ -438,11 +452,12 @@ interface InvitePreviewRow {
 }
 
 interface InviteAcceptStateRow {
+  id: string;
   workspace_id: string;
   name: string;
   public_code: string;
-  consumed_by: string | null;
-  consumed_at: number | null;
+  uses: number;
+  max_uses: number;
   revoked_at: number | null;
   expires_at: number;
 }
@@ -499,8 +514,8 @@ function toInvite(row: InviteRow): WorkspaceInvite {
     createdBy: row.created_by,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
-    consumedBy: row.consumed_by,
-    consumedAt: row.consumed_at,
+    uses: row.uses,
+    maxUses: row.max_uses,
     revokedAt: row.revoked_at,
   };
 }

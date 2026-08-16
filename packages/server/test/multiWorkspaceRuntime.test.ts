@@ -28,6 +28,8 @@ describe("multi-workspace runtime", () => {
   let workspaceB: WorkspaceSummary;
   let ownerToken: string;
   let memberToken: string;
+  let inviteeToken: string;
+  let inviteToken: string;
   let sessions: Sessions;
 
   before(async () => {
@@ -35,16 +37,19 @@ describe("multi-workspace runtime", () => {
     const users = {
       "owner-jwt": { id: "workspace-owner", email: "owner@example.com" },
       "member-jwt": { id: "workspace-member", email: "member@example.com" },
+      "invitee-jwt": { id: "workspace-invitee", email: "invitee@example.com" },
     };
     const accounts = new AccountStore(db.sql);
     const auth = new Auth(accounts, fakeSupabase(users));
     const access = new WorkspaceAccess(db.sql, accounts);
     await auth.claimUsername("owner-jwt", "runtime-owner");
     await auth.claimUsername("member-jwt", "runtime-member");
+    await auth.claimUsername("invitee-jwt", "runtime-invitee");
     const owner = await auth.identity("owner-jwt");
     const member = await auth.identity("member-jwt");
     workspaceA = await access.createWorkspace(owner, "Runtime A");
     workspaceB = await access.createWorkspace(member, "Runtime B");
+    inviteToken = (await access.createInvite(workspaceA.id, owner.id)).token;
     const requested = await access.requestAccess(member, workspaceA.publicCode, "let me in");
     await access.resolveRequest(workspaceA.id, requested.id, owner.id, "approved");
     sessions = new Sessions();
@@ -90,6 +95,7 @@ describe("multi-workspace runtime", () => {
     baseUrl = `http://localhost:${port}`;
     ownerToken = "owner-jwt";
     memberToken = "member-jwt";
+    inviteeToken = "invitee-jwt";
     close = async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections?.();
@@ -109,6 +115,23 @@ describe("multi-workspace runtime", () => {
     const body = await response.json() as { status: string; workspaces: WorkspaceSummary[] };
     assert.equal(body.status, "ok");
     assert.deepEqual(new Set(body.workspaces.map((workspace) => workspace.id)), new Set([workspaceA.id, workspaceB.id]));
+  });
+
+  test("invite acceptance appears immediately in an active workspace roster", async () => {
+    const owner = await join(baseUrl, workspaceA.id, ownerToken);
+    try {
+      const response = await fetch(`${baseUrl}/api/invites/${inviteToken}/accept`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${inviteeToken}` },
+      });
+      assert.equal(response.status, 200);
+      await waitFor(owner.events, (event) =>
+        event.type === "presence_sync"
+          && event.participants.some((participant: any) => participant.name === "runtime-invitee" && !participant.online)
+      );
+    } finally {
+      owner.ws.terminate();
+    }
   });
 
   test("workspace rooms isolate history, presence, broadcasts, and HTTP sessions", async () => {

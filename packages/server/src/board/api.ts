@@ -1,8 +1,23 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { Actor, AgentInvite, AgentProvider, EcosystemImpact, ItemStatus, WorkCapability, WorkspaceSnapshot } from "@workspace/shared";
-import { WORK_CAPABILITIES } from "@workspace/shared";
+import type {
+  Actor,
+  AgentInvite,
+  AgentProvider,
+  EcosystemImpact,
+  ItemStatus,
+  WorkCapability,
+  WorkspaceInviteMaxAgeSeconds,
+  WorkspaceInviteMaxUses,
+  WorkspaceSnapshot,
+} from "@workspace/shared";
+import {
+  DEFAULT_WORKSPACE_INVITE_OPTIONS,
+  WORK_CAPABILITIES,
+  WORKSPACE_INVITE_MAX_AGE_SECONDS,
+  WORKSPACE_INVITE_MAX_USES,
+} from "@workspace/shared";
 import { ApiError, type BoardService } from "./BoardService";
 import type { PlanService } from "./PlanService";
 import type { Sessions } from "./sessions";
@@ -78,6 +93,14 @@ const workspaceBodySchema = z.object({ name: z.string().max(200) });
 const accessRequestBodySchema = z.object({ message: z.string().max(500).optional() });
 const accessDecisionBodySchema = z.object({ decision: z.enum(["approved", "denied"] as const) });
 const memberRoleBodySchema = z.object({ role: z.enum(["owner", "member"] as const) });
+const workspaceInviteBodySchema = z.object({
+  maxAgeSeconds: z.custom<WorkspaceInviteMaxAgeSeconds>(
+    (value) => WORKSPACE_INVITE_MAX_AGE_SECONDS.includes(value as WorkspaceInviteMaxAgeSeconds),
+  ).default(DEFAULT_WORKSPACE_INVITE_OPTIONS.maxAgeSeconds),
+  maxUses: z.custom<WorkspaceInviteMaxUses>(
+    (value) => WORKSPACE_INVITE_MAX_USES.includes(value as WorkspaceInviteMaxUses),
+  ).default(DEFAULT_WORKSPACE_INVITE_OPTIONS.maxUses),
+});
 
 const agentAccessSchema = z.object({
   mode: z.enum(["workspace", "creator", "selected"] as const),
@@ -244,7 +267,7 @@ export function createApiHandler(services: ApiServices) {
         parts[1] === "workspaces" ||
         parts[1] === "invites"
       ) {
-        await routeAccount(req, res, parts, authGate, workspaceAccess);
+        await routeAccount(req, res, parts, authGate, workspaceAccess, workspaceRegistry);
       } else if (
         parts[1] === "uploads" &&
         (parts.length === 4 || parts.length === 5) &&
@@ -499,7 +522,8 @@ async function route(
       return json(res, 200, { invites: await workspaceAccess.listInvites(actor.workspaceId, actor.id) });
     }
     if (parts.length === 3 && method === "POST") {
-      return json(res, 201, await workspaceAccess.createInvite(actor.workspaceId, actor.id));
+      const body = workspaceInviteBodySchema.parse(await readBody(req));
+      return json(res, 201, await workspaceAccess.createInvite(actor.workspaceId, actor.id, body));
     }
     if (parts.length === 4 && method === "DELETE") {
       const revoked = await workspaceAccess.revokeInvite(actor.workspaceId, parts[3], actor.id);
@@ -975,6 +999,7 @@ async function routeAccount(
   parts: string[],
   authGate: AuthGate | null,
   workspaceAccess: WorkspaceAccess | null,
+  workspaceRegistry: WorkspaceRegistry | null,
 ): Promise<void> {
   if (!authGate || !workspaceAccess) {
     throw new ApiError(501, "NOT_IMPLEMENTED", "workspace accounts are not available");
@@ -982,7 +1007,7 @@ async function routeAccount(
   const method = req.method ?? "GET";
   if (parts[1] === "invites" && parts.length === 3 && method === "GET") {
     const preview = await workspaceAccess.previewInvite(parts[2]);
-    if (!preview) throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or already used");
+    if (!preview) throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or no longer available");
     return json(res, 200, preview);
   }
   const jwt = bearerToken(req);
@@ -1016,7 +1041,9 @@ async function routeAccount(
   }
   if (parts[1] === "invites" && parts[3] === "accept" && parts.length === 4 && method === "POST") {
     const actor = await authGate.auth.identity(jwt);
-    return json(res, 200, { workspace: await workspaceAccess.acceptInvite(actor, parts[2]) });
+    const workspace = await workspaceAccess.acceptInvite(actor, parts[2]);
+    await workspaceRegistry?.addOfflineMember(workspace.id, actor.id);
+    return json(res, 200, { workspace });
   }
   throw new ApiError(404, "NOT_FOUND", "no such account route");
 }

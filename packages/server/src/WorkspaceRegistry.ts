@@ -53,6 +53,11 @@ export class WorkspaceRegistry {
     return runtime;
   }
 
+  async addOfflineMember(workspaceId: string, actorId: string): Promise<void> {
+    const runtime = this.runtimes.get(workspaceId);
+    if (runtime) await (await runtime).hub.addOfflineMember(actorId);
+  }
+
   async workspaceForAgentPairing(pairingCode: string): Promise<WorkspaceRuntime | null> {
     const [row] = await this.rootDb.sql<{ workspace_id: string }[]>`
       SELECT i.workspace_id

@@ -81,7 +81,7 @@ export function WorkspaceInviteFlow({
         <div className="elevated w-full max-w-md rounded-2xl p-8 text-center">
           <p className="mb-2 text-[11px] font-bold tracking-wider text-muted uppercase">Workspace invite</p>
           <h1 className="mb-2 text-2xl font-semibold text-body">Invite unavailable</h1>
-          <p role="alert" className="mb-6 text-sm text-muted">{error ?? "This invite is invalid, expired, or already used."}</p>
+          <p role="alert" className="mb-6 text-sm text-muted">{error ?? "This invite is invalid, expired, or no longer available."}</p>
           <button onClick={onLeave} className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover">Go to workspaces</button>
         </div>
       </div>
