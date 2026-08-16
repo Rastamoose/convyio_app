@@ -91,6 +91,9 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [account, setAccount] = useState<AccountState | undefined>(undefined);
   const [accountVersion, setAccountVersion] = useState(0);
+  // Which session token the loaded account belongs to — refreshes for the
+  // same token must not reset the UI to the loading screen.
+  const accountTokenRef = useRef<string | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null | undefined>(undefined);
   const [startupError, setStartupError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
@@ -151,11 +154,18 @@ export default function App() {
 
   useEffect(() => {
     if (!session) {
+      accountTokenRef.current = null;
       setAccount(undefined);
       setActiveWorkspaceId(undefined);
       return;
     }
-    setAccount(undefined);
+    // Only drop back to the loading screen when the signed-in identity
+    // changes. accountVersion refreshes (the lobby's 10s poll) refetch in
+    // place so the mounted UI keeps its local state.
+    if (accountTokenRef.current !== session.access_token) {
+      accountTokenRef.current = session.access_token;
+      setAccount(undefined);
+    }
     let cancelled = false;
     let retry: number | undefined;
     let attempts = 0;

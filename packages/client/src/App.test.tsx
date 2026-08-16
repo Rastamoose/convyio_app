@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -223,6 +223,44 @@ describe("App boot decision", () => {
 
     expect(await screen.findByRole("heading", { name: "Choose a workspace" })).toBeInTheDocument();
     expect(screen.getByText("No workspace memberships yet. Create one or ask for access below.")).toBeInTheDocument();
+  });
+
+  it("the lobby's background account poll does not wipe in-progress form state", async () => {
+    vi.useFakeTimers();
+    authState.session = { access_token: "tok-1" };
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/api/auth/config")) {
+        return Promise.resolve(jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }));
+      }
+      if (url.includes("/api/account")) {
+        return Promise.resolve(jsonResponse(200, {
+          status: "ok",
+          username: "hana",
+          workspaces: [],
+          accessRequests: [],
+        }));
+      }
+      return new Promise<Response>(() => {});
+    });
+    try {
+      render(<App />);
+      await act(async () => {});
+      const nameInput = screen.getByLabelText("Workspace name");
+      fireEvent.change(nameInput, { target: { value: "quiet launch" } });
+
+      // The lobby polls /api/account every 10s so approved access requests
+      // appear; that refresh must not remount the lobby or clear the forms.
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      await act(async () => {});
+
+      expect(screen.getByRole("heading", { name: "Choose a workspace" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Workspace name")).toHaveValue("quiet launch");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
