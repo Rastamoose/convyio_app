@@ -59,6 +59,10 @@ as panes, not smudges. No hard offset ("neo-brutalist") shadows, no
 `border-2` ink frames, no translate-on-press skeuomorphs: that is the
 marketing site's dialect, and it stays there.
 
+Every surface is a flat token colour — **no colour gradients anywhere**: no
+background washes, glows, or fades. Depth comes from the tonal ladder and
+hairlines, never from a gradient.
+
 ## 3. One accent, spent deliberately
 
 The amber accent is the warmest thing on screen, so it is reserved for:
@@ -112,10 +116,8 @@ Dark mode is the same decisions re-made for dark surfaces, token by token.
 It is **never pure black**: a warm charcoal ladder whose steps sit ~6-8
 luminance points apart, so depth comes from light rather than borders.
 Borders lead where shadows stop reading, status hues lift in lightness, the
-accent warms — and the dark canvas carries the one atmospheric moment, a
-faint amber glow where the sidebar sits, so the theme has a temperature
-rather than an absence of light. "It inverted okay" is not acceptance. Every
-screen is checked in both themes before a visual change is done.
+accent warms. "It inverted okay" is not acceptance. Every screen is checked
+in both themes before a visual change is done.
 
 ## 7. Personality lives in voice and moments
 
