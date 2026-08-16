@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createTestDb } from "./pgSchema";
 
-const MIGRATION = "20260816190000_multi_workspace_foundation.sql";
+const MIGRATION = "20260816200000_multi_workspace_foundation.sql";
 
 function hasPostgresCode(error: unknown, code: string): boolean {
   return (

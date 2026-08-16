@@ -308,11 +308,13 @@ export function Sidebar({
   onSelectChannel,
   onDiscuss,
   onPrefill,
+  canManageMembers = true,
 }: {
   channel: string;
   onSelectChannel: (channel: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
+  canManageMembers?: boolean;
 }) {
   const {
     participants,
@@ -470,7 +472,7 @@ export function Sidebar({
   const menuMemberRemovable = menuMember
     ? menuMember.kind === "agent"
       ? menuMemberInvite !== null
-      : menuMember.id !== self?.id
+      : canManageMembers && menuMember.id !== self?.id
     : false;
 
   const discuss = (item: BoardItem) => {

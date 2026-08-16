@@ -46,7 +46,7 @@ describe("upload HTTP endpoints", async () => {
     assert.equal(attachment.size, PNG_BYTES.length);
     assert.equal(attachment.width, 1);
     assert.equal(attachment.height, 1);
-    assert.equal(attachment.url, `/api/uploads/${attachment.id}/pixel.png`);
+    assert.equal(attachment.url, `/api/uploads/${env.db.workspaceId}/${attachment.id}/pixel.png`);
     const found = await env.attachments.get(attachment.id);
     assert.ok(found);
     assert.ok(Buffer.from(await found.blob.arrayBuffer()).equals(PNG_BYTES));
@@ -189,7 +189,7 @@ describe("attachments on the websocket", async () => {
       size: PNG_BYTES.length,
       width: 1,
       height: 1,
-      url: `/api/uploads/${attachment.id}/pixel.png`,
+      url: `/api/uploads/${env.db.workspaceId}/${attachment.id}/pixel.png`,
     });
 
     // Prefixing the server-relative url with welcome.apiUrl reaches the bytes.

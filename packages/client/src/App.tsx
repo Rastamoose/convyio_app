@@ -301,6 +301,21 @@ export default function App() {
 
   const lastAuthRecovery = useRef(0);
   const handleAuthRejected = async () => {
+    if (session) {
+      const response = await accountFetch(session.access_token, "/api/account").catch(() => null);
+      if (response?.ok) {
+        const current = (await response.json()) as AccountState;
+        if (current.status === "ok") {
+          setAccount(current);
+          if (!current.workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
+            window.localStorage.removeItem(LAST_WORKSPACE_KEY);
+            window.history.replaceState({}, "", "/");
+            setActiveWorkspaceId(null);
+          }
+          return;
+        }
+      }
+    }
     const now = Date.now();
     if (now - lastAuthRecovery.current > 30_000) {
       lastAuthRecovery.current = now;
@@ -759,6 +774,7 @@ function Workspace({
             onSelectChannel={setChannel}
             onDiscuss={discussItem}
             onPrefill={prefillText}
+            canManageMembers={activeWorkspace.role === "owner"}
           />
         </div>
         <main

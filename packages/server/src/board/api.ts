@@ -20,6 +20,7 @@ import type { WorkspaceDb } from "../db";
 import type { AccountStore } from "../auth/AccountStore";
 import type { WorkspaceAccess } from "../auth/WorkspaceAccess";
 import type { WorkspaceRegistry } from "../WorkspaceRegistry";
+import { RateLimiter } from "../auth/RateLimiter";
 import type { WorkspaceRuntime } from "../WorkspaceRuntime";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
@@ -194,6 +195,7 @@ export function createApiHandler(services: ApiServices) {
     workspaceAccess = null,
     workspaceRegistry = null,
   } = services;
+  const rateLimiter = new RateLimiter();
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/api/")) return false;
@@ -227,6 +229,7 @@ export function createApiHandler(services: ApiServices) {
     try {
       const method = req.method ?? "GET";
       const parts = url.pathname.split("/").filter(Boolean); // ["api", ...]
+      enforceRateLimit(req, parts, method, rateLimiter);
       // Fetching an upload is deliberately unauthenticated: the unguessable
       // UUID in the path is the capability (the Discord-CDN model), and <img>
       // tags cannot send Authorization headers. Everything else stays gated.
@@ -1189,6 +1192,35 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
     return JSON.parse(raw);
   } catch {
     throw new ApiError(400, "BAD_JSON", "malformed JSON body");
+  }
+}
+
+function enforceRateLimit(
+  req: IncomingMessage,
+  parts: string[],
+  method: string,
+  limiter: RateLimiter,
+): void {
+  if (parts[1] === "health") return;
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  const address = forwarded || req.socket.remoteAddress || "unknown";
+  if (!limiter.take(`${address}:all`, 600, 60_000)) {
+    throw new ApiError(429, "RATE_LIMITED", "too many requests; try again shortly");
+  }
+  let key = `${parts[1]}:${method}`;
+  let limit = 120;
+  let windowMs = 60_000;
+  if (parts[1] === "workspaces" && parts[2] === "lookup") limit = 30;
+  if (parts[1] === "workspaces" && method === "POST") {
+    key = parts[3] === "access-requests" ? "workspace-access-request" : "workspace-create";
+    limit = parts[3] === "access-requests" ? 20 : 10;
+    windowMs = 60 * 60_000;
+  }
+  if (parts[1] === "agent-pairings" || parts[1] === "agent-installations") limit = 20;
+  if (parts[1] === "toolman" && (parts[2] === "pairings" || parts[2] === "installation")) limit = 20;
+  if (parts[1] === "uploads" && method === "POST") limit = 30;
+  if (!limiter.take(`${address}:${key}`, limit, windowMs)) {
+    throw new ApiError(429, "RATE_LIMITED", "too many requests; try again shortly");
   }
 }
 

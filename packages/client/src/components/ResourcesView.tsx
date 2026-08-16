@@ -139,7 +139,7 @@ export function ResourcesView() {
           </p>
           {pairing && (
             <pre className="mb-3 overflow-x-auto rounded-md bg-subtle p-3 font-mono text-xs text-body">
-              {`convyio-toolman pair --server ${apiUrl} --code ${pairing.pairingCode}\nconvyio-toolman project add <path>\nconvyio-toolman run`}
+              {`npm install -g convyio-toolman\nconvyio-toolman pair --server ${apiUrl} --code ${pairing.pairingCode}\nconvyio-toolman project add <path>\nconvyio-toolman run`}
             </pre>
           )}
           {mine.length === 0 && !pairing ? (

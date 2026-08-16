@@ -41,7 +41,11 @@ export function useUnreads(
   }));
 
   useEffect(() => {
-    window.localStorage.setItem(unreadStorageKey(workspaceId), JSON.stringify(state.lastRead));
+    try {
+      window.localStorage.setItem(unreadStorageKey(workspaceId), JSON.stringify(state.lastRead));
+    } catch {
+      return;
+    }
   }, [state.lastRead, workspaceId]);
 
   const unreadCount = (channel: string): number => {

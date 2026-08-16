@@ -51,7 +51,11 @@ describe("sign-up/onboarding journey", async () => {
     // the first session call auto-claims it — no username step.
     const session = await get("/api/auth/session", "tok-alice");
     assert.equal(session.status, 200);
-    assert.deepEqual(session.body, { status: "ok", username: "journey1-alice" });
+    assert.deepEqual(session.body, { status: "ok", username: "journey1-alice", workspaces: [] });
+    await env.db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${env.db.workspaceId}, 'user-alice', 'member', ${Date.now()})
+    `;
 
     // Into the app: the ws join presents the same Supabase token.
     const joined = await env.join({ type: "join", kind: "human", authToken: "tok-alice" });
@@ -84,7 +88,11 @@ describe("sign-up/onboarding journey", async () => {
 
     const second = await get("/api/auth/session", "tok-bob");
     assert.equal(second.status, 200);
-    assert.deepEqual(second.body, { status: "ok", username: "journey2-bob" });
+    assert.deepEqual(second.body, { status: "ok", username: "journey2-bob", workspaces: [] });
+    await env.db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${env.db.workspaceId}, 'user-bob', 'member', ${Date.now()})
+    `;
 
     const joined = await env.join({ type: "join", kind: "human", authToken: "tok-bob" });
     assert.ok(joined.welcome, `expected a welcome, got error: ${joined.error}`);
@@ -96,7 +104,9 @@ describe("sign-up/onboarding journey", async () => {
     // A returning user goes straight to ok — no username step ever again.
     const session = await get("/api/auth/session", "tok-bob");
     assert.equal(session.status, 200);
-    assert.deepEqual(session.body, { status: "ok", username: "journey2-bob" });
+    assert.equal(session.body.status, "ok");
+    assert.equal(session.body.username, "journey2-bob");
+    assert.deepEqual(session.body.workspaces.map((workspace: { id: string }) => workspace.id), [env.db.workspaceId]);
 
     // Re-claiming with a DIFFERENT name never rebinds: idempotent 200
     // returning the original (two tabs finishing signup at once).
@@ -115,18 +125,18 @@ describe("sign-up/onboarding journey", async () => {
     assert.equal(humanProbe.status, 200);
     assert.deepEqual(humanProbe.body, { available: false, reason: "TAKEN" });
 
-    // Agents occupy the same namespace: nobody can sign up as the bot.
+    // Agents are workspace-scoped and do not reserve a human username globally.
     const bot = await env.join({ type: "join", kind: "agent", name: "botley", authToken: "agent-secret" });
     assert.ok(bot.welcome, `expected the agent to join, got error: ${bot.error}`);
     assert.equal(bot.welcome.self.name, "botley");
 
     const agentProbe = await get("/api/auth/username-available?name=botley");
     assert.equal(agentProbe.status, 200);
-    assert.deepEqual(agentProbe.body, { available: false, reason: "TAKEN" });
+    assert.deepEqual(agentProbe.body, { available: true });
 
     const agentClash = await post("/api/auth/username", "tok-carol", { username: "botley" });
-    assert.equal(agentClash.status, 409);
-    assert.equal(agentClash.body.error, "USERNAME_TAKEN");
+    assert.equal(agentClash.status, 200);
+    assert.deepEqual(agentClash.body, { username: "botley" });
   });
 
   test("duplicate desired_username falls back cleanly", async () => {
@@ -134,7 +144,7 @@ describe("sign-up/onboarding journey", async () => {
     // wins the auto-claim.
     const first = await get("/api/auth/session", "tok-dup1");
     assert.equal(first.status, 200);
-    assert.deepEqual(first.body, { status: "ok", username: "journey5-dupe" });
+    assert.deepEqual(first.body, { status: "ok", username: "journey5-dupe", workspaces: [] });
 
     // The loser is NOT an error — it falls back to the manual username step.
     const second = await get("/api/auth/session", "tok-dup2");
@@ -164,7 +174,11 @@ describe("sign-up/onboarding journey", async () => {
     // cache — one Auth instance serves HTTP and ws, so the HTTP session
     // call warms the cache the ws join reads.
     const before = await get("/api/auth/session", "tok-frank");
-    assert.deepEqual(before.body, { status: "ok", username: "journey6-frank" });
+    assert.deepEqual(before.body, { status: "ok", username: "journey6-frank", workspaces: [] });
+    await env.db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${env.db.workspaceId}, 'user-frank', 'member', ${Date.now()})
+    `;
     const firstJoin = await env.join({ type: "join", kind: "human", authToken: "tok-frank" });
     assert.ok(firstJoin.welcome, `expected a welcome, got error: ${firstJoin.error}`);
 

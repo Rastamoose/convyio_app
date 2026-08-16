@@ -156,7 +156,7 @@ describe("agent HTTP invites", async () => {
     assert.equal(success.body.agent.id, created.body.id);
     assert.equal(success.body.workspace.id, env.db.workspaceId);
     assert.equal(success.body.apiUrl, env.baseUrl);
-    assert.equal(success.body.wsUrl, env.baseUrl.replace("http", "ws"));
+    assert.equal(success.body.wsUrl, `${env.baseUrl.replace("http", "ws")}/ws/${env.db.workspaceId}`);
     const [installationCount] = await env.db.sql<{ count: number }[]>`
       SELECT count(*) AS count FROM agent_installations WHERE invite_id = ${created.body.id}
     `;
@@ -247,8 +247,12 @@ describe("agent HTTP invites", async () => {
     assert.equal(second.status, 409);
   });
 
-  test("agent names cannot match a human", async () => {
+  test("agent names cannot match a human member", async () => {
     const human = await env.actor("human", "dana");
+    await env.db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${env.db.workspaceId}, ${human.actor.id}, 'member', ${Date.now()})
+    `;
     const conflict = await env.api("POST", "/api/agents", human.token, { name: "dana", provider: PROVIDER });
     assert.equal(conflict.status, 409);
   });

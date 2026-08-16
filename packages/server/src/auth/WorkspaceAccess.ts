@@ -13,6 +13,9 @@ import type { Sql } from "../db";
 import type { AccountIdentity, AccountStore } from "./AccountStore";
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_OWNED_WORKSPACES = 20;
+const MAX_PENDING_REQUESTS = 20;
+const MAX_ACTIVE_INVITES = 50;
 const WORKSPACE_NAME_PATTERN = /^[^\p{C}]{1,80}$/u;
 
 export class WorkspaceAccess {
@@ -31,6 +34,14 @@ export class WorkspaceAccess {
     };
     await this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
+      await sql`SELECT id FROM actors WHERE id = ${actor.id} FOR UPDATE`;
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM workspace_members
+        WHERE actor_id = ${actor.id} AND role = 'owner'
+      `;
+      if (count >= MAX_OWNED_WORKSPACES) {
+        throw new ApiError(409, "WORKSPACE_LIMIT", `an account can own at most ${MAX_OWNED_WORKSPACES} workspaces`);
+      }
       await sql`
         INSERT INTO workspaces (id, name, public_code, created_by, created_at, updated_at)
         VALUES (${workspace.id}, ${workspace.name}, ${workspace.publicCode}, ${actor.id}, ${workspace.createdAt}, ${workspace.createdAt})
@@ -79,6 +90,21 @@ export class WorkspaceAccess {
     const now = Date.now();
     return this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
+      const [existing] = await sql`
+        SELECT id FROM workspace_access_requests
+        WHERE workspace_id = ${workspace.id} AND requester_id = ${actor.id} AND status = 'pending'
+        FOR UPDATE
+      `;
+      if (!existing) {
+        await sql`SELECT id FROM actors WHERE id = ${actor.id} FOR UPDATE`;
+        const [{ count }] = await sql<{ count: number }[]>`
+          SELECT count(*)::int AS count FROM workspace_access_requests
+          WHERE requester_id = ${actor.id} AND status = 'pending'
+        `;
+        if (count >= MAX_PENDING_REQUESTS) {
+          throw new ApiError(409, "ACCESS_REQUEST_LIMIT", `an account can have at most ${MAX_PENDING_REQUESTS} pending requests`);
+        }
+      }
       const [row] = await sql<AccessRequestRow[]>`
         INSERT INTO workspace_access_requests (
           id, workspace_id, requester_id, message, status, created_at, resolved_by, resolved_at
@@ -177,6 +203,15 @@ export class WorkspaceAccess {
     const now = Date.now();
     return this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
+      await sql`SELECT id FROM workspaces WHERE id = ${workspaceId} FOR UPDATE`;
+      const [{ count }] = await sql<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM workspace_invites
+        WHERE workspace_id = ${workspaceId}
+          AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at > ${now}
+      `;
+      if (count >= MAX_ACTIVE_INVITES) {
+        throw new ApiError(409, "INVITE_LIMIT", `a workspace can have at most ${MAX_ACTIVE_INVITES} active invites`);
+      }
       const [row] = await sql<InviteRow[]>`
         INSERT INTO workspace_invites (
           id, workspace_id, token_hash, created_by, created_at, expires_at,
@@ -266,7 +301,7 @@ export class WorkspaceAccess {
         await sql`
           UPDATE workspace_invites
           SET consumed_by = ${actor.id}, consumed_at = ${now}
-          WHERE token_hash = ${hashToken(token)}
+          WHERE token_hash = ${hashToken(token)} AND workspace_id = ${invite.workspace_id}
         `;
       }
       await sql`

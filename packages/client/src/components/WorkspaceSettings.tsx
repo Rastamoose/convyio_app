@@ -224,7 +224,7 @@ export function WorkspaceSettings({
       <section role="dialog" aria-modal="true" aria-labelledby="workspace-settings-title" className="elevated flex max-h-[88vh] w-full max-w-2xl animate-pop-in flex-col rounded-2xl">
         <header className="flex items-start gap-4 border-b border-divider px-6 py-5">
           <div className="min-w-0 flex-1">
-            <p className="mb-1 text-[11px] font-bold tracking-wider text-muted uppercase">Owner settings</p>
+            <p className="mb-1 text-[11px] font-bold tracking-wider text-muted uppercase">Workspace settings</p>
             <h1 id="workspace-settings-title" className="truncate text-xl font-semibold text-body">{summary.name}</h1>
           </div>
           <button onClick={onClose} aria-label="Close workspace settings" className="rounded-md p-1.5 text-muted hover:bg-subtle hover:text-body">×</button>

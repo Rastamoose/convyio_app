@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -56,7 +56,7 @@ vi.mock("./ws", () => {
           self,
           history: historySeed,
           participants: [self],
-          channels: channelsSeed,
+          channels: [...channelsSeed],
           archivedChannels: [],
           pinnedChannels: [],
           demoChannels: [],
@@ -153,6 +153,7 @@ describe("App boot decision", () => {
     authState.session = null;
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
   });
@@ -257,6 +258,7 @@ describe("Workspace switching", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
   });
@@ -289,6 +291,7 @@ describe("Workspace composer", () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
   });
@@ -433,6 +436,7 @@ describe("Workspace keyboard navigation", () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     fetchMock.mockReset();
   });

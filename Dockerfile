@@ -7,6 +7,7 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
 COPY packages/client/package.json packages/client/
 COPY packages/agent/package.json packages/agent/
+COPY packages/toolman/package.json packages/toolman/
 RUN npm ci
 COPY tsconfig.base.json ./
 COPY packages ./packages

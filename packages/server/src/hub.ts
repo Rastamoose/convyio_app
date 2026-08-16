@@ -37,6 +37,7 @@ import {
   type WorkspaceInfo,
 } from "@workspace/shared";
 import { ApiError } from "./board/BoardService";
+import { RateLimiter } from "./auth/RateLimiter";
 import type { InteractionStore } from "./chat/InteractionStore";
 import { RunRequestAccessError, type AgentWorkStore } from "./chat/AgentWorkStore";
 import type { Attachments } from "./chat/Attachments";
@@ -115,6 +116,7 @@ export class Hub {
 
   /** Runs paused on a human decision, keyed by interaction request id. */
   private pendingApprovals = new Map<string, (verdict: "approved" | "denied" | "expired") => void>();
+  private rateLimiter = new RateLimiter();
   /** Folder-owner approvals for the rest of a conversation, keyed by agent:folder:conversation. */
   private folderLeases = new Map<string, string>();
 
@@ -353,6 +355,10 @@ export class Hub {
     }
     switch (event.type) {
       case "message": {
+        if (!this.rateLimiter.take(`${participant.id}:message`, 60, 10_000)) {
+          this.send(conn, { type: "error", error: "message rate limit exceeded" });
+          break;
+        }
         const channel = event.channel ?? "general";
         if (!(await this.channels.exists(channel))) {
           this.send(conn, { type: "error", error: `unknown channel: ${channel}` });

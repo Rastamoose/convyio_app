@@ -100,7 +100,7 @@ describe("AddAgentModal", () => {
 
     await user.click(named("Setup prompt"));
     expect(
-      screen.getByText(/Pair this Convyio agent/),
+      screen.getByText(/Install the Convyio agent CLI/),
     ).toBeInTheDocument();
 
     await user.click(named("CLI"));

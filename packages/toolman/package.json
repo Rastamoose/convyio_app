@@ -1,7 +1,13 @@
 {
-  "name": "@workspace/toolman",
+  "name": "convyio-toolman",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -11,14 +17,15 @@
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --banner:js=\"import { createRequire as __convyRequire } from 'node:module';const require = __convyRequire(import.meta.url);\" --outfile=dist/cli.js && chmod 755 dist/cli.js",
+    "prepack": "npm run build",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@workspace/shared": "*",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@workspace/shared": "*",
     "@types/node": "^22.10.5",
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.2"
