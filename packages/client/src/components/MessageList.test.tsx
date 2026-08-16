@@ -88,6 +88,7 @@ const interaction = (overrides: Partial<InteractionRequest> = {}): InteractionRe
   summary: "write_file billing/round.ts",
   capability: "file_write",
   boardItemRef: "task-1",
+  targetActorId: null,
   status: "pending",
   resolvedBy: null,
   createdAt: Date.now(),

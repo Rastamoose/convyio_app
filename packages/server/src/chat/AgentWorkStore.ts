@@ -525,7 +525,8 @@ export class AgentWorkStore {
 
   private async requireChannel(sql: Sql, channelId: string): Promise<ChannelRow> {
     const [channel] = await sql<ChannelRow[]>`
-      SELECT id, name FROM channels WHERE id = ${channelId}
+      SELECT id, name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND id = ${channelId}
     `;
     if (!channel) throw new RunRequestAccessError("unknown channel");
     return channel;

@@ -34,7 +34,9 @@ export class MessageStore {
    *  recentByChannel() instead so history stays bounded. */
   async list(): Promise<ChatMessage[]> {
     const rows = await this.store.sql<MessageRow[]>`
-      SELECT * FROM messages ORDER BY created_at ASC, seq ASC
+      SELECT * FROM messages
+      WHERE workspace_id = ${this.store.workspaceId}
+      ORDER BY created_at ASC, seq ASC
     `;
     const reactions = await this.reactionsByMessage();
     return rows.map((row) => toMessage(row, reactions.get(row.id)));
@@ -89,11 +91,14 @@ export class MessageStore {
     const capped =
       before === undefined
         ? await this.store.sql<MessageRow[]>`
-            SELECT * FROM messages WHERE channel = ${channel}
+            SELECT * FROM messages
+            WHERE workspace_id = ${this.store.workspaceId} AND channel = ${channel}
             ORDER BY created_at DESC, seq DESC LIMIT ${limit}
           `
         : await this.store.sql<MessageRow[]>`
-            SELECT * FROM messages WHERE channel = ${channel} AND created_at < ${before}
+            SELECT * FROM messages
+            WHERE workspace_id = ${this.store.workspaceId}
+              AND channel = ${channel} AND created_at < ${before}
             ORDER BY created_at DESC, seq DESC LIMIT ${limit}
           `;
     if (capped.length === 0 || capped.length < limit) return capped.reverse();
@@ -101,7 +106,10 @@ export class MessageStore {
     // The LIMIT may have cut mid-tie; top up with the rest of that group.
     const boundary = capped[capped.length - 1].created_at;
     const tied = await this.store.sql<MessageRow[]>`
-      SELECT * FROM messages WHERE channel = ${channel} AND created_at = ${boundary} ORDER BY seq DESC
+      SELECT * FROM messages
+      WHERE workspace_id = ${this.store.workspaceId}
+        AND channel = ${channel} AND created_at = ${boundary}
+      ORDER BY seq DESC
     `;
     const withoutBoundary = capped.filter((row) => row.created_at !== boundary);
     return [...withoutBoundary, ...tied].reverse();
@@ -116,7 +124,8 @@ export class MessageStore {
   async getManyInTransaction(sql: Sql, ids: string[]): Promise<ChatMessage[]> {
     if (ids.length === 0) return [];
     const rows = await sql<MessageRow[]>`
-      SELECT * FROM messages WHERE id IN ${sql(ids)}
+      SELECT * FROM messages
+      WHERE workspace_id = ${this.store.workspaceId} AND id IN ${sql(ids)}
     `;
     const byId = new Map(rows.map((row) => [row.id, row]));
     const reactions = await this.reactionsForIds(ids, sql);
@@ -147,10 +156,10 @@ export class MessageStore {
     if (!channelId) throw new Error("message channelId is required");
     await sql`
       INSERT INTO messages
-        (id, author_id, author_name, author_kind, content, channel, channel_id,
+        (id, workspace_id, author_id, author_name, author_kind, content, channel, channel_id,
          mentions, run_id, trace, attachments, reply_to_id, created_at)
       VALUES (
-        ${message.id}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
+        ${message.id}, ${this.store.workspaceId}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
         ${message.content}, ${message.channel ?? "general"}, ${channelId},
         ${sql.json(message.mentions ?? [])}, ${message.runId ?? null},
         ${message.trace ? JSON.stringify(message.trace) : null},
@@ -180,7 +189,7 @@ export class MessageStore {
       const editedAt = Date.now();
       const [updated] = await sql<MessageRow[]>`
         UPDATE messages SET content = ${content}, edited_at = ${editedAt}
-        WHERE id = ${id} RETURNING *
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${id} RETURNING *
       `;
       if (!updated) return null;
       await this.appendMutationEvent(sql, updated, actorId, "message.edited", {
@@ -197,11 +206,17 @@ export class MessageStore {
   async delete(id: string): Promise<void> {
     await this.store.transaction(async (sql) => {
       const [message] = await sql<MessageRow[]>`
-        SELECT * FROM messages WHERE id = ${id} FOR UPDATE
+        SELECT * FROM messages
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${id} FOR UPDATE
       `;
       if (!message) return;
-      await sql`DELETE FROM message_reactions WHERE message_id = ${id}`;
-      await sql`DELETE FROM messages WHERE id = ${id}`;
+      await sql`
+        DELETE FROM message_reactions
+        WHERE workspace_id = ${this.store.workspaceId} AND message_id = ${id}
+      `;
+      await sql`
+        DELETE FROM messages WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
+      `;
       await this.appendMutationEvent(sql, message, message.author_id, "message.deleted", {
         messageId: id,
       });
@@ -217,23 +232,26 @@ export class MessageStore {
   ): Promise<"added" | "noop" | "capped"> {
     return this.store.transaction(async (sql) => {
       const [message] = await sql<MessageRow[]>`
-        SELECT * FROM messages WHERE id = ${messageId} FOR UPDATE
+        SELECT * FROM messages
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${messageId} FOR UPDATE
       `;
       if (!message) return "noop";
       const [emojiPresent] = await sql`
         SELECT 1 FROM message_reactions
-        WHERE message_id = ${messageId} AND emoji = ${emoji} LIMIT 1
+        WHERE workspace_id = ${this.store.workspaceId}
+          AND message_id = ${messageId} AND emoji = ${emoji} LIMIT 1
       `;
       if (!emojiPresent) {
         const [{ n }] = await sql<{ n: number }[]>`
           SELECT COUNT(DISTINCT emoji)::int AS n
-          FROM message_reactions WHERE message_id = ${messageId}
+          FROM message_reactions
+          WHERE workspace_id = ${this.store.workspaceId} AND message_id = ${messageId}
         `;
         if (n >= MAX_REACTION_EMOJI) return "capped";
       }
       const [inserted] = await sql`
-        INSERT INTO message_reactions (message_id, emoji, actor_id, actor_name, created_at)
-        VALUES (${messageId}, ${emoji}, ${actor.id}, ${actor.name}, ${Date.now()})
+        INSERT INTO message_reactions (workspace_id, message_id, emoji, actor_id, actor_name, created_at)
+        VALUES (${this.store.workspaceId}, ${messageId}, ${emoji}, ${actor.id}, ${actor.name}, ${Date.now()})
         ON CONFLICT (message_id, emoji, actor_id) DO NOTHING
         RETURNING message_id
       `;
@@ -252,12 +270,14 @@ export class MessageStore {
   async removeReaction(messageId: string, emoji: string, actorId: string): Promise<boolean> {
     return this.store.transaction(async (sql) => {
       const [message] = await sql<MessageRow[]>`
-        SELECT * FROM messages WHERE id = ${messageId} FOR UPDATE
+        SELECT * FROM messages
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${messageId} FOR UPDATE
       `;
       if (!message) return false;
       const [removed] = await sql`
         DELETE FROM message_reactions
-        WHERE message_id = ${messageId} AND emoji = ${emoji} AND actor_id = ${actorId}
+        WHERE workspace_id = ${this.store.workspaceId}
+          AND message_id = ${messageId} AND emoji = ${emoji} AND actor_id = ${actorId}
         RETURNING message_id
       `;
       if (!removed) return false;
@@ -272,7 +292,9 @@ export class MessageStore {
 
   private async reactionsFor(messageId: string): Promise<MessageReaction[] | undefined> {
     const rows = await this.store.sql<ReactionRow[]>`
-      SELECT * FROM message_reactions WHERE message_id = ${messageId} ORDER BY created_at ASC, seq ASC
+      SELECT * FROM message_reactions
+      WHERE workspace_id = ${this.store.workspaceId} AND message_id = ${messageId}
+      ORDER BY created_at ASC, seq ASC
     `;
     return rows.length > 0 ? groupReactions(rows) : undefined;
   }
@@ -280,7 +302,9 @@ export class MessageStore {
   /** All reactions grouped per message: one query, so list() never goes N+1. */
   private async reactionsByMessage(): Promise<Map<string, MessageReaction[]>> {
     const rows = await this.store.sql<ReactionRow[]>`
-      SELECT * FROM message_reactions ORDER BY created_at ASC, seq ASC
+      SELECT * FROM message_reactions
+      WHERE workspace_id = ${this.store.workspaceId}
+      ORDER BY created_at ASC, seq ASC
     `;
     return groupByMessage(rows);
   }
@@ -293,7 +317,8 @@ export class MessageStore {
   ): Promise<Map<string, MessageReaction[]>> {
     if (ids.length === 0) return new Map();
     const rows = await sql<ReactionRow[]>`
-      SELECT * FROM message_reactions WHERE message_id IN ${sql(ids)}
+      SELECT * FROM message_reactions
+      WHERE workspace_id = ${this.store.workspaceId} AND message_id IN ${sql(ids)}
       ORDER BY created_at ASC, seq ASC
     `;
     return groupByMessage(rows);
@@ -307,7 +332,8 @@ export class MessageStore {
   ): Promise<ChatMessage | null> {
     const row = await this.store.transaction(async (sql) => {
       const [current] = await sql<MessageRow[]>`
-        SELECT * FROM messages WHERE id = ${id} FOR UPDATE
+        SELECT * FROM messages
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${id} FOR UPDATE
       `;
       if (!current) return null;
       if ((current.pinned_at !== null) === pinned) return current;
@@ -315,7 +341,7 @@ export class MessageStore {
       const pinnedAt = pinned ? Date.now() : null;
       const [updated] = await sql<MessageRow[]>`
         UPDATE messages SET pinned_at = ${pinnedAt}, pinned_by = ${pinned ? actor.name : null}
-        WHERE id = ${id} RETURNING *
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${id} RETURNING *
       `;
       await this.appendMutationEvent(
         sql,
@@ -335,12 +361,19 @@ export class MessageStore {
       if (channel) {
         await sql`
           DELETE FROM message_reactions
-          WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ${channel.id})
+          WHERE workspace_id = ${this.store.workspaceId}
+            AND message_id IN (
+              SELECT id FROM messages
+              WHERE workspace_id = ${this.store.workspaceId} AND channel_id = ${channel.id}
+            )
         `;
-        await sql`DELETE FROM messages WHERE channel_id = ${channel.id}`;
+        await sql`
+          DELETE FROM messages
+          WHERE workspace_id = ${this.store.workspaceId} AND channel_id = ${channel.id}
+        `;
       } else {
-        await sql`DELETE FROM message_reactions`;
-        await sql`DELETE FROM messages`;
+        await sql`DELETE FROM message_reactions WHERE workspace_id = ${this.store.workspaceId}`;
+        await sql`DELETE FROM messages WHERE workspace_id = ${this.store.workspaceId}`;
       }
       await this.threadEvents.append(sql, {
         workspaceId: this.store.workspaceId,

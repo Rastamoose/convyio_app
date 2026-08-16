@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import type { BoardItem, ChatMessage } from "@workspace/shared";
+import type { BoardItem, ChatMessage, WorkspaceAccessRequest, WorkspaceSummary } from "@workspace/shared";
 import { WorkspaceProvider, useWorkspace } from "./hooks/WorkspaceContext";
 import { LoginScreen, MIN_PASSWORD_LENGTH } from "./components/LoginScreen";
 import { Sidebar } from "./components/Sidebar";
@@ -18,6 +18,19 @@ import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
 import { supabase } from "./lib/supabase";
 import { useTheme } from "./hooks/useTheme";
+import { WorkspaceLobby } from "./components/WorkspaceLobby";
+import { WorkspaceInviteFlow } from "./components/WorkspaceInviteFlow";
+import { WorkspaceSettings } from "./components/WorkspaceSettings";
+import { accountFetch, type WorkspaceAccount } from "./lib/accountApi";
+import {
+  chooseInitialWorkspace,
+  invitePath,
+  LAST_WORKSPACE_KEY,
+  pendingInviteToken,
+  PENDING_INVITE_KEY,
+  workspaceIdFromPath,
+  workspacePath,
+} from "./lib/workspaceNavigation";
 
 const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
@@ -67,26 +80,31 @@ function StartupScreen({ error }: { error: string | null }) {
   );
 }
 
+type ResolvedAccount = { status: "ok" } & WorkspaceAccount;
+type AccountState = ResolvedAccount | { status: "needs_username" };
+
 export default function App() {
   const [authMode, setAuthMode] = useState<{
     googleAuthEnabled: boolean;
     emailAuthEnabled: boolean;
   } | null>(null);
-  // undefined = still resolving the initial session; null = signed out.
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  // "unknown" = still checking whether this session has a bound actor yet —
-  // see the race note above for why WorkspaceProvider must never render
-  // until this resolves to "ok".
-  const [usernameStatus, setUsernameStatus] = useState<
-    "unknown" | "ok" | "needs_username" | "removed"
-  >("unknown");
-  // Why startup is not finishing, once it has been failing long enough that
-  // "Connecting…" is a lie. Retries continue underneath; this only stops the
-  // spinner from hiding a server that is never going to answer.
+  const [account, setAccount] = useState<AccountState | undefined>(undefined);
+  const [accountVersion, setAccountVersion] = useState(0);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null | undefined>(undefined);
   const [startupError, setStartupError] = useState<string | null>(null);
-  // Set when the user arrives from a password-reset email; gates the whole
-  // app behind ResetPasswordScreen until a new password is saved.
   const [recovering, setRecovering] = useState(false);
+  const [inviteToken, setInviteToken] = useState<string | null>(() => {
+    try {
+      const token = pendingInviteToken(window.location.pathname, window.sessionStorage);
+      if (token && window.location.pathname === "/") {
+        window.history.replaceState({}, "", `${invitePath(token)}${window.location.search}${window.location.hash}`);
+      }
+      return token;
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -95,28 +113,24 @@ export default function App() {
     const load = async () => {
       attempts += 1;
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/auth/config`);
-        // A non-OK response still parses as JSON (`{error: "INTERNAL"}`), and
-        // accepting it would silently claim sign-in is unconfigured. Only a
-        // 200 describes the auth setup.
-        if (!res.ok) throw new Error(`server returned ${res.status}`);
-        const data = (await res.json()) as { googleAuthEnabled: boolean; emailAuthEnabled: boolean };
+        const response = await fetch(`${apiBaseUrl()}/api/auth/config`);
+        if (!response.ok) throw new Error(`server returned ${response.status}`);
+        const data = (await response.json()) as { googleAuthEnabled: boolean; emailAuthEnabled: boolean };
         if (!cancelled) {
           setAuthMode(data);
           setStartupError(null);
         }
         return;
-      } catch (err) {
+      } catch (error) {
         if (cancelled) return;
         if (attempts >= STARTUP_PATIENCE) {
           setStartupError(
-            err instanceof Error && err.message.startsWith("server returned")
-              ? `The server is up but not answering correctly (${err.message}).`
+            error instanceof Error && error.message.startsWith("server returned")
+              ? `The server is up but not answering correctly (${error.message}).`
               : "Cannot reach the server.",
           );
         }
       }
-      // Server not up yet (dev restarts): keep asking, it decides the flow.
       if (!cancelled) retry = window.setTimeout(() => void load(), 2000);
     };
     void load();
@@ -137,10 +151,11 @@ export default function App() {
 
   useEffect(() => {
     if (!session) {
-      setUsernameStatus("unknown");
+      setAccount(undefined);
+      setActiveWorkspaceId(undefined);
       return;
     }
-    setUsernameStatus("unknown");
+    setAccount(undefined);
     let cancelled = false;
     let retry: number | undefined;
     let attempts = 0;
@@ -148,29 +163,29 @@ export default function App() {
       attempts += 1;
       let failure = "Cannot reach the server.";
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/auth/session`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const response = await accountFetch(session.access_token, "/api/account");
         if (cancelled) return;
-        if (res.ok) {
-          const data = (await res.json()) as { status: "ok" | "needs_username" | "removed" };
-          setUsernameStatus(data.status);
+        if (response.ok) {
+          const data = (await response.json()) as
+            | { status: "needs_username" }
+            | ({ status: "ok"; accessRequests?: WorkspaceAccessRequest[] } & Omit<WorkspaceAccount, "accessRequests">);
+          setAccount(
+            data.status === "ok"
+              ? { ...data, accessRequests: data.accessRequests ?? [] }
+              : data,
+          );
           setStartupError(null);
           return;
         }
-        if (res.status === 401) {
-          // Supabase examined the token and rejected it: this session is dead.
+        if (response.status === 401) {
           void supabase.auth.signOut();
           return;
         }
-        failure = `The server could not resolve this session (HTTP ${res.status}).`;
+        failure = `The server could not resolve this session (HTTP ${response.status}).`;
       } catch {
-        // Server unreachable — fall through to the retry below.
+        failure = "Cannot reach the server.";
       }
       if (cancelled) return;
-      // 503 (Supabase hiccup) or a dev-server restart: the token is not at
-      // fault, so keep asking. But a retry loop that never succeeds must not
-      // masquerade as "Connecting…" forever — after a while, say what broke.
       if (attempts >= STARTUP_PATIENCE) setStartupError(failure);
       retry = window.setTimeout(() => void load(), 2000);
     };
@@ -179,29 +194,125 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(retry);
     };
-  }, [session?.access_token]);
+  }, [session?.access_token, accountVersion]);
 
-  // A refused ws join usually means the access token went stale while the
-  // tab slept: refresh once and let the new token reconnect on its own. Sign
-  // out only when the refresh fails — or when a recent recovery didn't stick,
-  // so a genuinely revoked account can't refresh-reconnect in a loop.
+  useEffect(() => {
+    if (!account || account.status !== "ok" || inviteToken) return;
+    setActiveWorkspaceId((current) => {
+      if (current !== undefined) {
+        if (current === null || account.workspaces.some((workspace) => workspace.id === current)) {
+          return current;
+        }
+      }
+      const selected = chooseInitialWorkspace(
+        account.workspaces,
+        window.location.pathname,
+        window.localStorage.getItem(LAST_WORKSPACE_KEY),
+      );
+      if (selected) {
+        window.localStorage.setItem(LAST_WORKSPACE_KEY, selected);
+        window.history.replaceState({}, "", workspacePath(selected));
+      } else if (workspaceIdFromPath(window.location.pathname)) {
+        window.history.replaceState({}, "", "/");
+      }
+      return selected;
+    });
+  }, [account, inviteToken]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const routeInvite = window.location.pathname.match(/^\/invite\/([^/]+)\/?$/);
+      if (routeInvite) {
+        const token = decodeURIComponent(routeInvite[1]);
+        window.sessionStorage.setItem(PENDING_INVITE_KEY, token);
+        setInviteToken(token);
+        setActiveWorkspaceId(null);
+        return;
+      }
+      setInviteToken(null);
+      if (!account || account.status !== "ok") return;
+      const routeWorkspaceId = workspaceIdFromPath(window.location.pathname);
+      setActiveWorkspaceId(
+        routeWorkspaceId && account.workspaces.some((workspace) => workspace.id === routeWorkspaceId)
+          ? routeWorkspaceId
+          : null,
+      );
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [account]);
+
+  const openWorkspace = useCallback((workspaceId: string, replace = false) => {
+    window.localStorage.setItem(LAST_WORKSPACE_KEY, workspaceId);
+    const path = workspacePath(workspaceId);
+    if (replace) window.history.replaceState({}, "", path);
+    else window.history.pushState({}, "", path);
+    setActiveWorkspaceId(workspaceId);
+  }, []);
+
+  const openLobby = useCallback(() => {
+    window.localStorage.removeItem(LAST_WORKSPACE_KEY);
+    window.history.pushState({}, "", "/");
+    setActiveWorkspaceId(null);
+  }, []);
+
+  const refreshAccount = useCallback(() => setAccountVersion((version) => version + 1), []);
+
+  useEffect(() => {
+    if (!session || account?.status !== "ok" || activeWorkspaceId !== null || inviteToken) return;
+    const interval = window.setInterval(refreshAccount, 10_000);
+    return () => window.clearInterval(interval);
+  }, [session?.access_token, account?.status, activeWorkspaceId, inviteToken, refreshAccount]);
+
+  const addWorkspace = (workspace: WorkspaceSummary) => {
+    setAccount((current) => current?.status === "ok"
+      ? { ...current, workspaces: [...current.workspaces.filter((item) => item.id !== workspace.id), workspace] }
+      : current);
+    openWorkspace(workspace.id);
+  };
+
+  const updateRequest = (request: WorkspaceAccessRequest) => {
+    setAccount((current) => current?.status === "ok"
+      ? {
+          ...current,
+          accessRequests: [
+            request,
+            ...current.accessRequests.filter((item) => item.id !== request.id),
+          ],
+        }
+      : current);
+  };
+
+  const leaveInvite = () => {
+    window.sessionStorage.removeItem(PENDING_INVITE_KEY);
+    window.history.replaceState({}, "", "/");
+    setInviteToken(null);
+    setActiveWorkspaceId(null);
+  };
+
+  const acceptInvite = (workspace: WorkspaceSummary) => {
+    window.sessionStorage.removeItem(PENDING_INVITE_KEY);
+    setInviteToken(null);
+    setAccount((current) => current?.status === "ok"
+      ? { ...current, workspaces: [...current.workspaces.filter((item) => item.id !== workspace.id), workspace] }
+      : current);
+    openWorkspace(workspace.id, true);
+  };
+
   const lastAuthRecovery = useRef(0);
   const handleAuthRejected = async () => {
     const now = Date.now();
     if (now - lastAuthRecovery.current > 30_000) {
       lastAuthRecovery.current = now;
       const { data, error } = await supabase.auth.refreshSession();
-      if (!error && data.session) return; // new access_token → ws reconnects
+      if (!error && data.session) return;
     }
     void supabase.auth.signOut();
   };
 
-  if (!authMode || session === undefined) {
-    return <StartupScreen error={startupError} />;
-  }
+  if (!authMode || session === undefined) return <StartupScreen error={startupError} />;
 
   const authEnabled = authMode.googleAuthEnabled || authMode.emailAuthEnabled;
-
   if (!authEnabled) {
     return (
       <div className="app-frame flex h-full items-center justify-center">
@@ -209,9 +320,7 @@ export default function App() {
           <h1 className="mb-2 text-2xl font-semibold text-body">Sign-in unavailable</h1>
           <p className="text-muted">
             This workspace isn't configured for sign-in yet. Contact{" "}
-            <a href="mailto:hello@convyio.com" className="font-medium text-accent hover:underline">
-              hello@convyio.com
-            </a>{" "}
+            <a href="mailto:hello@convyio.com" className="font-medium text-accent hover:underline">hello@convyio.com</a>{" "}
             for access.
           </p>
         </div>
@@ -219,54 +328,70 @@ export default function App() {
     );
   }
 
-  if (!session) {
+  if (recovering && session) return <ResetPasswordScreen onDone={() => setRecovering(false)} />;
+
+  if (inviteToken && (!session || account?.status === "ok")) {
     return (
-      <LoginScreen
+      <WorkspaceInviteFlow
+        token={inviteToken}
+        accessToken={session?.access_token ?? null}
         googleAuthEnabled={authMode.googleAuthEnabled}
         emailAuthEnabled={authMode.emailAuthEnabled}
+        onAccepted={acceptInvite}
+        onLeave={leaveInvite}
       />
     );
   }
 
-  if (recovering) {
-    return <ResetPasswordScreen onDone={() => setRecovering(false)} />;
+  if (!session) {
+    return <LoginScreen googleAuthEnabled={authMode.googleAuthEnabled} emailAuthEnabled={authMode.emailAuthEnabled} />;
   }
 
-  if (usernameStatus === "unknown") {
-    return <StartupScreen error={startupError} />;
-  }
+  if (!account) return <StartupScreen error={startupError} />;
 
-  if (usernameStatus === "needs_username") {
+  if (account.status === "needs_username") {
     return (
       <UsernameStep
         accessToken={session.access_token}
-        onDone={() => setUsernameStatus("ok")}
+        onDone={refreshAccount}
         onBack={() => void supabase.auth.signOut()}
       />
     );
   }
 
-  if (usernameStatus === "removed") {
+  if (activeWorkspaceId === undefined) return <StartupScreen error={startupError} />;
+
+  const activeWorkspace = activeWorkspaceId
+    ? account.workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null
+    : null;
+
+  if (!activeWorkspace) {
     return (
-      <div className="app-frame flex h-full items-center justify-center">
-        <div className="elevated w-96 rounded-2xl p-8 text-center">
-          <h1 className="mb-2 text-2xl font-semibold text-body">No workspaces here</h1>
-          <p className="text-muted">
-            You've been removed from this workspace, so there's nothing to show you.
-            Contact whoever removed you if you think this is a mistake.
-          </p>
-        </div>
-      </div>
+      <WorkspaceLobby
+        account={account}
+        accessToken={session.access_token}
+        onOpen={openWorkspace}
+        onWorkspaceCreated={addWorkspace}
+        onRequestCreated={updateRequest}
+        onSignOut={() => void supabase.auth.signOut()}
+      />
     );
   }
 
   return (
     <WorkspaceProvider
-      credentials={{ authToken: session.access_token }}
+      key={activeWorkspace.id}
+      credentials={{ workspaceId: activeWorkspace.id, authToken: session.access_token }}
       onAuthRejected={() => void handleAuthRejected()}
       onSignOut={() => void supabase.auth.signOut()}
     >
-      <Workspace />
+      <Workspace
+        activeWorkspace={activeWorkspace}
+        workspaces={account.workspaces}
+        onSelectWorkspace={openWorkspace}
+        onOpenLobby={openLobby}
+        onAccountRefresh={refreshAccount}
+      />
     </WorkspaceProvider>
   );
 }
@@ -333,7 +458,7 @@ function UsernameStep({
         </p>
         <label
           htmlFor="username"
-          className="mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase"
+          className="mb-2 block text-[11px] font-bold tracking-wider text-muted uppercase"
         >
           Username
         </label>
@@ -390,7 +515,7 @@ function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
 
   const fieldClass =
     "w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent";
-  const labelClass = "mb-2 block font-mono text-[11px] font-bold tracking-wider text-muted uppercase";
+  const labelClass = "mb-2 block text-[11px] font-bold tracking-wider text-muted uppercase";
 
   return (
     <div className="app-frame flex h-full items-center justify-center">
@@ -452,7 +577,19 @@ function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
 }
 
 /** The workspace shell: view/channel navigation and cross-view jumps. */
-function Workspace() {
+function Workspace({
+  activeWorkspace,
+  workspaces,
+  onSelectWorkspace,
+  onOpenLobby,
+  onAccountRefresh,
+}: {
+  activeWorkspace: WorkspaceSummary;
+  workspaces: WorkspaceSummary[];
+  onSelectWorkspace: (workspaceId: string) => void;
+  onOpenLobby: () => void;
+  onAccountRefresh: () => void;
+}) {
   const workspace = useWorkspace();
   const [channel, setChannel] = useState("general");
   const [prefill, setPrefill] = useState<Prefill | null>(null);
@@ -464,6 +601,7 @@ function Workspace() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.localStorage.getItem("convyio:sidebar-open") !== "0",
   );
@@ -601,6 +739,11 @@ function Workspace() {
         onSetView={setView}
         onToggleQueue={() => setQueueOpen((o) => !o)}
         channel={channel}
+        activeWorkspace={activeWorkspace}
+        workspaces={workspaces}
+        onSelectWorkspace={onSelectWorkspace}
+        onOpenLobby={onOpenLobby}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="flex min-h-0 flex-1">
         {/* The sidebar rests on the canvas, flush to the window edge;
@@ -706,6 +849,14 @@ function Workspace() {
           unreadCount={workspace.unreadCount}
           onSelect={selectFromSwitcher}
           onClose={() => setSwitcherOpen(false)}
+        />
+      )}
+      {settingsOpen && (
+        <WorkspaceSettings
+          summary={activeWorkspace}
+          onClose={() => setSettingsOpen(false)}
+          onAccountRefresh={onAccountRefresh}
+          onLeft={onOpenLobby}
         />
       )}
     </div>

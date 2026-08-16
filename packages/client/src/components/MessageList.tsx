@@ -761,7 +761,7 @@ export function MessageList({
           <span className="font-semibold text-body">{m.authorName}</span>
         )}
         {m.authorKind === "agent" && <AgentBadge />}
-        <span className="font-mono text-[11px] text-faint">{formatTimestamp(m.timestamp)}</span>
+        <span className="text-[11px] text-faint">{formatTimestamp(m.timestamp)}</span>
         {m.editedAt != null && <span className="text-[10px] text-faint">(edited)</span>}
         {pinnedIndicator(m)}
       </div>
@@ -861,7 +861,7 @@ export function MessageList({
           <div className="py-3 text-center text-xs text-faint">Loading messages…</div>
         )}
         {!hasMore && !loadingOlder && messages.length > 0 && (
-          <div className="py-3 text-center font-mono text-[10px] tracking-wider text-faint uppercase">
+          <div className="py-3 text-center text-[10px] tracking-wider text-faint uppercase">
             Beginning of #{channel}
           </div>
         )}
@@ -888,7 +888,7 @@ export function MessageList({
         {timeline.map((entry) => {
           if (entry.kind === "board") {
             return (
-              <div key={entry.line.id} className="flex justify-center px-4 py-0.5 font-mono text-[11px] text-faint">
+              <div key={entry.line.id} className="flex justify-center px-4 py-0.5 text-[11px] text-faint">
                 <span>· {renderContent(entry.line.text, null, true, onRefClick)}</span>
               </div>
             );
@@ -936,13 +936,13 @@ export function MessageList({
             >
               {firstUnread === m.id && (
                 <div className="mx-4 my-2 flex items-center gap-3">
-                  <span className="font-mono text-[10px] font-bold tracking-wider text-accent uppercase">New</span>
+                  <span className="text-[10px] font-bold tracking-wider text-accent uppercase">New</span>
                   <div className="h-px flex-1 bg-accent/40" />
                 </div>
               )}
               {newDay && (
                 <div className="mx-4 mt-4 mb-1 flex items-center gap-3">
-                  <span className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">{formatDivider(m.timestamp)}</span>
+                  <span className="text-[10px] font-bold tracking-wider text-muted uppercase">{formatDivider(m.timestamp)}</span>
                   <div className="h-px flex-1 bg-divider" />
                 </div>
               )}
@@ -951,7 +951,7 @@ export function MessageList({
                   className={rowClasses(m, "group relative flex gap-4 py-0.5 pr-4 pl-4")}
                   onContextMenu={(e) => openContextMenu(e, m.id)}
                 >
-                  <div className="w-10 shrink-0 pt-1 text-right font-mono text-[10px] text-faint opacity-0 group-hover:opacity-100">
+                  <div className="w-10 shrink-0 pt-1 text-right text-[10px] text-faint opacity-0 group-hover:opacity-100">
                     {formatShortTime(m.timestamp)}
                   </div>
                   <div className="min-w-0 flex-1">

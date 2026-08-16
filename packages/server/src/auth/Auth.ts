@@ -1,16 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Actor } from "@workspace/shared";
+import type { AccountSession, Actor } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
-import type { WorkspaceDb } from "../db";
+import { AccountStore, type AccountIdentity } from "./AccountStore";
 
 // 1-32 chars of letters/digits/spaces/-/_; applied after trim, so a name
 // can never be only whitespace.
 export const USERNAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
-export type SessionResult =
-  | { status: "ok"; username: string }
-  | { status: "needs_username" }
-  | { status: "removed" };
+export type SessionResult = AccountSession;
 
 /**
  * Auth owns the bridge from a verified Supabase session to a workspace
@@ -23,23 +20,17 @@ export type SessionResult =
  */
 export class Auth {
   constructor(
-    private store: WorkspaceDb,
+    private store: AccountStore,
     private supabase: SupabaseClient,
   ) {}
 
   /** Verify a Supabase access token and resolve it to a bound actor, or
    *  null if the token is invalid/expired or has no actor yet. Used by the
    *  WS join gate (joinPolicy.ts). */
-  async resolveSession(jwt: string): Promise<Actor | null> {
+  async resolveSession(jwt: string, workspaceId: string): Promise<Actor | null> {
     const user = await this.verify(jwt);
     if (!user) return null;
-    const actor = await this.store.getActor(user.id);
-    if (!actor) return null;
-    // A removed member keeps their actor row (attribution) but loses
-    // membership; treat them the same as an invalid token so they can't
-    // rejoin the workspace over the socket.
-    if (!(await this.store.isMember(actor.id))) return null;
-    return actor;
+    return this.store.actorForWorkspace(user.id, workspaceId);
   }
 
   /** Same verification, framed as ok/needs_username for the HTTP front
@@ -51,23 +42,21 @@ export class Auth {
    *  needs_username rather than throwing — the client's manual username
    *  step is the recovery path. */
   async session(jwt: string): Promise<SessionResult> {
-    const user = await this.verify(jwt);
-    if (!user) throw new ApiError(401, "BAD_CREDENTIAL", "sign-in could not be verified");
-    const actor = await this.store.getActor(user.id);
+    const user = await this.requireUser(jwt);
+    const actor = await this.store.getHuman(user.id);
     if (actor) {
-      if (!(await this.store.isMember(actor.id))) return { status: "removed" };
-      return { status: "ok", username: actor.displayName };
+      return {
+        status: "ok",
+        username: actor.displayName,
+        workspaces: await this.store.listWorkspaces(actor.id),
+      };
     }
     if (user.desiredUsername) {
       const name = user.desiredUsername.trim();
-      if (
-        USERNAME_PATTERN.test(name) &&
-        !(await this.store.findActorByName("human", name)) &&
-        !(await this.store.findActorByName("agent", name))
-      ) {
+      if (USERNAME_PATTERN.test(name) && !(await this.store.findHumanByName(name))) {
         try {
           const created = await this.store.createHuman(user.id, name, user.email);
-          return { status: "ok", username: created.displayName };
+          return { status: "ok", username: created.displayName, workspaces: [] };
         } catch {
           // Two tabs confirming at once: the other one won the insert.
         }
@@ -80,9 +69,8 @@ export class Auth {
    *  Idempotent: a second call with an already-bound token just returns
    *  the existing username (covers two tabs finishing signup at once). */
   async claimUsername(jwt: string, username: string): Promise<{ username: string }> {
-    const user = await this.verify(jwt);
-    if (!user) throw new ApiError(401, "BAD_CREDENTIAL", "sign-in could not be verified");
-    const already = await this.store.getActor(user.id);
+    const user = await this.requireUser(jwt);
+    const already = await this.store.getHuman(user.id);
     if (already) return { username: already.displayName };
     const name = username.trim();
     if (!USERNAME_PATTERN.test(name)) {
@@ -92,8 +80,7 @@ export class Auth {
         "usernames are 1-32 characters of letters, digits, spaces, - and _",
       );
     }
-    // Also refuse names matching an agent, so nobody can pose as the bot.
-    if ((await this.store.findActorByName("human", name)) || (await this.store.findActorByName("agent", name))) {
+    if (await this.store.findHumanByName(name)) {
       throw new ApiError(409, "USERNAME_TAKEN", `the name ${name} is taken`);
     }
     const actor = await this.store.createHuman(user.id, name, user.email);
@@ -108,10 +95,27 @@ export class Auth {
   async usernameAvailable(name: string): Promise<{ available: boolean; reason?: "INVALID" | "TAKEN" }> {
     const trimmed = name.trim();
     if (!USERNAME_PATTERN.test(trimmed)) return { available: false, reason: "INVALID" };
-    if ((await this.store.findActorByName("human", trimmed)) || (await this.store.findActorByName("agent", trimmed))) {
+    if (await this.store.findHumanByName(trimmed)) {
       return { available: false, reason: "TAKEN" };
     }
     return { available: true };
+  }
+
+  async identity(jwt: string): Promise<AccountIdentity> {
+    const user = await this.requireUser(jwt);
+    const actor = await this.store.getHuman(user.id);
+    if (!actor) throw new ApiError(409, "USERNAME_REQUIRED", "pick a username before continuing");
+    return actor;
+  }
+
+  private async requireUser(jwt: string): Promise<{
+    id: string;
+    email: string | null;
+    desiredUsername: string | null;
+  }> {
+    const user = await this.verify(jwt);
+    if (!user) throw new ApiError(401, "BAD_CREDENTIAL", "sign-in could not be verified");
+    return user;
   }
 
   /**

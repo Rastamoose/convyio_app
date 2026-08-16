@@ -25,9 +25,9 @@ export class Channels {
   async seed(defaults: { name: string; isDemo: boolean }[]): Promise<void> {
     for (const { name, isDemo } of defaults) {
       await this.store.sql`
-        INSERT INTO channels (id, name, created_by, is_demo, created_at)
-        VALUES (${randomUUID()}, ${name}, NULL, ${isDemo}, ${Date.now()})
-        ON CONFLICT (lower(name)) DO NOTHING
+        INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at)
+        VALUES (${randomUUID()}, ${this.store.workspaceId}, ${name}, NULL, ${isDemo}, ${Date.now()})
+        ON CONFLICT (workspace_id, lower(name)) DO NOTHING
       `;
     }
   }
@@ -41,7 +41,8 @@ export class Channels {
   /** Active channels with stable ids, in the same display order as list(). */
   async listInfo(): Promise<ChannelInfo[]> {
     return this.store.sql<ChannelInfo[]>`
-      SELECT id, name FROM channels WHERE archived_at IS NULL
+      SELECT id, name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND archived_at IS NULL
       ORDER BY pinned_at IS NULL ASC, pinned_at ASC,
                name = 'general' DESC, created_at ASC, seq ASC
     `;
@@ -50,7 +51,9 @@ export class Channels {
   /** Archived channel names, most recently archived first. */
   async listArchived(): Promise<string[]> {
     const rows = await this.store.sql<{ name: string }[]>`
-      SELECT name FROM channels WHERE archived_at IS NOT NULL ORDER BY archived_at DESC
+      SELECT name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND archived_at IS NOT NULL
+      ORDER BY archived_at DESC
     `;
     return rows.map((row) => row.name);
   }
@@ -58,14 +61,17 @@ export class Channels {
   /** Pinned (and active) channel names, in pin order. */
   async pinned(): Promise<string[]> {
     const rows = await this.store.sql<{ name: string }[]>`
-      SELECT name FROM channels WHERE pinned_at IS NOT NULL AND archived_at IS NULL ORDER BY pinned_at ASC
+      SELECT name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND pinned_at IS NOT NULL AND archived_at IS NULL
+      ORDER BY pinned_at ASC
     `;
     return rows.map((row) => row.name);
   }
 
   async get(name: string): Promise<ChannelInfo | null> {
     const [channel] = await this.store.sql<ChannelInfo[]>`
-      SELECT id, name FROM channels WHERE name = ${name}
+      SELECT id, name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
     `;
     return channel ?? null;
   }
@@ -81,14 +87,16 @@ export class Channels {
     if (await this.exists(name)) {
       throw new ApiError(409, "CHANNEL_EXISTS", `channel ${name} already exists`);
     }
-    const [{ c }] = await this.store.sql<{ c: number }[]>`SELECT count(*)::int AS c FROM channels`;
+    const [{ c }] = await this.store.sql<{ c: number }[]>`
+      SELECT count(*)::int AS c FROM channels WHERE workspace_id = ${this.store.workspaceId}
+    `;
     if (c >= MAX_CHANNELS) {
       throw new ApiError(409, "CHANNEL_LIMIT", `channel cap of ${MAX_CHANNELS} reached`);
     }
     const channel = { id: randomUUID(), name };
     await this.store.sql`
-      INSERT INTO channels (id, name, created_by, is_demo, created_at)
-      VALUES (${channel.id}, ${channel.name}, ${actor.id}, false, ${Date.now()})
+      INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at)
+      VALUES (${channel.id}, ${this.store.workspaceId}, ${channel.name}, ${actor.id}, false, ${Date.now()})
     `;
     this.onCreated?.(channel);
     return channel;
@@ -104,8 +112,14 @@ export class Channels {
       throw new ApiError(409, "CHANNEL_EXISTS", `channel ${newName} already exists`);
     }
     await this.store.transaction(async (sql) => {
-      await sql`UPDATE channels SET name = ${newName} WHERE name = ${name}`;
-      await sql`UPDATE messages SET channel = ${newName} WHERE channel = ${name}`;
+      await sql`
+        UPDATE channels SET name = ${newName}
+        WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
+      `;
+      await sql`
+        UPDATE messages SET channel = ${newName}
+        WHERE workspace_id = ${this.store.workspaceId} AND channel = ${name}
+      `;
     });
     this.onRenamed?.(name, newName);
     return newName;
@@ -115,7 +129,8 @@ export class Channels {
     this.requireHuman(actor);
     await this.requireMutable(name);
     await this.store.sql`
-      UPDATE channels SET archived_at = ${archived ? Date.now() : null} WHERE name = ${name}
+      UPDATE channels SET archived_at = ${archived ? Date.now() : null}
+      WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
     `;
     this.onArchived?.(name, archived);
   }
@@ -126,7 +141,8 @@ export class Channels {
       throw new ApiError(404, "NOT_FOUND", `no such channel: ${name}`);
     }
     await this.store.sql`
-      UPDATE channels SET pinned_at = ${pinned ? Date.now() : null} WHERE name = ${name}
+      UPDATE channels SET pinned_at = ${pinned ? Date.now() : null}
+      WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
     `;
     this.onPinned?.(name, pinned);
   }
@@ -135,7 +151,9 @@ export class Channels {
   async remove(actor: Actor, name: string): Promise<void> {
     this.requireHuman(actor);
     await this.requireMutable(name);
-    await this.store.sql`DELETE FROM channels WHERE name = ${name}`;
+    await this.store.sql`
+      DELETE FROM channels WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
+    `;
     this.onDeleted?.(name);
   }
 

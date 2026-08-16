@@ -53,6 +53,7 @@ const interaction = (id: string): InteractionRequest => ({
   summary: "write_file src/a.ts",
   capability: "file_write",
   boardItemRef: null,
+  targetActorId: null,
   status: "pending",
   resolvedBy: null,
   createdAt: 1_000,

@@ -17,13 +17,13 @@ export function PanelHeader({
   channel: string;
 }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-divider px-3">
+    <header className="flex h-10 shrink-0 items-center gap-3 border-b border-divider px-3">
       <button
         onClick={onToggleSidebar}
         aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
         aria-expanded={sidebarOpen}
         title="Toggle sidebar (⌘B)"
-        className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition select-none hover:bg-subtle-hover hover:text-body"
+        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition select-none hover:bg-subtle-hover hover:text-body"
       >
         <svg
           className="h-4.5 w-4.5"

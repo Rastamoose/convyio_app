@@ -5,6 +5,7 @@ const CAPABILITY_LABEL: Record<string, string> = {
   file_write: "write a file",
   shell_repo: "run a command",
   network: "reach the network",
+  folder_read: "read a local folder",
 };
 
 /**
@@ -20,7 +21,7 @@ export function PermissionCard({
 }) {
   return (
     <div className="rounded-lg bg-subtle p-2.5">
-      <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+      <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
         Wants to {CAPABILITY_LABEL[request.capability] ?? request.capability}
       </div>
       <code className="mb-2 block overflow-x-auto rounded-md bg-composer px-2 py-1.5 font-mono text-xs whitespace-pre text-body">

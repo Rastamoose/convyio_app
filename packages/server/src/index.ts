@@ -35,6 +35,9 @@ import { ProjectStore } from "./projects/ProjectStore";
 import { ToolmanNodes } from "./projects/ToolmanNodes";
 import { ToolmanGateway } from "./projects/ToolmanGateway";
 import { ToolExecutionStore } from "./projects/ToolExecutionStore";
+import { AccountStore } from "./auth/AccountStore";
+import { WorkspaceAccess } from "./auth/WorkspaceAccess";
+import { WorkspaceRegistry } from "./WorkspaceRegistry";
 
 const ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets");
 const MIGRATIONS_DIR = path.resolve(
@@ -51,87 +54,65 @@ async function main() {
   // starting fine and then failing feature by feature, which reads as an
   // unexplained hang in the browser rather than as a missing migration.
   await assertSchemaCurrent(db.sql, MIGRATIONS_DIR);
-  const threadEvents = new ThreadEventStore(db);
-  const messages = new MessageStore(db, threadEvents);
-  const agentWork = new AgentWorkStore(db, threadEvents, messages);
-  const plans = new PlanService(db, threadEvents);
-  const service = new BoardService(db, threadEvents, plans);
-  const context = new ContextStore(db, threadEvents);
-  const contextCursors = new ContextCursorStore(db, threadEvents);
-  const projects = new ProjectStore(db, threadEvents);
-  const toolmanNodes = new ToolmanNodes(db, threadEvents);
-  const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context, projects);
-  const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
-  const interactions = new InteractionStore(db, threadEvents);
-  // Prompts from a previous process have no waiter left to answer them. This
-  // is tidying, not a precondition: a transient database hiccup here must not
-  // stop the server from listening, or the whole workspace is down over stale
-  // rows that the next mutation would re-request anyway.
-  interactions.expireStale(db.workspaceId).catch((err: unknown) => {
-    console.warn(
-      "[hub] could not expire stale permission prompts:",
-      err instanceof Error ? err.message : err,
-    );
-  });
-  const sessions = new Sessions();
-  const workspaceDir = path.join(config.dataDir, "workspace");
-  const toolman = new Toolman(service, workspaceDir);
-  await toolman.init();
-
-  const scripts = await loadDemoScripts(path.join(ASSETS_DIR, "demo/scripts"));
-  const demoChannels = [...scripts.keys()].sort();
-  const channels = new Channels(db);
-  await channels.seed([
-    { name: "general", isDemo: false },
-    ...demoChannels.map((name) => ({ name, isDemo: true })),
-  ]);
-
   const supabase = createClient(config.supabaseUrl, config.supabaseSecretKey);
-
-  let authGate: AuthGate | null = null;
-  if (config.googleAuthEnabled || config.emailAuthEnabled) {
-    authGate = {
-      googleAuthEnabled: config.googleAuthEnabled,
-      emailAuthEnabled: config.emailAuthEnabled,
-      auth: new Auth(db, supabase),
-    };
-    if (config.googleAuthEnabled) console.log("[auth] Google sign-in enabled");
-    if (config.emailAuthEnabled) console.log("[auth] Email sign-in enabled");
-    if (!config.agentToken) {
-      console.warn("[auth] AGENT_TOKEN is not set: no agent can join this server");
-    }
-  } else {
-    console.warn("[auth] no sign-in method configured: all joins will be refused");
+  const accounts = new AccountStore(db.sql);
+  const workspaceAccess = new WorkspaceAccess(db.sql, accounts);
+  const sessions = new Sessions();
+  const auth = config.googleAuthEnabled || config.emailAuthEnabled
+    ? new Auth(accounts, supabase)
+    : null;
+  const authGate: AuthGate | null = auth
+    ? {
+        googleAuthEnabled: config.googleAuthEnabled,
+        emailAuthEnabled: config.emailAuthEnabled,
+        auth,
+      }
+    : null;
+  if (config.googleAuthEnabled) console.log("[auth] Google sign-in enabled");
+  if (config.emailAuthEnabled) console.log("[auth] Email sign-in enabled");
+  if (!auth) console.warn("[auth] no sign-in method configured: all joins will be refused");
+  if (auth && !config.agentToken) {
+    console.warn("[auth] AGENT_TOKEN is not set: no server-owned agent can join the legacy workspace");
   }
 
-  const attachments = new Attachments(db, supabase);
-  const agentInvites = new AgentInvites(db);
-  const runnerRuntime = new RunnerRuntime();
-  const executions = new ToolExecutionStore(db, threadEvents);
-  const agentConfigUpdater: { update?: (profile: AgentInvite) => void } = {};
-  const agentRevoker: { close?: (actorId: string) => void } = {};
-  const memberRemover: { close?: (actorId: string) => void } = {};
-  const handleApi = createApiHandler({
+  const scripts = await loadDemoScripts(path.join(ASSETS_DIR, "demo/scripts"));
+  const registry = new WorkspaceRegistry(
     db,
-    service,
     sessions,
-    messages,
-    threadEvents,
-    channels,
-    attachments,
+    auth,
+    config.agentToken,
+    supabase,
+    config.dataDir,
+    db.workspaceId,
+    scripts,
+    path.join(ASSETS_DIR, "demo/seed"),
+  );
+  const runtime = await registry.require(db.workspaceId);
+  const handleApi = createApiHandler({
+    db: runtime.db,
+    service: runtime.board,
+    sessions,
+    messages: runtime.messages,
+    threadEvents: runtime.threadEvents,
+    channels: runtime.channels,
+    attachments: runtime.attachments,
     corsOrigin: config.corsOrigin,
     authGate,
-    agentInvites,
-    runnerRuntime,
-    onUpdateAgent: (profile) => agentConfigUpdater.update?.(profile),
-    onRevokeAgent: (actorId) => agentRevoker.close?.(actorId),
-    onRemoveMember: (actorId) => memberRemover.close?.(actorId),
-    snapshot,
-    plans,
-    envelope,
-    projects,
-    toolmanNodes,
-    executions,
+    agentInvites: runtime.agentInvites,
+    runnerRuntime: runtime.runnerRuntime,
+    onUpdateAgent: (profile) => runtime.updateAgent(profile),
+    onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
+    onRemoveMember: (actorId) => runtime.hub.closeHumanConnection(actorId),
+    onAddMember: (actorId) => void runtime.hub.addOfflineMember(actorId),
+    snapshot: runtime.snapshot,
+    plans: runtime.plans,
+    envelope: runtime.envelope,
+    projects: runtime.projects,
+    toolmanNodes: runtime.toolmanNodes,
+    executions: runtime.executions,
+    accounts,
+    workspaceAccess,
+    workspaceRegistry: registry,
   });
   const staticSite = fs.existsSync(path.join(config.clientDist, "index.html"))
     ? createStaticSite(config.clientDist)
@@ -148,56 +129,7 @@ async function main() {
     res.end(JSON.stringify({ error: "NOT_FOUND" }));
   });
 
-  const roster = await Roster.create(db, agentInvites);
-  const toolmanGateway = new ToolmanGateway(server, toolmanNodes, projects);
-  const hub = new Hub(
-    server,
-    roster,
-    messages,
-    agentWork,
-    channels,
-    attachments,
-    sessions,
-    toolman,
-    interactions,
-    runnerRuntime,
-    {
-      workspace: { id: db.workspaceId, name: db.workspaceName },
-      demoChannels,
-      // Unconfigured is not guest mode here: refuse every join rather than
-      // trust self-declared names (the Hub's own undefined-gate fallback is
-      // for tests that build it directly, never for the running server).
-      authorizeJoin: authGate
-        ? createJoinGate(authGate.auth, config.agentToken, agentInvites)
-        : async () => ({ ok: false }),
-      authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
-      threadEvents,
-      contextCursors,
-      projects,
-      toolmanGateway,
-      executions,
-    },
-  );
-  agentConfigUpdater.update = (profile) => hub.updateAgentConfig(profile);
-  agentRevoker.close = (actorId) => hub.closeAgentConnection(actorId);
-  memberRemover.close = (actorId) => hub.closeHumanConnection(actorId);
-  service.onEvent = (envelope) => hub.broadcastBoardEvent(envelope);
-  plans.onEvent = (envelope) => hub.broadcastPlanEvent(envelope);
-  channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
-  channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
-  channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
-  channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
-  channels.onDeleted = (name) => hub.broadcastChannelDeleted(name);
-  new DemoOrchestrator(
-    hub,
-    roster,
-    db,
-    service,
-    plans,
-    workspaceDir,
-    path.join(ASSETS_DIR, "demo/seed"),
-    scripts,
-  );
+  registry.attach(server);
 
   // A listen failure arrives as an event, not a rejection, so without a
   // handler the process dies with an unhandled 'error' and no usable message —

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { Auth } from "../src/auth/Auth";
+import { AccountStore } from "../src/auth/AccountStore";
 import { ApiError } from "../src/board/BoardService";
 import { createTestDb } from "./pgSchema";
 import type { WorkspaceDb } from "../src/db";
@@ -16,17 +17,17 @@ describe("Auth", () => {
   after(() => drop());
 
   test("session() reports needs_username for a verified token with no bound actor", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-1": { id: "user-1", email: "a@example.com" } }));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-1": { id: "user-1", email: "a@example.com" } }));
     assert.deepEqual(await auth.session("tok-1"), { status: "needs_username" });
   });
 
   test("session() throws BAD_CREDENTIAL for an unverifiable token", async () => {
-    const auth = new Auth(db, fakeSupabase({}));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({}));
     await assert.rejects(auth.session("bad-tok"), (err) => err instanceof ApiError && err.code === "BAD_CREDENTIAL");
   });
 
   test("claimUsername() creates the actor with the Supabase user id and rejects a repeat with a different name", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-2": { id: "user-2", email: "b@example.com" } }));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-2": { id: "user-2", email: "b@example.com" } }));
     const result = await auth.claimUsername("tok-2", "Dana");
     assert.equal(result.username, "Dana");
     const actor = await db.getActor("user-2");
@@ -38,7 +39,7 @@ describe("Auth", () => {
 
   test("claimUsername() rejects a name already taken", async () => {
     const auth = new Auth(
-      db,
+      new AccountStore(db.sql),
       fakeSupabase({
         "tok-3": { id: "user-3", email: null },
         "tok-4": { id: "user-4", email: null },
@@ -49,28 +50,33 @@ describe("Auth", () => {
   });
 
   test("resolveSession() returns the bound actor for a claimed token, null otherwise", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-5": { id: "user-5", email: null } }));
-    assert.equal(await auth.resolveSession("tok-5"), null);
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-5": { id: "user-5", email: null } }));
+    assert.equal(await auth.resolveSession("tok-5", db.workspaceId), null);
     await auth.claimUsername("tok-5", "Erin");
-    const actor = await auth.resolveSession("tok-5");
+    assert.equal(await auth.resolveSession("tok-5", db.workspaceId), null);
+    await db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${db.workspaceId}, 'user-5', 'member', ${Date.now()})
+    `;
+    const actor = await auth.resolveSession("tok-5", db.workspaceId);
     assert.equal(actor?.displayName, "Erin");
   });
 
   test("session() auto-claims desired_username from Supabase user_metadata", async () => {
     const auth = new Auth(
-      db,
+      new AccountStore(db.sql),
       fakeSupabase({
         "tok-6": { id: "user-6", email: "f@example.com", user_metadata: { desired_username: "Frankie" } },
       }),
     );
-    assert.deepEqual(await auth.session("tok-6"), { status: "ok", username: "Frankie" });
+    assert.deepEqual(await auth.session("tok-6"), { status: "ok", username: "Frankie", workspaces: [] });
     const actor = await db.getActor("user-6");
     assert.equal(actor?.displayName, "Frankie");
   });
 
   test("session() falls back to needs_username when desired_username is already taken", async () => {
     const auth = new Auth(
-      db,
+      new AccountStore(db.sql),
       fakeSupabase({
         "tok-7": { id: "user-7", email: null },
         "tok-8": { id: "user-8", email: null, user_metadata: { desired_username: "Grace" } },
@@ -83,7 +89,7 @@ describe("Auth", () => {
 
   test("session() falls back to needs_username for an invalid desired_username", async () => {
     const auth = new Auth(
-      db,
+      new AccountStore(db.sql),
       fakeSupabase({
         "tok-9": { id: "user-9", email: null, user_metadata: { desired_username: "***bad***" } },
       }),
@@ -93,7 +99,7 @@ describe("Auth", () => {
   });
 
   test("usernameAvailable() reports free, taken (case-insensitively) and invalid names", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-10": { id: "user-10", email: null } }));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-10": { id: "user-10", email: null } }));
     assert.deepEqual(await auth.usernameAvailable("Hana"), { available: true });
     await auth.claimUsername("tok-10", "Hana");
     assert.deepEqual(await auth.usernameAvailable("hana"), { available: false, reason: "TAKEN" });
@@ -101,40 +107,51 @@ describe("Auth", () => {
   });
 
   test("a Supabase outage is 503 AUTH_UNAVAILABLE, never a 401 rejection", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-out": "unavailable" }));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-out": "unavailable" }));
     await assert.rejects(
       auth.session("tok-out"),
       (err) => err instanceof ApiError && err.status === 503 && err.code === "AUTH_UNAVAILABLE",
     );
     // resolveSession (the ws join path) must propagate too — returning null
     // there is what once signed users out over a rate-limit blip.
-    await assert.rejects(auth.resolveSession("tok-out"), (err) => err instanceof ApiError && err.status === 503);
+    await assert.rejects(auth.resolveSession("tok-out", db.workspaceId), (err) => err instanceof ApiError && err.status === 503);
   });
 
-  test("session() reports removed for a bound actor whose membership was revoked", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-12": { id: "user-12", email: null } }));
+  test("session() keeps a bound account valid without workspace memberships", async () => {
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-12": { id: "user-12", email: null } }));
     await auth.claimUsername("tok-12", "Jules");
-    await db.removeMember("user-12");
-    assert.deepEqual(await auth.session("tok-12"), { status: "removed" });
+    assert.deepEqual(await auth.session("tok-12"), {
+      status: "ok",
+      username: "Jules",
+      workspaces: [],
+    });
   });
 
   test("resolveSession() returns null for a bound actor whose membership was revoked", async () => {
-    const auth = new Auth(db, fakeSupabase({ "tok-13": { id: "user-13", email: null } }));
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-13": { id: "user-13", email: null } }));
     await auth.claimUsername("tok-13", "Kian");
-    assert.ok(await auth.resolveSession("tok-13"));
+    await db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${db.workspaceId}, 'user-13', 'member', ${Date.now()})
+    `;
+    assert.ok(await auth.resolveSession("tok-13", db.workspaceId));
     await db.removeMember("user-13");
-    assert.equal(await auth.resolveSession("tok-13"), null);
+    assert.equal(await auth.resolveSession("tok-13", db.workspaceId), null);
   });
 
   test("a verified token survives a Supabase outage via the verify cache", async () => {
     const users: Parameters<typeof fakeSupabase>[0] = {
       "tok-11": { id: "user-11", email: null, user_metadata: { desired_username: "Iris" } },
     };
-    const auth = new Auth(db, fakeSupabase(users));
-    assert.deepEqual(await auth.session("tok-11"), { status: "ok", username: "Iris" });
+    const auth = new Auth(new AccountStore(db.sql), fakeSupabase(users));
+    assert.deepEqual(await auth.session("tok-11"), { status: "ok", username: "Iris", workspaces: [] });
+    await db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${db.workspaceId}, 'user-11', 'member', ${Date.now()})
+    `;
     // Supabase goes down; the recently verified token keeps resolving.
     users["tok-11"] = "unavailable";
-    const actor = await auth.resolveSession("tok-11");
+    const actor = await auth.resolveSession("tok-11", db.workspaceId);
     assert.equal(actor?.displayName, "Iris");
   });
 });
@@ -158,8 +175,12 @@ describe("ws join gating with auth enabled", async () => {
 
   const signIn = async (): Promise<string> => {
     const session = await env.auth!.session("tok-dana");
-    if (session.status === "ok") return "tok-dana";
-    await env.auth!.claimUsername("tok-dana", "dana");
+    if (session.status !== "ok") await env.auth!.claimUsername("tok-dana", "dana");
+    await env.db.sql`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${env.db.workspaceId}, 'user-dana', 'member', ${Date.now()})
+      ON CONFLICT (workspace_id, actor_id) DO NOTHING
+    `;
     return "tok-dana";
   };
 

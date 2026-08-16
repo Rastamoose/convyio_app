@@ -128,11 +128,11 @@ export class AgentInvites {
         "agent names are 1-32 characters of letters, digits, spaces, - and _",
       );
     }
-    const human = await this.db.findActorByName("human", trimmed);
+    const human = await this.db.findMemberByName("human", trimmed);
     if (human) {
       throw new ApiError(409, "NAME_TAKEN", `the name ${trimmed} is already in use`);
     }
-    const existingAgent = await this.db.findActorByName("agent", trimmed);
+    const existingAgent = await this.db.findMemberByName("agent", trimmed);
     if (existingAgent) {
       throw new ApiError(409, "NAME_TAKEN", `the name ${trimmed} is already in use`);
     }

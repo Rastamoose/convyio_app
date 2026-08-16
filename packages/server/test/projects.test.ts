@@ -86,4 +86,17 @@ describe("projects and Toolman nodes", () => {
     await projects.resolveAccess(human.actor, request.id, "approved", mount.id);
     assert.ok(await projects.assignment(project.id, agent.actor.id));
   });
+
+  test("only the folder owner can change its access mode", async () => {
+    const owner = { actor: await actor("human", "gale") };
+    const other = { actor: await actor("human", "harper") };
+    const created = await projects.create(owner.actor, { name: "desk-notes", kind: "directory" });
+    assert.equal(created.accessMode, "ask");
+    const updated = await projects.setAccessMode(owner.actor, created.id, "always");
+    assert.equal(updated.accessMode, "always");
+    await assert.rejects(
+      () => projects.setAccessMode(other.actor, created.id, "deny"),
+      (err: unknown) => err instanceof Error && err.message.includes("only the folder owner"),
+    );
+  });
 });

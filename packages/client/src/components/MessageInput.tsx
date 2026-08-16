@@ -143,6 +143,7 @@ export function MessageInput({
   onRequestEditLast: (id: string) => void;
 }) {
   const {
+    workspaceId,
     participants,
     messages,
     self,
@@ -152,7 +153,7 @@ export function MessageInput({
     takeReadyAttachmentIds,
     sendTyping,
   } = useWorkspace();
-  const { draft, setDraft, clearDraft } = useMessageDrafts(channel);
+  const { draft, setDraft, clearDraft } = useMessageDrafts(workspaceId, channel);
   const [mention, setMention] = useState<MentionQuery | null>(null);
   const [emojiQuery, setEmojiQuery] = useState<EmojiQuery | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -433,7 +434,7 @@ export function MessageInput({
     <div className="relative shrink-0 border-t border-divider px-4 pb-6">
       {commandOpen && (
         <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+          <div className="px-3 pt-3 pb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
             Commands
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
@@ -464,7 +465,7 @@ export function MessageInput({
       )}
       {mentionOpen && (
         <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+          <div className="px-3 pt-3 pb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
             Members
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
@@ -491,7 +492,7 @@ export function MessageInput({
       )}
       {shortcodeOpen && (
         <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
-          <div className="px-3 pt-3 pb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+          <div className="px-3 pt-3 pb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
             Emoji
           </div>
           <ul className="max-h-64 overflow-y-auto p-1.5 pt-0">
@@ -738,7 +739,7 @@ export function MessageInput({
         </div>
         {remaining <= COUNTER_AT && (
           <span
-            className={`pointer-events-none absolute right-2 bottom-1 font-mono text-[10px] ${
+            className={`pointer-events-none absolute right-2 bottom-1 text-[10px] ${
               remaining < 50 ? "text-dead" : "text-muted"
             }`}
           >

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
   Actor,
+  FolderAccessMode,
   MountCleanliness,
   Project,
   ProjectKind,
@@ -310,6 +311,7 @@ export class ToolmanNodes {
           createdByName: row.created_by_name,
           createdAt: row.created_at,
           archivedAt: row.archived_at,
+          accessMode: row.access_mode,
         }
       : null;
   }
@@ -364,6 +366,7 @@ interface ProjectRow {
   created_by: string;
   created_at: number;
   archived_at: number | null;
+  access_mode: FolderAccessMode;
   created_by_name: string;
 }
 

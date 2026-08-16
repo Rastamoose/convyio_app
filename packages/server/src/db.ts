@@ -27,7 +27,11 @@ export class WorkspaceDb {
   readonly workspaceId: string;
   readonly workspaceName: string;
 
-  private constructor(sql: Sql, workspace: { id: string; name: string }) {
+  private constructor(
+    sql: Sql,
+    workspace: { id: string; name: string },
+    private ownsConnection: boolean,
+  ) {
     this.sql = sql;
     this.workspaceId = workspace.id;
     this.workspaceName = workspace.name;
@@ -41,7 +45,11 @@ export class WorkspaceDb {
   /** Wrap an existing postgres.js client (used by tests to share one
    *  connection between schema setup, migrations, and the WorkspaceDb). */
   static async adopt(sql: Sql): Promise<WorkspaceDb> {
-    return new WorkspaceDb(sql, await ensureWorkspace(sql));
+    return new WorkspaceDb(sql, await ensureWorkspace(sql), true);
+  }
+
+  static scoped(sql: Sql, workspace: { id: string; name: string }): WorkspaceDb {
+    return new WorkspaceDb(sql, workspace, false);
   }
 
   static async create(connectionString: string, searchPath = "public", max?: number, idleTimeout?: number): Promise<WorkspaceDb> {
@@ -64,7 +72,20 @@ export class WorkspaceDb {
         },
       },
     });
-    return new WorkspaceDb(sql, await ensureWorkspace(sql));
+    return new WorkspaceDb(sql, await ensureWorkspace(sql), true);
+  }
+
+  async scope(workspaceId: string): Promise<WorkspaceDb | null> {
+    const [workspace] = await this.sql<{ id: string; name: string }[]>`
+      SELECT id, name FROM workspaces WHERE id = ${workspaceId}
+    `;
+    return workspace ? WorkspaceDb.scoped(this.sql, workspace) : null;
+  }
+
+  async listWorkspaceRecords(): Promise<Array<{ id: string; name: string }>> {
+    return this.sql<{ id: string; name: string }[]>`
+      SELECT id, name FROM workspaces ORDER BY created_at ASC, id ASC
+    `;
   }
 
   /**
@@ -148,6 +169,17 @@ export class WorkspaceDb {
     return rows[0] ? this.toActor(rows[0]) : null;
   }
 
+  async findMemberByName(kind: ParticipantKind, displayName: string): Promise<Actor | null> {
+    const [row] = await this.sql<ActorRow[]>`
+      SELECT a.* FROM actors a
+      JOIN workspace_members m ON m.actor_id = a.id
+      WHERE m.workspace_id = ${this.workspaceId}
+        AND a.kind = ${kind}
+        AND lower(a.display_name) = lower(${displayName})
+    `;
+    return row ? this.toActor(row) : null;
+  }
+
   /**
    * Create the persistent human for a Supabase-authenticated signup. `id`
    * is the Supabase Auth user id (auth.users.id) — the two systems share
@@ -216,7 +248,7 @@ export class WorkspaceDb {
   }
 
   async close(): Promise<void> {
-    await this.sql.end();
+    if (this.ownsConnection) await this.sql.end();
   }
 
   /** The actors table stores global identity only; an Actor value means

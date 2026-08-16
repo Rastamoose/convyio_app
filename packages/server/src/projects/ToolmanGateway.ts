@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import type { ProjectAction, ProjectAssignment, ToolmanNodeSummary } from "@workspace/shared";
 import type { ToolmanResult } from "../board/Toolman";
@@ -29,22 +30,28 @@ export class ToolmanGateway {
   private pending = new Map<string, PendingExecution>();
 
   constructor(
-    server: HttpServer,
+    server: HttpServer | null,
     private nodesStore: ToolmanNodes,
     private projects: ProjectStore,
   ) {
     this.wss = new WebSocketServer({ noServer: true });
-    server.on("upgrade", (req, socket, head) => {
-      const pathname = (req.url ?? "/").split("?")[0];
-      if (pathname !== "/toolman") return;
-      this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.wss.emit("connection", ws, req);
+    if (server) {
+      server.on("upgrade", (req, socket, head) => {
+        const pathname = (req.url ?? "/").split("?")[0];
+        if (pathname !== "/toolman") return;
+        this.handleUpgrade(req, socket, head);
       });
-    });
+    }
     this.wss.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code !== "EADDRINUSE") console.warn("[toolman] websocket error:", err.message);
     });
     this.wss.on("connection", (socket, request) => this.onConnection(socket, request));
+  }
+
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.wss.handleUpgrade(request, socket, head, (ws) => {
+      this.wss.emit("connection", ws, request);
+    });
   }
 
   findMount(mountId: string) {
@@ -56,7 +63,7 @@ export class ToolmanGateway {
     return Boolean(conn && conn.socket.readyState === WebSocket.OPEN);
   }
 
-  async execute(assignment: ProjectAssignment, action: ProjectAction): Promise<ToolmanResult> {
+  async execute(assignment: ProjectAssignment, action: ProjectAction, clientRequestId?: string): Promise<ToolmanResult> {
     const mount = await this.nodesStore.findMountById(assignment.mountId);
     if (!mount) {
       return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned project mount is gone" };
@@ -65,7 +72,7 @@ export class ToolmanGateway {
     if (!conn || conn.socket.readyState !== WebSocket.OPEN) {
       return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned Toolman node is offline" };
     }
-    const requestId = randomUUID();
+    const requestId = clientRequestId ?? randomUUID();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -158,5 +165,18 @@ export class ToolmanGateway {
       assignments.push(...(await this.projects.listAssignments(mount.projectId)).filter((row) => row.mountId === mount.id));
     }
     return assignments;
+  }
+
+  async close(): Promise<void> {
+    for (const connection of this.nodes.values()) connection.socket.terminate();
+    this.nodes.clear();
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: "Toolman gateway closed" });
+    }
+    this.pending.clear();
+    await new Promise<void>((resolve, reject) => {
+      this.wss.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 }

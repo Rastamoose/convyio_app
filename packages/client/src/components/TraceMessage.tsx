@@ -92,7 +92,7 @@ export function TraceMessageLive({
             />
           </span>
           {paused ? "needs your decision" : "is working…"}
-          <span className="font-mono text-xs text-faint">
+          <span className="text-xs text-faint">
             {actions > 0 && `${actions} action${actions === 1 ? "" : "s"} · `}
             {formatElapsed(now - startedAt)}
           </span>
@@ -145,7 +145,7 @@ export function TraceMessageFinished({
         <div className="mt-1">
           <button
             onClick={() => setExpanded((e) => !e)}
-            className="flex items-center gap-1.5 font-mono text-[11px] text-muted hover:text-body"
+            className="flex items-center gap-1.5 text-[11px] text-muted hover:text-body"
           >
             <Chevron expanded={expanded} />
             {expanded

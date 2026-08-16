@@ -17,6 +17,10 @@ import {
   type ThreadEventStore,
 } from "../chat/ThreadEventStore";
 import type { WorkspaceDb } from "../db";
+import type { AccountStore } from "../auth/AccountStore";
+import type { WorkspaceAccess } from "../auth/WorkspaceAccess";
+import type { WorkspaceRegistry } from "../WorkspaceRegistry";
+import type { WorkspaceRuntime } from "../WorkspaceRuntime";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
@@ -69,6 +73,10 @@ const channelPatchBodySchema = z.object({
 
 // Bounds only; the real username rules (and their error codes) live in Auth.
 const usernameBodySchema = z.object({ username: z.string().max(200) });
+const workspaceBodySchema = z.object({ name: z.string().max(200) });
+const accessRequestBodySchema = z.object({ message: z.string().max(500).optional() });
+const accessDecisionBodySchema = z.object({ decision: z.enum(["approved", "denied"] as const) });
+const memberRoleBodySchema = z.object({ role: z.enum(["owner", "member"] as const) });
 
 const agentAccessSchema = z.object({
   mode: z.enum(["workspace", "creator", "selected"] as const),
@@ -109,6 +117,9 @@ const projectAccessResolveBodySchema = z.object({
   decision: z.enum(["approved", "denied"]),
   mountId: z.string().min(1).max(128).optional(),
 });
+const folderAccessModeBodySchema = z.object({
+  accessMode: z.enum(["ask", "always", "deny"]),
+});
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
 const blockBodySchema = z.object({ reason: z.string().min(1).max(1000) });
@@ -144,12 +155,16 @@ export interface ApiServices {
   onUpdateAgent?: ((profile: AgentInvite) => void) | null;
   onRevokeAgent?: ((actorId: string) => void) | null;
   onRemoveMember?: ((actorId: string) => void) | null;
+  onAddMember?: ((actorId: string) => void) | null;
   snapshot?: WorkspaceSnapshotBuilder | null;
   plans?: PlanService | null;
   envelope?: PromptEnvelopeBuilder | null;
   projects?: ProjectStore | null;
   toolmanNodes?: ToolmanNodes | null;
   executions?: ToolExecutionStore | null;
+  accounts?: AccountStore | null;
+  workspaceAccess?: WorkspaceAccess | null;
+  workspaceRegistry?: WorkspaceRegistry | null;
 }
 
 export function createApiHandler(services: ApiServices) {
@@ -168,12 +183,16 @@ export function createApiHandler(services: ApiServices) {
     onUpdateAgent = null,
     onRevokeAgent = null,
     onRemoveMember = null,
+    onAddMember = null,
     snapshot = null,
     plans = null,
     envelope = null,
     projects = null,
     toolmanNodes = null,
     executions = null,
+    accounts = null,
+    workspaceAccess = null,
+    workspaceRegistry = null,
   } = services;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -217,26 +236,52 @@ export function createApiHandler(services: ApiServices) {
       } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
         await routeAuth(req, res, parts, url, authGate);
-      } else if (parts[1] === "uploads" && parts.length === 4 && (method === "GET" || method === "HEAD")) {
-        await serveUpload(res, attachments, parts[2], method === "HEAD");
+      } else if (
+        parts[1] === "account" ||
+        parts[1] === "workspaces" ||
+        parts[1] === "invites"
+      ) {
+        await routeAccount(req, res, parts, authGate, workspaceAccess);
+      } else if (
+        parts[1] === "uploads" &&
+        (parts.length === 4 || parts.length === 5) &&
+        (method === "GET" || method === "HEAD")
+      ) {
+        const runtime = parts.length === 5 && workspaceRegistry
+          ? await workspaceRegistry.get(parts[2])
+          : null;
+        if (parts.length === 5 && workspaceRegistry && !runtime) {
+          throw new ApiError(404, "NOT_FOUND", "no such upload");
+        }
+        if (parts.length === 5 && !workspaceRegistry && parts[2] !== db.workspaceId) {
+          throw new ApiError(404, "NOT_FOUND", "no such upload");
+        }
+        const uploadStore = runtime?.attachments ?? attachments;
+        const uploadId = parts.length === 5 ? parts[3] : parts[2];
+        await serveUpload(res, uploadStore, uploadId, method === "HEAD");
       } else if (
         parts[1] === "agent-pairings" &&
         parts[2] === "exchange" &&
         parts.length === 3 &&
         method === "POST"
       ) {
-        if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
         const body = pairingExchangeBodySchema.parse(await readBody(req));
-        const exchanged = await agentInvites.exchangePairing(body.pairingCode);
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForAgentPairing(body.pairingCode)
+          : null;
+        const invites = runtime?.agentInvites ?? agentInvites;
+        const workspaceDb = runtime?.db ?? db;
+        if (!invites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
+        const exchanged = await invites.exchangePairing(body.pairingCode);
         if (!exchanged) throw new ApiError(401, "INVALID_PAIRING", "pairing code is invalid or expired");
         const apiUrl = requestOrigin(req);
         json(res, 200, {
           installation: exchanged.installation,
           installationToken: exchanged.installationToken,
           agent: exchanged.invite,
-          workspace: { id: db.workspaceId, name: db.workspaceName },
+          workspace: { id: workspaceDb.workspaceId, name: workspaceDb.workspaceName },
           apiUrl,
-          wsUrl: websocketUrl(apiUrl),
+          wsUrl: workspaceSocketUrl(apiUrl, workspaceDb.workspaceId),
         });
       } else if (
         parts[1] === "agent-installations" &&
@@ -246,10 +291,13 @@ export function createApiHandler(services: ApiServices) {
         // The installation token is the only credential the machine has.
         // Session-auth would let any human delete any runner; this only
         // forgets the credential that presented itself.
-        if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
         const token = bearerToken(req);
         if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
-        if (!(await agentInvites.revokeInstallation(token))) {
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForAgentInstallation(token)
+          : null;
+        const invites = runtime?.agentInvites ?? agentInvites;
+        if (!invites || !(await invites.revokeInstallation(token))) {
           throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         }
         json(res, 200, { ok: true });
@@ -260,18 +308,23 @@ export function createApiHandler(services: ApiServices) {
         parts.length === 4 &&
         method === "POST"
       ) {
-        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
         const body = pairingExchangeBodySchema.parse(await readBody(req));
-        const exchanged = await toolmanNodes.exchangePairing(body.pairingCode);
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForToolmanPairing(body.pairingCode)
+          : null;
+        const nodes = runtime?.toolmanNodes ?? toolmanNodes;
+        const workspaceDb = runtime?.db ?? db;
+        if (!nodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+        const exchanged = await nodes.exchangePairing(body.pairingCode);
         if (!exchanged) throw new ApiError(401, "INVALID_PAIRING", "pairing code is invalid or expired");
         const apiUrl = requestOrigin(req);
         json(res, 200, {
           node: exchanged.node,
           installation: exchanged.installation,
           installationToken: exchanged.installationToken,
-          workspace: { id: db.workspaceId, name: db.workspaceName },
+          workspace: { id: workspaceDb.workspaceId, name: workspaceDb.workspaceName },
           apiUrl,
-          wsUrl: websocketUrl(apiUrl),
+          wsUrl: toolmanSocketUrl(apiUrl, workspaceDb.workspaceId),
         });
       } else if (
         parts[1] === "toolman" &&
@@ -279,10 +332,13 @@ export function createApiHandler(services: ApiServices) {
         parts.length === 3 &&
         method === "DELETE"
       ) {
-        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
         const token = bearerToken(req);
         if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
-        if (!(await toolmanNodes.revokeInstallation(token))) {
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForToolmanInstallation(token)
+          : null;
+        const nodes = runtime?.toolmanNodes ?? toolmanNodes;
+        if (!nodes || !(await nodes.revokeInstallation(token))) {
           throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         }
         json(res, 200, { ok: true });
@@ -292,34 +348,44 @@ export function createApiHandler(services: ApiServices) {
         parts.length === 3 &&
         method === "POST"
       ) {
-        if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
         const token = bearerToken(req);
         if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
-        const resolved = await toolmanNodes.resolveInstallation(token);
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForToolmanInstallation(token)
+          : null;
+        const nodes = runtime?.toolmanNodes ?? toolmanNodes;
+        if (!nodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+        const resolved = await nodes.resolveInstallation(token);
         if (!resolved) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         const body = toolmanMountBodySchema.parse(await readBody(req));
-        json(res, 200, await toolmanNodes.registerMount(resolved.node.id, body));
+        json(res, 200, await nodes.registerMount(resolved.node.id, body));
       } else {
-        const actor = await authenticate(req, db, sessions);
-        await route(req, res, parts, url, actor, {
-          db,
-          service,
-          messages,
-          threadEvents,
-          channels,
-          attachments,
-          agentInvites,
-          runnerRuntime,
-          onUpdateAgent,
-          onRevokeAgent,
-          onRemoveMember,
-          snapshot,
-          plans,
-          envelope,
-          projects,
-          toolmanNodes,
-          executions,
-        });
+        const authenticated = await authenticate(req, db, sessions, workspaceRegistry);
+        const scoped = authenticated.runtime
+          ? runtimeRouteServices(authenticated.runtime, accounts, workspaceAccess)
+          : {
+              db,
+              service,
+              messages,
+              threadEvents,
+              channels,
+              attachments,
+              agentInvites,
+              runnerRuntime,
+              onUpdateAgent,
+              onRevokeAgent,
+              onRemoveMember,
+              onAddMember,
+              snapshot,
+              plans,
+              envelope,
+              projects,
+              toolmanNodes,
+              executions,
+              accounts,
+              workspaceAccess,
+            };
+        await route(req, res, parts, url, authenticated.actor, scoped);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -335,31 +401,36 @@ export function createApiHandler(services: ApiServices) {
   };
 }
 
+interface RouteServices {
+  db: WorkspaceDb;
+  service: BoardService;
+  messages: MessageStore;
+  threadEvents: ThreadEventStore;
+  channels: Channels;
+  attachments: Attachments;
+  agentInvites: AgentInvites | null;
+  runnerRuntime: RunnerRuntime | null;
+  onUpdateAgent: ((profile: AgentInvite) => void) | null;
+  onRevokeAgent: ((actorId: string) => void) | null;
+  onRemoveMember: ((actorId: string) => void) | null;
+  onAddMember: ((actorId: string) => void) | null;
+  snapshot: WorkspaceSnapshotBuilder | null;
+  plans: PlanService | null;
+  envelope: PromptEnvelopeBuilder | null;
+  projects: ProjectStore | null;
+  toolmanNodes: ToolmanNodes | null;
+  executions: ToolExecutionStore | null;
+  accounts: AccountStore | null;
+  workspaceAccess: WorkspaceAccess | null;
+}
+
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
   parts: string[], // ["api", "board", "items", ...]
   url: URL,
   actor: Actor,
-  services: {
-    db: WorkspaceDb;
-    service: BoardService;
-    messages: MessageStore;
-    threadEvents: ThreadEventStore;
-    channels: Channels;
-    attachments: Attachments;
-    agentInvites: AgentInvites | null;
-    runnerRuntime: RunnerRuntime | null;
-    onUpdateAgent: ((profile: AgentInvite) => void) | null;
-    onRevokeAgent: ((actorId: string) => void) | null;
-    onRemoveMember: ((actorId: string) => void) | null;
-    snapshot: WorkspaceSnapshotBuilder | null;
-    plans: PlanService | null;
-    envelope: PromptEnvelopeBuilder | null;
-    projects: ProjectStore | null;
-    toolmanNodes: ToolmanNodes | null;
-    executions: ToolExecutionStore | null;
-  },
+  services: RouteServices,
 ): Promise<void> {
   const {
     db,
@@ -373,14 +444,66 @@ async function route(
     onUpdateAgent,
     onRevokeAgent,
     onRemoveMember,
+    onAddMember,
     snapshot,
     plans,
     envelope,
     projects,
     toolmanNodes,
     executions,
+    accounts,
+    workspaceAccess,
   } = services;
   const method = req.method ?? "GET";
+
+  if (parts[1] === "workspace" && parts[2] === "members") {
+    if (!accounts || !workspaceAccess) {
+      throw new ApiError(501, "NOT_IMPLEMENTED", "workspace membership is not available");
+    }
+    if (parts.length === 3 && method === "GET") {
+      return json(res, 200, { members: await accounts.listMembers(actor.workspaceId) });
+    }
+    const targetId = parts[3];
+    if (!targetId) throw new ApiError(404, "NOT_FOUND", "no such member route");
+    if (parts.length === 4 && method === "PATCH") {
+      const body = memberRoleBodySchema.parse(await readBody(req));
+      await workspaceAccess.setRole(actor.workspaceId, targetId, body.role, actor.id);
+      return json(res, 200, { ok: true });
+    }
+    if (parts.length === 4 && method === "DELETE") {
+      await workspaceAccess.removeMember(actor.workspaceId, targetId, actor.id);
+      onRemoveMember?.(targetId);
+      return json(res, 200, { ok: true });
+    }
+  }
+
+  if (parts[1] === "workspace" && parts[2] === "access-requests") {
+    if (!workspaceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace access is not available");
+    if (parts.length === 3 && method === "GET") {
+      return json(res, 200, { requests: await workspaceAccess.listRequests(actor.workspaceId, actor.id) });
+    }
+    if (parts.length === 5 && parts[4] === "resolve" && method === "POST") {
+      const body = accessDecisionBodySchema.parse(await readBody(req));
+      const request = await workspaceAccess.resolveRequest(actor.workspaceId, parts[3], actor.id, body.decision);
+      if (body.decision === "approved") onAddMember?.(request.requesterId);
+      return json(res, 200, { request });
+    }
+  }
+
+  if (parts[1] === "workspace" && parts[2] === "invites") {
+    if (!workspaceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace invites are not available");
+    if (parts.length === 3 && method === "GET") {
+      return json(res, 200, { invites: await workspaceAccess.listInvites(actor.workspaceId, actor.id) });
+    }
+    if (parts.length === 3 && method === "POST") {
+      return json(res, 201, await workspaceAccess.createInvite(actor.workspaceId, actor.id));
+    }
+    if (parts.length === 4 && method === "DELETE") {
+      const revoked = await workspaceAccess.revokeInvite(actor.workspaceId, parts[3], actor.id);
+      if (!revoked) throw new ApiError(404, "INVITE_NOT_FOUND", "no active invite with that id");
+      return json(res, 200, { ok: true });
+    }
+  }
 
   // GET /api/actors — the member roster, for owner assignment and display.
   if (parts[1] === "actors" && parts.length === 2 && method === "GET") {
@@ -393,12 +516,16 @@ async function route(
   if (parts[1] === "actors" && parts.length === 3 && method === "DELETE") {
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove members");
     const targetId = parts[2];
-    if (targetId === actor.id) throw new ApiError(400, "CANNOT_REMOVE_SELF", "you cannot remove yourself");
     const target = await db.getActor(targetId);
     if (!target || target.kind !== "human") throw new ApiError(404, "NOT_FOUND", "no such human member");
-    const removed = await db.removeMember(targetId);
-    if (!removed) throw new ApiError(404, "NOT_FOUND", "not a workspace member");
-    if (onRemoveMember) onRemoveMember(targetId);
+    if (workspaceAccess) {
+      await workspaceAccess.removeMember(actor.workspaceId, targetId, actor.id);
+    } else {
+      if (targetId === actor.id) throw new ApiError(400, "CANNOT_REMOVE_SELF", "you cannot remove yourself");
+      const removed = await db.removeMember(targetId);
+      if (!removed) throw new ApiError(404, "NOT_FOUND", "not a workspace member");
+    }
+    onRemoveMember?.(targetId);
     return json(res, 200, { ok: true });
   }
 
@@ -634,6 +761,10 @@ async function route(
     if (parts.length === 3 && method === "DELETE") {
       return json(res, 200, { project: await projects.archive(actor, parts[2]) });
     }
+    if (parts.length === 4 && parts[3] === "access-mode" && method === "POST") {
+      const body = folderAccessModeBodySchema.parse(await readBody(req));
+      return json(res, 200, { project: await projects.setAccessMode(actor, parts[2], body.accessMode) });
+    }
     if (parts.length === 4 && parts[3] === "assignments" && method === "POST") {
       const body = projectAssignBodySchema.parse(await readBody(req));
       return json(res, 201, {
@@ -654,6 +785,26 @@ async function route(
   if (parts[1] === "tool-executions" && parts.length === 2 && method === "GET") {
     if (!executions) throw new ApiError(501, "NOT_IMPLEMENTED", "executions are not available");
     return json(res, 200, { executions: await executions.listRecent() });
+  }
+  if (
+    parts[1] === "tool-executions" &&
+    parts[3] === "artifact" &&
+    parts.length === 5 &&
+    method === "GET"
+  ) {
+    if (!executions) throw new ApiError(501, "NOT_IMPLEMENTED", "executions are not available");
+    if (parts[4] !== "input" && parts[4] !== "output") {
+      throw new ApiError(404, "NOT_FOUND", "no such artifact");
+    }
+    const found = await executions.readArtifact(parts[2], parts[4]);
+    if (!found) throw new ApiError(404, "NOT_FOUND", "artifact expired or missing");
+    res.writeHead(200, {
+      "Content-Type": found.contentType,
+      "Content-Length": found.bytes.length,
+      "Cache-Control": "private, max-age=60",
+    });
+    res.end(found.bytes);
+    return;
   }
 
   if (parts[1] === "project-access-requests") {
@@ -815,12 +966,121 @@ async function routeAuth(
   throw new ApiError(404, "NOT_FOUND", "no such route");
 }
 
-async function authenticate(req: IncomingMessage, db: WorkspaceDb, sessions: Sessions): Promise<Actor> {
+async function routeAccount(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  authGate: AuthGate | null,
+  workspaceAccess: WorkspaceAccess | null,
+): Promise<void> {
+  if (!authGate || !workspaceAccess) {
+    throw new ApiError(501, "NOT_IMPLEMENTED", "workspace accounts are not available");
+  }
+  const method = req.method ?? "GET";
+  if (parts[1] === "invites" && parts.length === 3 && method === "GET") {
+    const preview = await workspaceAccess.previewInvite(parts[2]);
+    if (!preview) throw new ApiError(410, "INVITE_UNAVAILABLE", "this invite is invalid, expired, or already used");
+    return json(res, 200, preview);
+  }
+  const jwt = bearerToken(req);
+  if (!jwt) throw new ApiError(401, "UNAUTHENTICATED", "missing bearer token");
+  if (parts[1] === "account" && parts.length === 2 && method === "GET") {
+    const account = await authGate.auth.session(jwt);
+    const requests = account.status === "ok"
+      ? await workspaceAccess.listRequestsForActor((await authGate.auth.identity(jwt)).id)
+      : [];
+    return json(res, 200, { ...account, accessRequests: requests });
+  }
+  if (parts[1] === "account" && parts[2] === "access-requests" && parts.length === 3 && method === "GET") {
+    const actor = await authGate.auth.identity(jwt);
+    return json(res, 200, { requests: await workspaceAccess.listRequestsForActor(actor.id) });
+  }
+  if (parts[1] === "workspaces" && parts.length === 2 && method === "POST") {
+    const actor = await authGate.auth.identity(jwt);
+    const body = workspaceBodySchema.parse(await readBody(req));
+    return json(res, 201, { workspace: await workspaceAccess.createWorkspace(actor, body.name) });
+  }
+  if (parts[1] === "workspaces" && parts[2] === "lookup" && parts.length === 4 && method === "GET") {
+    await authGate.auth.identity(jwt);
+    const workspace = await workspaceAccess.lookup(parts[3]);
+    if (!workspace) throw new ApiError(404, "WORKSPACE_NOT_FOUND", "no workspace has that code");
+    return json(res, 200, { workspace });
+  }
+  if (parts[1] === "workspaces" && parts[3] === "access-requests" && parts.length === 4 && method === "POST") {
+    const actor = await authGate.auth.identity(jwt);
+    const body = accessRequestBodySchema.parse(await readBody(req));
+    return json(res, 201, { request: await workspaceAccess.requestAccess(actor, parts[2], body.message) });
+  }
+  if (parts[1] === "invites" && parts[3] === "accept" && parts.length === 4 && method === "POST") {
+    const actor = await authGate.auth.identity(jwt);
+    return json(res, 200, { workspace: await workspaceAccess.acceptInvite(actor, parts[2]) });
+  }
+  throw new ApiError(404, "NOT_FOUND", "no such account route");
+}
+
+function runtimeRouteServices(
+  runtime: WorkspaceRuntime,
+  accounts: AccountStore | null,
+  workspaceAccess: WorkspaceAccess | null,
+): RouteServices {
+  return {
+    db: runtime.db,
+    service: runtime.board,
+    messages: runtime.messages,
+    threadEvents: runtime.threadEvents,
+    channels: runtime.channels,
+    attachments: runtime.attachments,
+    agentInvites: runtime.agentInvites,
+    runnerRuntime: runtime.runnerRuntime,
+    onUpdateAgent: (profile) => runtime.updateAgent(profile),
+    onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
+    onRemoveMember: (actorId) => runtime.hub.closeHumanConnection(actorId),
+    onAddMember: (actorId) => void runtime.hub.addOfflineMember(actorId),
+    snapshot: runtime.snapshot,
+    plans: runtime.plans,
+    envelope: runtime.envelope,
+    projects: runtime.projects,
+    toolmanNodes: runtime.toolmanNodes,
+    executions: runtime.executions,
+    accounts,
+    workspaceAccess,
+  };
+}
+
+async function authenticate(
+  req: IncomingMessage,
+  db: WorkspaceDb,
+  sessions: Sessions,
+  registry: WorkspaceRegistry | null,
+): Promise<{ actor: Actor; runtime: WorkspaceRuntime | null }> {
   const token = bearerToken(req);
-  const actorId = token ? sessions.resolve(token) : null;
-  const actor = actorId ? await db.getActor(actorId) : null;
-  if (!actor) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
-  return actor;
+  const session = token ? sessions.resolve(token) : null;
+  if (!session) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+  if (registry) {
+    if (!session.workspaceId) throw new ApiError(401, "UNAUTHENTICATED", "workspace session required");
+    const runtime = await registry.get(session.workspaceId);
+    const actor = runtime ? await runtime.db.getActor(session.actorId) : null;
+    if (!runtime || !actor || !(await runtime.db.isMember(actor.id))) {
+      throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+    }
+    return { actor, runtime };
+  }
+  if (session.workspaceId && session.workspaceId !== db.workspaceId) {
+    throw new ApiError(401, "UNAUTHENTICATED", "token belongs to another workspace");
+  }
+  const actor = await db.getActor(session.actorId);
+  if (!actor || (session.workspaceId && !(await db.isMember(actor.id)))) {
+    throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+  }
+  return { actor, runtime: null };
+}
+
+function workspaceSocketUrl(origin: string, workspaceId: string): string {
+  return `${websocketUrl(origin)}/ws/${encodeURIComponent(workspaceId)}`;
+}
+
+function toolmanSocketUrl(origin: string, workspaceId: string): string {
+  return `${websocketUrl(origin)}/toolman/${encodeURIComponent(workspaceId)}`;
 }
 
 function bearerToken(req: IncomingMessage): string | null {

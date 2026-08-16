@@ -1,8 +1,3 @@
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/400-italic.css";
-@import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/600.css";
-@import "@fontsource/jetbrains-mono/700.css";
 @import "tailwindcss";
 
 @theme {
@@ -55,14 +50,15 @@
      per element rather than a frozen light-mode value. */
   --shadow-popup: var(--popup-shadow);
 
-  /* Sans for reading (SF on macOS), mono for voice: code, board refs and the
-     micro-labels. JetBrains Mono is self-hosted via @fontsource (above). */
+  /* System fonts only — no webfonts. Sans (SF on macOS) for everything;
+     mono is the platform's own (SF Mono / Menlo) and appears only on
+     literal code: inline code, code blocks, commands, invite codes. */
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono:
-    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
-    "Liberation Mono", monospace;
+    ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono",
+    monospace;
 
   /* Shared enter animations — referenced by name across components. */
   --animate-fade-in: fade-in 150ms ease-out;

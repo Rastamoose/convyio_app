@@ -438,13 +438,13 @@ export function Sidebar({
               : "text-muted hover:bg-input hover:text-body"
         }`}
       >
-        <span className="shrink-0 font-mono text-faint">#</span>
+        <span className="shrink-0 text-faint">#</span>
         <span className="min-w-0 truncate">{c}</span>
         {pinnedChannels.includes(c) && (
           <PinIcon className="ml-auto h-3 w-3 shrink-0 text-faint" />
         )}
         {unreads > 0 && (
-          <span className="ml-auto shrink-0 font-mono text-[11px] font-bold text-accent">
+          <span className="ml-auto shrink-0 text-[11px] font-bold text-accent">
             {unreads > 99 ? "99+" : unreads}
           </span>
         )}
@@ -498,7 +498,7 @@ export function Sidebar({
       {/* Status area — top third, becomes the status strip. The workspace
           name lives in the StatusBar, not in a sidebar header. */}
       <section className="min-h-0 basis-1/3 overflow-y-auto px-2 pt-3">
-        <h2 className="mb-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none">
+        <h2 className="mb-1 px-2 text-[10px] font-bold tracking-wider text-muted uppercase select-none">
           Online — {online.length}
         </h2>
         {online.map((p) => (
@@ -511,7 +511,7 @@ export function Sidebar({
         ))}
         {offline.length > 0 && (
           <>
-            <h2 className="mt-2 mb-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none">
+            <h2 className="mt-2 mb-1 px-2 text-[10px] font-bold tracking-wider text-muted uppercase select-none">
               Offline — {offline.length}
             </h2>
             {offline.map((p) => (
@@ -542,7 +542,7 @@ export function Sidebar({
         <div className="mb-1 flex items-center justify-between px-2">
           <button
             onClick={() => setRoomsOpen((o) => !o)}
-            className="flex cursor-pointer items-center gap-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
+            className="flex cursor-pointer items-center gap-1 text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
           >
             <span className="w-2.5 shrink-0">{roomsOpen ? "▾" : "▸"}</span>
             Rooms
@@ -585,7 +585,7 @@ export function Sidebar({
           <>
             <button
               onClick={() => setArchivedOpen((o) => !o)}
-              className="mt-2 mb-1 flex items-center gap-1 px-2 font-mono text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
+              className="mt-2 mb-1 flex items-center gap-1 px-2 text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
             >
               <span className="w-2.5 shrink-0">{archivedOpen ? "▾" : "▸"}</span>
               Archived — {archivedChannels.length}

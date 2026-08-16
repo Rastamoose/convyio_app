@@ -51,6 +51,23 @@ describe("LoginScreen", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("opens on signup mode when the URL carries ?signup", () => {
+    window.history.replaceState({}, "", "/?signup");
+    renderScreen();
+
+    expect(screen.getByRole("heading", { name: "Create your account" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create account" })).toBeInTheDocument();
+  });
+
+  it("opens on login mode without ?signup", () => {
+    renderScreen();
+
+    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
   });
 
   it("enables Sign in with a short password — the >=8 rule only gates signup", async () => {
@@ -215,6 +232,31 @@ describe("LoginScreen", () => {
     expect(signInWithOAuth).toHaveBeenCalledWith({
       provider: "google",
       options: { redirectTo: window.location.origin },
+    });
+  });
+
+  it("keeps the invite route in the Google redirect", async () => {
+    signInWithOAuth.mockResolvedValue({ error: null });
+    const user = userEvent.setup();
+    render(
+      <LoginScreen
+        googleAuthEnabled={true}
+        emailAuthEnabled={false}
+        inviteToken="invite-token"
+        invitePreview={{
+          workspace: { id: "ws-2", name: "Second Space" },
+          inviterName: "Mina",
+          expiresAt: Date.now() + 10_000,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Join Second Space" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sign in with Google" }));
+
+    expect(signInWithOAuth).toHaveBeenCalledWith({
+      provider: "google",
+      options: { redirectTo: `${window.location.origin}/invite/invite-token` },
     });
   });
 });

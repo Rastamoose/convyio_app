@@ -46,7 +46,7 @@ export function parseScopePaths(text: string): string[] | null {
 
 function Label({ children }: { children: string }) {
   return (
-    <div className="mb-1 font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+    <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
       {children}
     </div>
   );
@@ -55,7 +55,7 @@ function Label({ children }: { children: string }) {
 /** Cmd/Ctrl+Enter-to-save discoverability line under an editing textarea. */
 function EditHint() {
   return (
-    <div className="mt-1 font-mono text-[10px] text-faint">esc to cancel • ⌘↵ to save</div>
+    <div className="mt-1 text-[10px] text-faint">esc to cancel • ⌘↵ to save</div>
   );
 }
 
@@ -274,15 +274,15 @@ export function ItemDrawer({
       <div
         aria-hidden="true"
         onClick={onClose}
-        className="fixed top-12 right-0 bottom-0 left-0 z-30 animate-fade-in bg-black/20"
+        className="fixed top-10 right-0 bottom-0 left-0 z-30 animate-fade-in bg-black/20"
       />
-      <aside className="elevated fixed top-14 right-2 bottom-2 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto rounded-l-xl p-4">
+      <aside className="elevated fixed top-12 right-2 bottom-2 z-40 flex w-[420px] animate-slide-in-right flex-col overflow-y-auto rounded-l-xl p-4">
         <div className="mb-3 flex items-center gap-2">
-          <span className="rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
+          <span className="rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">
             {item.ref}
           </span>
           <span
-            className={`font-mono text-[10px] font-bold tracking-wider uppercase ${ITEM_STATUS_BADGE[item.status]}`}
+            className={`text-[10px] font-bold tracking-wider uppercase ${ITEM_STATUS_BADGE[item.status]}`}
           >
             {ITEM_STATUS_LABEL[item.status]}
           </span>
@@ -400,7 +400,7 @@ export function ItemDrawer({
                   }
                 }}
                 rows={3}
-                className="w-full resize-none rounded-md bg-input px-2 py-1.5 font-mono text-xs text-body outline-none focus:ring-2 focus:ring-accent"
+                className="w-full resize-none rounded-md bg-input px-2 py-1.5 text-xs text-body outline-none focus:ring-2 focus:ring-accent"
                 placeholder={'One path per line; end with "/" for a subtree. Empty = unrestricted.'}
                 maxLength={2000}
               />
@@ -413,7 +413,7 @@ export function ItemDrawer({
               title="Click to edit"
             >
               {item.scopePaths && item.scopePaths.length > 0 ? (
-                <ul className="font-mono text-xs text-body">
+                <ul className="text-xs text-body">
                   {item.scopePaths.map((path) => (
                     <li key={path} className="break-all">
                       {path}

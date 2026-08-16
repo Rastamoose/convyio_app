@@ -92,7 +92,7 @@ describe("AddAgentModal", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     await user.click(screen.getByLabelText("Copy CLI"));
     expect(writeText).toHaveBeenCalledWith(
-      "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz --workspace .",
+      "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz",
     );
 
     await user.click(named("Pairing code"));
@@ -100,13 +100,13 @@ describe("AddAgentModal", () => {
 
     await user.click(named("Setup prompt"));
     expect(
-      screen.getByText(/Pair this repository with Convyio so you can act as its workspace agent/),
+      screen.getByText(/Pair this Convyio agent/),
     ).toBeInTheDocument();
 
     await user.click(named("CLI"));
     expect(
       screen.getByText(
-        "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz --workspace .",
+        "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz",
       ),
     ).toBeInTheDocument();
   });

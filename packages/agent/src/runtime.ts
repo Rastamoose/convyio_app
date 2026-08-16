@@ -47,9 +47,10 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
     }));
     const listened = await bridge.listen(TOOL_DECLARATIONS);
     local.acp.setMcpServers([{
+      type: "http",
       name: "convyio-toolman",
       url: listened.url,
-      headers: { Authorization: `Bearer ${listened.token}` },
+      headers: [{ name: "Authorization", value: `Bearer ${listened.token}` }],
     }]);
   }
   const memory = await Memory.load(local.dataDir);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@workspace/shared";
 
-const STORAGE_KEY = "convyio:lastRead";
+export const unreadStorageKey = (workspaceId: string) => `convyio:lastRead:${workspaceId}`;
 
 interface UnreadState {
   /** Channel currently being viewed; always reads as zero unread. */
@@ -13,9 +13,9 @@ interface UnreadState {
 
 const channelOf = (m: ChatMessage) => m.channel ?? "general";
 
-function loadLastRead(): Record<string, number> {
+function loadLastRead(workspaceId: string): Record<string, number> {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(unreadStorageKey(workspaceId));
     return raw ? (JSON.parse(raw) as Record<string, number>) : {};
   } catch {
     return {};
@@ -29,16 +29,20 @@ function loadLastRead(): Record<string, number> {
  * unread = messages newer than the channel's last-read stamp — no scroll
  * position modeling.
  */
-export function useUnreads(messages: ChatMessage[]) {
+export function useUnreads(
+  messages: ChatMessage[],
+  workspaceId: string,
+  baseTitle?: string,
+) {
   const [state, setState] = useState<UnreadState>(() => ({
     active: null,
-    lastRead: loadLastRead(),
+    lastRead: loadLastRead(workspaceId),
     firstUnread: {},
   }));
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state.lastRead));
-  }, [state.lastRead]);
+    window.localStorage.setItem(unreadStorageKey(workspaceId), JSON.stringify(state.lastRead));
+  }, [state.lastRead, workspaceId]);
 
   const unreadCount = (channel: string): number => {
     if (channel === state.active) return 0;
@@ -48,16 +52,18 @@ export function useUnreads(messages: ChatMessage[]) {
   };
 
   // Captured once, before any "(N) " prefix is ever applied, so restoring
-  // at zero unread never bakes in a stale count.
+  // at zero unread never bakes in a stale count. When the caller supplies a
+  // baseTitle (e.g. "workspace | convyio") it takes precedence and tracks
+  // changes.
   const baseTitleRef = useRef<string | null>(null);
-  if (baseTitleRef.current === null) baseTitleRef.current = document.title;
+  if (baseTitleRef.current === null) baseTitleRef.current = baseTitle ?? document.title;
 
   const channels = Array.from(new Set(messages.map(channelOf)));
   const total = channels.reduce((sum, c) => sum + unreadCount(c), 0);
+  const base = baseTitle ?? baseTitleRef.current ?? "";
   useEffect(() => {
-    const base = baseTitleRef.current ?? "";
     document.title = total > 0 ? `(${total}) ${base}` : base;
-  }, [total]);
+  }, [total, base]);
 
   return {
     unreadCount,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   ACTION_CAPABILITY,
@@ -48,6 +49,7 @@ import type { Toolman, ToolmanResult } from "./board/Toolman";
 import type { ProjectStore } from "./projects/ProjectStore";
 import type { ToolmanGateway } from "./projects/ToolmanGateway";
 import type { ToolExecutionStore } from "./projects/ToolExecutionStore";
+import { folderConsent } from "./projects/folderConsent";
 import { requestOrigin } from "./requestOrigin";
 import type { RunnerRuntime } from "./RunnerRuntime";
 import type { ContextCursorStore } from "./context/ContextCursorStore";
@@ -113,9 +115,11 @@ export class Hub {
 
   /** Runs paused on a human decision, keyed by interaction request id. */
   private pendingApprovals = new Map<string, (verdict: "approved" | "denied" | "expired") => void>();
+  /** Folder-owner approvals for the rest of a conversation, keyed by agent:folder:conversation. */
+  private folderLeases = new Map<string, string>();
 
   constructor(
-    server: HttpServer,
+    server: HttpServer | null,
     private roster: Roster,
     private messages: MessageStore,
     private agentWork: AgentWorkStore,
@@ -132,13 +136,13 @@ export class Hub {
     // upgrade; the first that doesn't match its path abortHandshake(400)s
     // the rest — which is why the client/agent join on `/` saw empty data.
     this.wss = new WebSocketServer({ noServer: true });
-    server.on("upgrade", (req, socket, head) => {
-      const pathname = (req.url ?? "/").split("?")[0];
-      if (pathname === "/toolman") return;
-      this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.wss.emit("connection", ws, req);
+    if (server) {
+      server.on("upgrade", (req, socket, head) => {
+        const pathname = (req.url ?? "/").split("?")[0];
+        if (pathname === "/toolman") return;
+        this.handleUpgrade(req, socket, head);
       });
-    });
+    }
     // ws re-emits the http server's 'error' on itself. Without a listener here
     // that re-emit is an unhandled 'error' event, which kills the process
     // before the http server's own handler can decide what to do — so a
@@ -150,6 +154,12 @@ export class Hub {
       if (err.code !== "EADDRINUSE") console.warn("[hub] websocket server error:", err.message);
     });
     this.wss.on("connection", (socket, request) => this.onConnection(socket, request));
+  }
+
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.wss.handleUpgrade(request, socket, head, (ws) => {
+      this.wss.emit("connection", ws, request);
+    });
   }
 
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
@@ -316,7 +326,12 @@ export class Hub {
       // A logged-off human stays in the roster as offline (like agents);
       // only their API tokens die with the last connection.
       if (!stillConnected) {
-        this.sessions.revokeFor(id);
+        this.sessions.revokeFor(
+          id,
+          this.options.authorizeJoin ? this.options.workspace.id : undefined,
+        );
+        this.revokeFolderLeasesFor(id);
+        void this.expireOwnerApprovals(id);
       }
     } else {
       if (conn.participant.runState === "working") conn.participant.runState = "dead";
@@ -529,7 +544,10 @@ export class Hub {
       archivedChannels,
       pinnedChannels,
       demoChannels: this.options.demoChannels,
-      token: this.sessions.issue(participant.id),
+      token: this.sessions.issue(
+        participant.id,
+        this.options.authorizeJoin ? this.options.workspace.id : null,
+      ),
       apiUrl: conn.apiUrl,
       snapshotSeq,
       ...(contextCursor ? { contextCursor } : {}),
@@ -776,17 +794,71 @@ export class Hub {
         error: authz.message,
       });
     }
-    const gate = await this.gateByMode(actor, event, mode, capability);
-    if (gate) {
-      return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+    if (isProjectAction(event.action)) {
+      const folderGate = await this.gateFolderAccess(actor, event, event.action);
+      if (folderGate) {
+        return this.send(conn, { type: "action_result", requestId: event.requestId, ...folderGate });
+      }
+    } else {
+      const gate = await this.gateByMode(actor, event, mode, capability);
+      if (gate) {
+        return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+      }
     }
     const result = isProjectAction(event.action)
-      ? await this.executeProjectAction(actor.id, event.action)
+      ? await this.executeProjectAction(actor.id, event.action, event.requestId)
       : await this.toolman.execute(actor, event.action, event.boardItemRef ?? null, { chatGrant });
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
   }
 
-  private async executeProjectAction(agentId: string, action: ProjectAction): Promise<ToolmanResult> {
+  /**
+   * Local-folder consent. Conversation permission modes never widen this:
+   * the folder owner must be online, and their mode decides whether Toolman asks.
+   */
+  private async gateFolderAccess(
+    actor: { id: string; workspaceId: string },
+    event: ActionRequestEvent,
+    action: ProjectAction,
+  ): Promise<ToolmanResult | null> {
+    if (!this.options.projects) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" };
+    }
+    const project = await this.options.projects.find(action.projectId);
+    if (!project || project.archivedAt) {
+      return { ok: false, code: "PROJECT_REQUIRED", error: "no such folder" };
+    }
+    const decision = folderConsent(project, this.isHumanOnline(project.createdBy));
+    if ("allow" in decision) {
+      return decision.allow ? null : { ok: false, code: decision.code, error: decision.message };
+    }
+    const leaseKey = folderLeaseKey(actor.id, action.projectId, event.conversationId ?? null);
+    if (this.folderLeases.get(leaseKey) === project.createdBy) return null;
+    const capability = ACTION_CAPABILITY[action.kind] ?? "folder_read";
+    const gate = await this.awaitApproval(actor, event, capability, event.conversationId ?? null, project.createdBy);
+    if (gate) return gate;
+    this.folderLeases.set(leaseKey, project.createdBy);
+    return null;
+  }
+
+  private isHumanOnline(actorId: string): boolean {
+    return this.roster.list().some((participant) => participant.id === actorId && participant.kind === "human" && participant.online);
+  }
+
+  private revokeFolderLeasesFor(ownerId: string): void {
+    for (const [key, owner] of this.folderLeases) {
+      if (owner === ownerId) this.folderLeases.delete(key);
+    }
+  }
+
+  private async expireOwnerApprovals(ownerId: string): Promise<void> {
+    const expired = await this.interactions.expireForTarget(this.options.workspace.id, ownerId);
+    for (const request of expired) {
+      this.pendingApprovals.get(request.id)?.("expired");
+      this.broadcast({ type: "interaction_resolved", request });
+    }
+  }
+
+  private async executeProjectAction(agentId: string, action: ProjectAction, requestId?: string): Promise<ToolmanResult> {
     if (!this.options.projects || !this.options.toolmanGateway) {
       return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" };
     }
@@ -818,7 +890,7 @@ export class Hub {
         console.warn("[hub] could not persist tool execution:", err instanceof Error ? err.message : err);
       }
     }
-    const result = await this.options.toolmanGateway.execute(assignment, action);
+    const result = await this.options.toolmanGateway.execute(assignment, action, requestId);
     if (started && this.options.executions) {
       try {
         const finished = await this.options.executions.finish(started.execution.id, {
@@ -858,6 +930,7 @@ export class Hub {
     event: ActionRequestEvent,
     capability: string,
     conversationId: string | null,
+    targetActorId?: string | null,
   ): Promise<ToolmanResult | null> {
     let request;
     try {
@@ -869,6 +942,7 @@ export class Hub {
         summary: describeAction(event.action),
         capability,
         boardItemRef: event.boardItemRef ?? null,
+        targetActorId,
       });
     } catch (err) {
       // If the decision cannot be recorded it cannot be audited, so nothing
@@ -912,6 +986,8 @@ export class Hub {
   ): Promise<void> {
     // Approving is a human act: an agent must not clear its own prompt.
     if (participant.kind !== "human") return;
+    const pending = await this.interactions.findPending(this.options.workspace.id, event.requestId);
+    if (pending?.targetActorId && pending.targetActorId !== participant.id) return;
     const verdict = event.decision === "approve" ? "approved" : "denied";
     const request = await this.interactions.resolve(
       this.options.workspace.id,
@@ -1059,7 +1135,15 @@ export class Hub {
     }
     this.roster.removeAgent(actorId);
     this.runnerRuntime.clear(actorId);
-    this.sessions.revokeFor(actorId);
+    this.sessions.revokeFor(
+      actorId,
+      this.options.authorizeJoin ? this.options.workspace.id : undefined,
+    );
+    this.broadcastPresence();
+  }
+
+  async addOfflineMember(actorId: string): Promise<void> {
+    await this.roster.addOffline(actorId);
     this.broadcastPresence();
   }
 
@@ -1074,7 +1158,10 @@ export class Hub {
       }
     }
     this.roster.removeHuman(actorId);
-    this.sessions.revokeFor(actorId);
+    this.sessions.revokeFor(
+      actorId,
+      this.options.authorizeJoin ? this.options.workspace.id : undefined,
+    );
     this.broadcastPresence();
   }
 
@@ -1094,6 +1181,10 @@ export class Hub {
 
 function isProjectAction(action: ActionRequestEvent["action"]): action is ProjectAction {
   return action.kind.startsWith("project_");
+}
+
+function folderLeaseKey(agentId: string, projectId: string, conversationId: string | null): string {
+  return `${agentId}:${projectId}:${conversationId ?? "-"}`;
 }
 
 /** How long a paused run waits for a human before failing closed. */

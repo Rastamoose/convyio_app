@@ -82,11 +82,27 @@ export async function saveInstallation(installation: StoredToolman, env: NodeJS.
   return destination;
 }
 
-export async function loadInstallation(env: NodeJS.ProcessEnv = process.env): Promise<StoredToolman> {
+export async function loadInstallation(
+  ref?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StoredToolman> {
   const installations = await listInstallations(env);
   if (installations.length === 0) throw new Error("No paired Toolman node found. Run `convyio-toolman pair` first.");
-  if (installations.length > 1) throw new Error("More than one paired Toolman node. Run `convyio-toolman unpair` first.");
-  return installations[0]!;
+  if (!ref) {
+    if (installations.length === 1) return installations[0]!;
+    throw new Error(`More than one paired Toolman node. Choose one:\n${formatInstallations(installations)}`);
+  }
+  const exact = installations.find((item) => item.node.id === ref);
+  if (exact) return exact;
+  const lowered = ref.toLowerCase();
+  const matches = installations.filter(
+    (item) => item.node.name.toLowerCase() === lowered || item.workspace.name.toLowerCase() === lowered,
+  );
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) {
+    throw new Error(`More than one paired Toolman node matches ${JSON.stringify(ref)}. Use its id:\n${formatInstallations(matches)}`);
+  }
+  throw new Error(`No paired Toolman node matches ${JSON.stringify(ref)}.\n${formatInstallations(installations)}`);
 }
 
 export async function listInstallations(env: NodeJS.ProcessEnv = process.env): Promise<StoredToolman[]> {
@@ -118,6 +134,12 @@ export async function clearInstallations(env: NodeJS.ProcessEnv = process.env, f
     names.push(installation.node.name);
   }
   return names;
+}
+
+function formatInstallations(installations: StoredToolman[]): string {
+  return installations
+    .map((item) => `  ${item.node.id} · ${item.node.name} · ${item.workspace.name}`)
+    .join("\n");
 }
 
 export function validatedServerOrigin(input: string): string {

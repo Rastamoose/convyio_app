@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   Actor,
   CheckoutStatus,
+  FolderAccessMode,
   Project,
   ProjectAccessRequest,
   ProjectAccessStatus,
@@ -104,6 +105,31 @@ export class ProjectStore {
         createdAt: now,
       });
       return (await this.findIn(sql, id))!;
+    });
+  }
+
+  async setAccessMode(actor: Actor, projectId: string, accessMode: FolderAccessMode): Promise<Project> {
+    this.assertHuman(actor);
+    const now = Date.now();
+    return this.store.transaction(async (sql) => {
+      const existing = await this.findIn(sql, projectId);
+      if (!existing || existing.archivedAt) throw new ApiError(404, "NOT_FOUND", "no such project");
+      if (existing.createdBy !== actor.id) {
+        throw new ApiError(403, "OWNER_ONLY", "only the folder owner can change its access mode");
+      }
+      await sql`
+        UPDATE projects SET access_mode = ${accessMode}
+        WHERE id = ${projectId} AND workspace_id = ${this.store.workspaceId}
+      `;
+      await this.events.append(sql, {
+        workspaceId: this.store.workspaceId,
+        actorId: actor.id,
+        kind: "project.access_mode.updated",
+        subjectId: projectId,
+        payload: { projectId, accessMode },
+        createdAt: now,
+      });
+      return (await this.findIn(sql, projectId))!;
     });
   }
 
@@ -387,6 +413,7 @@ interface ProjectRow {
   created_by: string;
   created_at: number;
   archived_at: number | null;
+  access_mode: FolderAccessMode;
   created_by_name: string;
 }
 
@@ -435,6 +462,7 @@ function toProject(row: ProjectRow): Project {
     createdByName: row.created_by_name,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
+    accessMode: row.access_mode,
   };
 }
 

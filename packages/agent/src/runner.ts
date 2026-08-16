@@ -132,6 +132,7 @@ export class AgentRunner {
   /** Abort the current run, drop all queued work, and start over on this. */
   interruptWith(work: WorkItem): void {
     this.abortController?.abort();
+    this.board.cancelLastAction();
     this.cancelQueued(this.queue);
     this.queue.length = 0;
     this.enqueue(work);
@@ -141,6 +142,7 @@ export class AgentRunner {
   abortIfWorkingOn(itemId: string): boolean {
     if (this.activeTask?.id !== itemId) return false;
     this.abortController?.abort();
+    this.board.cancelLastAction();
     return true;
   }
 

@@ -39,6 +39,9 @@ describe("tool executions", () => {
     const finished = await executions.finish(started.execution.id, { ok: true, output: "81 passing" });
     assert.equal(finished.execution.status, "completed");
     assert.equal(finished.execution.outputPreview, "81 passing");
+    const recent = await executions.listRecent();
+    assert.equal(recent.some((row) => row.id === started.execution.id), true);
+    assert.equal(await executions.sweepExpired(), 0);
   });
   after(() => drop());
 

@@ -171,6 +171,8 @@ export type AuthzDenyCode =
   | "PROJECT_MISMATCH" // action project is not the item's project
   | "PROJECT_UNASSIGNED" // agent has no assignment for the project
   | "CHECKOUT_UNAVAILABLE" // assigned checkout is not ready or its node is offline
+  | "OWNER_OFFLINE" // folder owner is not online; local access is unavailable
+  | "FOLDER_DENIED" // folder owner set the folder to deny
   | "UNKNOWN_ACTION" // action is not classified and therefore ungrantable
   | "PLAN_MODE" // conversation is in plan mode; nothing may mutate
   | "APPROVAL_DENIED" // a human declined the permission request

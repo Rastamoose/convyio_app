@@ -7,7 +7,7 @@ import { ActionButton } from "./ActionButton";
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="mb-1.5">
-      <div className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+      <div className="text-[10px] font-bold tracking-wider text-muted uppercase">
         {label}
       </div>
       <div className="text-sm leading-snug break-words text-body">{value}</div>
@@ -35,7 +35,7 @@ export function ProposalCard({
   return (
     <div className="rounded-lg bg-subtle p-3">
       <div className="mb-2 flex items-baseline gap-2 text-xs">
-        <span className="shrink-0 rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
+        <span className="shrink-0 rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">
           {item.ref}
         </span>
         <span className="truncate font-medium text-body">
@@ -59,10 +59,10 @@ export function ProposalCard({
       )}
       {item.scopePaths && item.scopePaths.length > 0 && (
         <div className="mb-1.5">
-          <div className="font-mono text-[10px] font-bold tracking-wider text-muted uppercase">
+          <div className="text-[10px] font-bold tracking-wider text-muted uppercase">
             Scope
           </div>
-          <div className="font-mono text-xs leading-snug break-all text-body">
+          <div className="text-xs leading-snug break-all text-body">
             {item.scopePaths.join(", ")}
           </div>
         </div>

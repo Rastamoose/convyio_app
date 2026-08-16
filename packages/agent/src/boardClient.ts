@@ -29,6 +29,7 @@ export class BoardClient {
   private token: string | null = null;
   private apiUrl: string | null = null;
   private actionWaiters = new Map<string, (result: ActionResultEvent) => void>();
+  private lastRequestId: string | null = null;
 
   constructor(private socket: AgentSocket) {
     socket.onEvent((event) => {
@@ -184,6 +185,7 @@ export class BoardClient {
   ): Promise<ActionResultEvent> {
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();
+      this.lastRequestId = requestId;
       // A mutation may pause on a human decision, so the wait outlasts the
       // server's own approval timeout rather than abandoning an approved run.
       const timeout = ACTION_CAPABILITY[action.kind] ? APPROVAL_WAIT_MS : 15_000;
@@ -197,6 +199,11 @@ export class BoardClient {
       });
       this.socket.send({ type: "action_request", requestId, boardItemRef, action, conversationId });
     });
+  }
+
+  cancelLastAction(): void {
+    if (!this.lastRequestId) return;
+    this.socket.send({ type: "action_cancel", requestId: this.lastRequestId });
   }
 
   /** Compact board summary for the model's context window. */

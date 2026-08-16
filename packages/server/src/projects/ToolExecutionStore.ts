@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   ProjectAction,
   ThreadEvent,
@@ -6,8 +7,11 @@ import type {
   ToolExecutionStatus,
   ToolmanActionKind,
 } from "@workspace/shared";
+import { DEFAULT_ARTIFACT_RETENTION_DAYS } from "@workspace/shared";
 import type { ThreadEventStore } from "../chat/ThreadEventStore";
 import type { Sql, WorkspaceDb } from "../db";
+
+const ARTIFACT_BUCKET = "tool-artifacts";
 
 const PREVIEW = 4_000;
 
@@ -31,6 +35,7 @@ export class ToolExecutionStore {
   constructor(
     private store: WorkspaceDb,
     private events: ThreadEventStore,
+    private supabase: SupabaseClient | null = null,
   ) {}
 
   async start(input: ExecutionInput): Promise<{ execution: ToolExecution; event: ThreadEvent }> {
@@ -84,12 +89,15 @@ export class ToolExecutionStore {
           ? "tool.execution.completed"
           : "tool.execution.failed";
     const outputPreview = outcome.output ? preview(outcome.output) : null;
+    const artifact = outcome.output ? await this.storeArtifact(id, "output", outcome.output) : null;
+    await this.sweepExpired().catch(() => undefined);
     return this.store.transaction(async (sql) => {
       const [row] = await sql<{ agent_id: string; channel_id: string | null; conversation_id: string | null; run_id: string | null }[]>`
         UPDATE tool_executions
         SET status = ${status},
             output_preview = ${outputPreview},
             error = ${outcome.error ?? null},
+            output_object_key = ${artifact?.objectKey ?? null},
             output_sha256 = ${outcome.output ? sha(outcome.output) : null},
             output_bytes = ${outcome.output ? Buffer.byteLength(outcome.output) : null},
             completed_at = ${now}
@@ -127,6 +135,54 @@ export class ToolExecutionStore {
     return rows.reverse().map(toExecution);
   }
 
+  async find(id: string): Promise<ToolExecution | null> {
+    const [row] = await this.store.sql<ExecutionRow[]>`
+      SELECT * FROM tool_executions WHERE id = ${id} AND workspace_id = ${this.store.workspaceId}
+    `;
+    return row ? toExecution(row) : null;
+  }
+
+  async readArtifact(id: string, role: "input" | "output"): Promise<{ bytes: Buffer; contentType: string } | null> {
+    const execution = await this.find(id);
+    const ref = role === "input" ? execution?.inputArtifact : execution?.outputArtifact;
+    if (!execution || !ref || !this.supabase) return null;
+    const { data, error } = await this.supabase.storage.from(ARTIFACT_BUCKET).download(ref.objectKey);
+    if (error || !data) return null;
+    return { bytes: Buffer.from(await data.arrayBuffer()), contentType: ref.contentType };
+  }
+
+  async sweepExpired(retentionDays = DEFAULT_ARTIFACT_RETENTION_DAYS): Promise<number> {
+    if (!this.supabase) return 0;
+    const cutoff = Date.now() - retentionDays * 86_400_000;
+    const rows = await this.store.sql<{ id: string; input_object_key: string | null; output_object_key: string | null; agent_id: string }[]>`
+      SELECT id, input_object_key, output_object_key, agent_id
+      FROM tool_executions
+      WHERE workspace_id = ${this.store.workspaceId}
+        AND completed_at IS NOT NULL
+        AND completed_at < ${cutoff}
+        AND (input_object_key IS NOT NULL OR output_object_key IS NOT NULL)
+    `;
+    let expired = 0;
+    for (const row of rows) {
+      const keys = [row.input_object_key, row.output_object_key].filter((key): key is string => Boolean(key));
+      if (keys.length) await this.supabase.storage.from(ARTIFACT_BUCKET).remove(keys);
+      await this.store.sql`
+        UPDATE tool_executions
+        SET input_object_key = NULL, output_object_key = NULL
+        WHERE id = ${row.id}
+      `;
+      await this.events.append(this.store.sql, {
+        workspaceId: this.store.workspaceId,
+        actorId: row.agent_id,
+        kind: "tool.artifact.expired",
+        subjectId: row.id,
+        payload: { executionId: row.id },
+      });
+      expired += 1;
+    }
+    return expired;
+  }
+
   async listForRun(runId: string): Promise<ToolExecution[]> {
     const rows = await this.store.sql<ExecutionRow[]>`
       SELECT * FROM tool_executions
@@ -134,6 +190,19 @@ export class ToolExecutionStore {
       ORDER BY started_at ASC
     `;
     return rows.map(toExecution);
+  }
+
+  private async storeArtifact(executionId: string, role: "input" | "output", body: string) {
+    if (!this.supabase) return null;
+    const objectKey = `${this.store.workspaceId}/${executionId}/${role}-${randomUUID()}`;
+    const { error } = await this.supabase.storage.from(ARTIFACT_BUCKET).upload(objectKey, Buffer.from(body), {
+      contentType: "text/plain",
+    });
+    if (error) {
+      console.warn("[toolman] artifact upload failed:", error.message);
+      return null;
+    }
+    return { objectKey, sha256: sha(body), bytes: Buffer.byteLength(body), contentType: "text/plain" };
   }
 
   private async findIn(sql: Sql, id: string): Promise<ToolExecution | null> {

@@ -16,6 +16,7 @@ import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { InteractionStore } from "../src/chat/InteractionStore";
 import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
+import { AccountStore } from "../src/auth/AccountStore";
 import { AgentInvites } from "../src/auth/AgentInvites";
 import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
@@ -281,7 +282,9 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const plans = new PlanService(db, threadEvents);
   const service = new BoardService(db, threadEvents, plans);
   const sessions = new Sessions();
-  const auth = options.auth ? new Auth(db, fakeSupabase(options.auth.users)) : null;
+  const auth = options.auth
+    ? new Auth(new AccountStore(db.sql), fakeSupabase(options.auth.users))
+    : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
   const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
@@ -332,7 +335,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       workspace: { id: db.workspaceId, name: db.workspaceName },
       demoChannels: [],
       authorizeJoin: auth
-        ? createJoinGate(auth, options.auth?.agentToken ?? null, agentInvites)
+        ? createJoinGate(auth, db.workspaceId, options.auth?.agentToken ?? null, agentInvites)
         : undefined,
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
       threadEvents,
@@ -449,11 +452,10 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       closeClients();
       // Truncate all mutable tables, keep the workspaces row so
       // db.workspaceId stays valid.
+      await db.sql`TRUNCATE TABLE workspaces, actors RESTART IDENTITY CASCADE`;
       await db.sql`
-        TRUNCATE TABLE agent_run_requests, agent_conversations, thread_events,
-          message_reactions, messages, board_events, board_items, attachments,
-          agent_invites, workspace_members, actors, ref_counters, channels
-        RESTART IDENTITY CASCADE
+        INSERT INTO workspaces (id, name, public_code, created_at, updated_at)
+        VALUES (${db.workspaceId}, ${db.workspaceName}, 'CV-TEST000001', ${Date.now()}, ${Date.now()})
       `;
       await db.sql`
         INSERT INTO ref_counters (workspace_id, n) VALUES (${db.workspaceId}, 0)

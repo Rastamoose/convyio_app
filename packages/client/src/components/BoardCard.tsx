@@ -36,10 +36,10 @@ export function BoardCard({
       }`}
     >
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="shrink-0 rounded bg-accent px-1 py-px font-mono text-[10px] font-bold text-on-accent">
+        <span className="shrink-0 rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">
           {item.ref}
         </span>
-        {planRef && <span className="truncate font-mono text-[10px] text-faint">{planRef}</span>}
+        {planRef && <span className="truncate text-[10px] text-faint">{planRef}</span>}
         {item.ownerName && (
           <span className="ml-auto shrink-0" title={item.ownerName}>
             <Avatar name={item.ownerName} size={16} />
@@ -61,13 +61,13 @@ export function BoardCard({
       )}
       {item.status === "proposed" && item.scopePaths && item.scopePaths.length > 0 && (
         <div
-          className="mt-1 truncate font-mono text-[10px] text-faint"
+          className="mt-1 truncate text-[10px] text-faint"
           title={item.scopePaths.join(", ")}
         >
           {item.scopePaths.join(" · ")}
         </div>
       )}
-      <div className="mt-2 flex items-center gap-2 font-mono text-[10px] text-faint">
+      <div className="mt-2 flex items-center gap-2 text-[10px] text-faint">
         {item.origin === "agent" && <AgentBadge />}
         <span title={formatFullDateTime(item.createdAt)}>
           {relativeTime(item.createdAt)}

@@ -78,6 +78,19 @@ export class Roster {
     return participant;
   }
 
+  async addOffline(actorId: string): Promise<void> {
+    const actor = await this.db.getActor(actorId);
+    if (!actor || !(await this.db.isMember(actorId))) return;
+    this.known.set(rosterKey(actor.kind, actor.displayName), {
+      id: actor.id,
+      name: actor.displayName,
+      kind: actor.kind,
+      status: "",
+      runState: "idle",
+      online: false,
+    });
+  }
+
   get(kind: ParticipantKind, name: string): Participant | undefined {
     return this.known.get(rosterKey(kind, name));
   }
