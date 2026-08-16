@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AgentSummary, Participant, RunnerConfigOption } from "@workspace/shared";
-import { AddAgentModal } from "./AddAgentModal";
+import { AddAgentModal, pairCommand, setupPrompt } from "./AddAgentModal";
 
 // AddAgentModal reads/writes agent invites through the workspace context;
 // swap in a controllable stub, per-test state via module-level lets, the
@@ -66,7 +66,7 @@ const modelOption: RunnerConfigOption = {
 };
 
 describe("AddAgentModal", () => {
-  it("shows pairing code, setup prompt, and CLI as collapsed copyable rows after creating an agent", async () => {
+  it("makes the setup prompt the primary pairing action after creating an agent", async () => {
     const user = userEvent.setup();
     agentInvites = [];
     createAgent.mockImplementation(async (fields: { name: string }) => {
@@ -79,36 +79,33 @@ describe("AddAgentModal", () => {
     await user.type(screen.getByLabelText("Agent name"), "helper");
     await user.click(screen.getByText("Create agent"));
 
-    const named = (label: string) => screen.getByRole("button", { name: (n) => n === label });
-    expect(await screen.findByRole("button", { name: (n) => n === "Pairing code" })).toBeInTheDocument();
-    expect(named("Setup prompt")).toBeInTheDocument();
-    expect(named("CLI")).toBeInTheDocument();
-    expect(screen.getByLabelText("Copy Pairing code")).toBeInTheDocument();
-    expect(screen.getByLabelText("Copy Setup prompt")).toBeInTheDocument();
-    expect(screen.getByLabelText("Copy CLI")).toBeInTheDocument();
-    expect(screen.queryByText("pair-code-xyz")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/Paste this into Claude Code, Cursor, Codex/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Your subscription stays on this machine/)).toBeInTheDocument();
+    const expectedPrompt = setupPrompt("http://localhost:3001", "pair-code-xyz", "helper");
+    expect(screen.getByLabelText("Setup prompt").textContent).toBe(expectedPrompt);
+    expect(screen.getByRole("button", { name: (n) => n === "CLI" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: (n) => n === "Pairing code" })).toBeInTheDocument();
 
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    await user.click(screen.getByLabelText("Copy CLI"));
-    expect(writeText).toHaveBeenCalledWith(
-      "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz",
-    );
+    await user.click(screen.getByLabelText("Copy setup prompt"));
+    expect(writeText).toHaveBeenCalledWith(expectedPrompt);
 
-    await user.click(named("Pairing code"));
-    expect(screen.getByText("pair-code-xyz")).toBeInTheDocument();
-
-    await user.click(named("Setup prompt"));
+    await user.click(screen.getByRole("button", { name: (n) => n === "CLI" }));
     expect(
-      screen.getByText(/Pair this Convyio agent/),
+      screen.getByText(pairCommand("http://localhost:3001", "pair-code-xyz")),
     ).toBeInTheDocument();
+  });
 
-    await user.click(named("CLI"));
-    expect(
-      screen.getByText(
-        "convyio-agent pair --server http://localhost:3001 --code pair-code-xyz",
-      ),
-    ).toBeInTheDocument();
+  it("writes a local-only setup prompt that includes the pairing command", () => {
+    const prompt = setupPrompt("https://app.convyio.com", "secret-code", "reader");
+    expect(prompt).toContain(pairCommand("https://app.convyio.com", "secret-code"));
+    expect(prompt).toContain("keep using the subscription already signed in here");
+    expect(prompt).toContain("Do not send that login, an API key, or the pairing code to any remote service");
+    expect(prompt).toContain("claude login");
+    expect(prompt).toContain("convyio-agent run");
   });
 
   it("disables the model select until the runner reports a model option", async () => {

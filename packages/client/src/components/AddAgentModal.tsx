@@ -8,6 +8,7 @@ import type {
 } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { runtimeHealthDot, runtimeHealthLabel } from "../lib/status";
+import { PairingCopyRow, SetupPromptCard } from "./PairingCopy";
 
 const NAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
@@ -36,11 +37,42 @@ function diagnosticMessage(code: string | undefined): string | null {
 type Step = "create" | "pair" | "configure";
 
 /**
- * The agent pairing + profile surface: create an agent, pair a runner to it
- * (one-time code + a copyable `convyio-agent pair` prompt), then configure
- * its instructions/model/access — and reopen straight into that same
- * configure step for any agent already in the list.
+ * The agent pairing + profile surface: create an agent, pair a local runner
+ * to it (paste-into-Claude/Cursor prompt first, raw CLI as fallback), then
+ * configure its instructions/model/access — and reopen straight into that
+ * same configure step for any agent already in the list.
  */
+
+export function pairCommand(apiUrl: string, pairingCode: string): string {
+  return `convyio-agent pair --server ${apiUrl} --code ${pairingCode}`;
+}
+
+/** Prompt a local coding agent can follow to pair and start this runner. */
+export function setupPrompt(apiUrl: string, pairingCode: string, agentName: string): string {
+  return [
+    `Set up the local Convyio runner for agent "${agentName}".`,
+    "",
+    "Convyio is only the workspace. Claude / Codex stay on this computer and keep using the subscription already signed in here. Do not send that login, an API key, or the pairing code to any remote service.",
+    "",
+    "Pairing command (one-time, expires in about 10 minutes — run it immediately):",
+    pairCommand(apiUrl, pairingCode),
+    "",
+    "Do this without asking for confirmation unless a command fails:",
+    "1. Confirm Node.js 22+ with `node -v`.",
+    "2. Put `convyio-agent` on PATH. It is not a published npm package.",
+    "   - If `convyio-agent` already runs, continue.",
+    "   - Else if this workspace or a parent contains packages/agent/package.json named @workspace/agent, from that checkout run:",
+    "     npm install && npm run build -w @workspace/agent && npm link -w @workspace/agent",
+    "   - Else stop and tell the human they need a Convyio checkout to build the CLI.",
+    "3. From the project directory already open here (this agent's local workspace), run the pairing command above.",
+    "4. If Claude authentication is missing, run `claude login`, wait for the browser login to finish, then continue.",
+    "5. Start the runner in this terminal and keep it running: `convyio-agent run`",
+    "6. Tell the human to return to the Convyio tab. It will show Connected when the runner joins.",
+    "",
+    "Do not background the runner and exit. Do not invent an installer. Do not put the pairing code in git, chat, or logs.",
+  ].join("\n");
+}
+
 export function AddAgentModal({
   open,
   onClose,
@@ -169,7 +201,7 @@ export function AddAgentModal({
         <div className="flex items-center justify-between border-b border-divider px-4 py-3">
           <h2 className="text-lg font-semibold text-body">
             {step === "create" && "Add an agent"}
-            {step === "pair" && "Pair the agent"}
+            {step === "pair" && "Connect locally"}
             {step === "configure" && (activeAgent?.name ?? "Agent")}
           </h2>
           <button
@@ -387,81 +419,6 @@ function CreateStep({
   );
 }
 
-function Chevron({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9 5l7 7-7 7" />
-    </svg>
-  );
-}
-
-/** A pairing secret or command: Copy is always on the row; the value sits
- *  behind the same chevron the rest of the product uses for disclosures. */
-function PairingCopyRow({
-  label,
-  value,
-  multiline,
-}: {
-  label: string;
-  value: string;
-  multiline?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // The value stays selectable once the row is opened.
-    }
-  };
-
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left text-[10px] font-bold tracking-wider text-muted uppercase hover:text-body"
-        >
-          <Chevron expanded={open} />
-          {label}
-        </button>
-        <button
-          type="button"
-          onClick={() => void copy()}
-          aria-label={`Copy ${label}`}
-          className="shrink-0 cursor-pointer rounded-md border border-divider bg-input px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      {open && (
-        <pre
-          className={`mt-1.5 overflow-x-auto rounded-md border border-divider bg-composer px-2.5 py-2 font-mono text-xs text-body ${
-            multiline ? "whitespace-pre-wrap break-words" : "whitespace-pre"
-          }`}
-        >
-          {value}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 function PairStep({
   agent,
   pairingCode,
@@ -473,19 +430,8 @@ function PairStep({
   apiUrl: string;
   onContinue: () => void;
 }) {
-  const cliCommand = pairingCode
-    ? `convyio-agent pair --server ${apiUrl} --code ${pairingCode}`
-    : "";
-  const setupPrompt = pairingCode
-    ? [
-        "Pair this Convyio agent. Run the real convyio-agent CLI (not a published npm package):",
-        "",
-        cliCommand,
-        "",
-        "If `convyio-agent` isn't on PATH yet, build and link it first from a checkout of this repo:",
-        "npm install && npm run build -w @workspace/agent && npm link -w @workspace/agent",
-      ].join("\n")
-    : "";
+  const cliCommand = pairingCode ? pairCommand(apiUrl, pairingCode) : "";
+  const prompt = pairingCode ? setupPrompt(apiUrl, pairingCode, agent.name) : "";
 
   const diagnostic = diagnosticMessage(agent.runtime.diagnosticCode);
   let statusText: string;
@@ -507,15 +453,23 @@ function PairStep({
   return (
     <>
       <p className="mb-4 text-sm text-muted">
-        Pair <span className="text-body">{agent.name}</span> as a workspace agent.
-        Project checkouts are attached separately with Toolman. The pairing code is shown only once.
+        Paste this into Claude Code, Cursor, Codex, or any coding agent on this computer.
+        It pairs <span className="text-body">{agent.name}</span> locally. Your subscription stays
+        on this machine — Convyio never sees that login. Folders are attached later with Toolman.
       </p>
 
       {pairingCode && (
-        <div className="mb-4 space-y-2">
-          <PairingCopyRow label="Pairing code" value={pairingCode} />
-          <PairingCopyRow label="Setup prompt" value={setupPrompt} multiline />
-          <PairingCopyRow label="CLI" value={cliCommand} />
+        <div className="mb-4 space-y-3">
+          <SetupPromptCard value={prompt} />
+          <div>
+            <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
+              Or run it yourself
+            </p>
+            <div className="space-y-2">
+              <PairingCopyRow label="CLI" value={cliCommand} />
+              <PairingCopyRow label="Pairing code" value={pairingCode} />
+            </div>
+          </div>
         </div>
       )}
 

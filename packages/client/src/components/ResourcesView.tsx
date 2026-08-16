@@ -9,6 +9,7 @@ import type {
   ToolmanPairingResponse,
 } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { PairingCopyRow, SetupPromptCard } from "./PairingCopy";
 
 interface ProjectDetail {
   project: Project;
@@ -22,6 +23,48 @@ const ACCESS_MODES: { mode: FolderAccessMode; label: string; hint: string }[] = 
   { mode: "deny", label: "Deny", hint: "Refuse every local operation" },
 ];
 
+const NODE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+
+export function toolmanPairCommand(apiUrl: string, pairingCode: string): string {
+  return `convyio-toolman pair --server ${apiUrl} --code ${pairingCode}`;
+}
+
+export function toolmanCliCommands(apiUrl: string, pairingCode: string): string {
+  return [
+    toolmanPairCommand(apiUrl, pairingCode),
+    "convyio-toolman project add .",
+    "convyio-toolman run",
+  ].join("\n");
+}
+
+/** Prompt a local coding agent can follow to pair Toolman and attach this folder. */
+export function toolmanSetupPrompt(apiUrl: string, pairingCode: string, nodeName: string): string {
+  return [
+    `Set up Convyio Toolman on this computer as machine "${nodeName}", and attach the folder already open here.`,
+    "",
+    "Toolman is a small local process. It is the pipe from this workspace to one checkout on this machine. Agents never see the rest of the disk. It does not host an LLM and does not need an API key.",
+    "",
+    "Pairing command (one-time, expires in about 10 minutes — run it immediately):",
+    toolmanPairCommand(apiUrl, pairingCode),
+    "",
+    "Do this without asking for confirmation unless a command fails:",
+    "1. Confirm Node.js 22+ with `node -v`.",
+    "2. Put `convyio-toolman` on PATH. It is not a published npm package.",
+    "   - If `convyio-toolman` already runs, continue.",
+    "   - Else if this workspace or a parent contains packages/toolman/package.json named @workspace/toolman, from that checkout run:",
+    "     npm install && npm run build -w @workspace/toolman && npm link -w @workspace/toolman",
+    "   - Else stop and tell the human they need a Convyio checkout to build the CLI.",
+    "3. From the project directory already open here, run the pairing command above.",
+    "4. Attach this same directory. It must be a clean git checkout or a plain folder:",
+    "     convyio-toolman project add .",
+    "     If git reports a dirty tree, stop and tell the human to commit or stash first.",
+    "5. Start Toolman in this terminal and keep it running: `convyio-toolman run`",
+    "6. Tell the human to return to the Convyio Resources tab. The machine and folder appear when Toolman joins.",
+    "",
+    "Do not background Toolman and exit. Do not invent an installer. Do not put the pairing code in git, chat, or logs.",
+  ].join("\n");
+}
+
 export function ResourcesView() {
   const { fetchActors, apiFetch, apiUrl, self, participants } = useWorkspace();
   const [nodes, setNodes] = useState<ToolmanNodeSummary[]>([]);
@@ -29,6 +72,8 @@ export function ResourcesView() {
   const [requests, setRequests] = useState<ProjectAccessRequest[]>([]);
   const [details, setDetails] = useState<Record<string, ProjectDetail>>({});
   const [pairing, setPairing] = useState<ToolmanPairingResponse | null>(null);
+  const [nodeName, setNodeName] = useState("desk");
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -44,6 +89,10 @@ export function ResourcesView() {
 
   useEffect(() => {
     void load().catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    const id = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -57,13 +106,18 @@ export function ResourcesView() {
     );
   }, [projects]);
 
+  const trimmedName = nodeName.trim();
+  const nameValid = NODE_NAME.test(trimmedName);
+
   const createPairing = async () => {
-    const name = window.prompt("Name this machine", "desk");
-    if (!name) return;
+    if (!nameValid || creating) return;
+    setCreating(true);
+    setError(null);
     const res = await apiFetch("/api/toolman/pairings", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: trimmedName }),
     });
+    setCreating(false);
     if (!res?.ok) {
       setError("Could not create a pairing code");
       return;
@@ -125,25 +179,79 @@ export function ResourcesView() {
     <div className="min-h-0 flex-1 overflow-y-auto p-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-body">Your devices</h1>
+          <h1 className="mb-2 text-lg font-semibold text-body">Share a folder</h1>
+          <p className="mb-4 text-sm text-muted">
+            Toolman is a small process on this computer — the pipe from the workspace to one
+            local checkout. Paste a prompt into Claude Code, Cursor, Codex, or any coding agent
+            here; it pairs the machine and attaches the folder already open there. Agents never
+            see the rest of the disk.
+          </p>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="min-w-0 flex-1 text-sm font-medium text-body">
+              <span className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase">
+                Machine name
+              </span>
+              <input
+                value={nodeName}
+                onChange={(e) => setNodeName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void createPairing()}
+                maxLength={80}
+                aria-label="Machine name"
+                className="w-full rounded-md border border-divider bg-input px-3 py-2 text-sm text-body outline-none focus:ring-2 focus:ring-accent"
+              />
+            </label>
             <button
               onClick={() => void createPairing()}
-              className="cursor-pointer rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-on-accent"
+              disabled={!nameValid || creating}
+              className={`cursor-pointer rounded-md px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
+                pairing
+                  ? "bg-subtle text-body hover:bg-subtle-hover"
+                  : "bg-accent text-on-accent hover:bg-accent-hover"
+              }`}
             >
-              Share a folder
+              {creating ? "Creating…" : pairing ? "New pairing" : "Share this folder"}
             </button>
           </div>
-          <p className="mb-3 text-sm text-muted">
-            A device is only the pipe to a local folder. Pair it, then attach a clean checkout:
-          </p>
-          {pairing && (
-            <pre className="mb-3 overflow-x-auto rounded-md bg-subtle p-3 font-mono text-xs text-body">
-              {`convyio-toolman pair --server ${apiUrl} --code ${pairing.pairingCode}\nconvyio-toolman project add <path>\nconvyio-toolman run`}
-            </pre>
+          {!nameValid && trimmedName.length > 0 && (
+            <p className="mb-3 text-xs text-muted">
+              1–80 characters: start with a letter or digit; then letters, digits, dots, - or _.
+            </p>
           )}
+
+          {pairing && (
+            <div className="mb-6 space-y-3">
+              <p className="text-sm text-muted">
+                Paste this into a coding agent on this computer. The pairing code is shown only
+                once and expires in about 10 minutes.
+              </p>
+              <SetupPromptCard
+                value={toolmanSetupPrompt(apiUrl, pairing.pairingCode, pairing.pairing.nodeName)}
+              />
+              <div>
+                <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
+                  Or run it yourself
+                </p>
+                <div className="space-y-2">
+                  <PairingCopyRow
+                    label="CLI"
+                    value={toolmanCliCommands(apiUrl, pairing.pairingCode)}
+                    multiline
+                  />
+                  <PairingCopyRow label="Pairing code" value={pairing.pairingCode} />
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-lg font-semibold text-body">Your devices</h2>
           {mine.length === 0 && !pairing ? (
-            <p className="text-sm text-muted">No machines paired yet. Share a folder to register this computer.</p>
+            <p className="text-sm text-muted">
+              No machines paired yet. Share a folder and paste the prompt into your coding agent.
+            </p>
+          ) : mine.length === 0 ? (
+            <p className="text-sm text-muted">Waiting for Toolman to connect…</p>
           ) : (
             <div className="space-y-3">
               {mine.map((node) => (
@@ -215,7 +323,7 @@ export function ResourcesView() {
             </ul>
           </section>
         )}
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {error && <p className="text-sm text-dead">{error}</p>}
       </div>
     </div>
   );
@@ -251,7 +359,7 @@ function DeviceTree({
       </div>
       {folders.length === 0 ? (
         <p className="border-t border-divider px-3 py-2 text-xs text-muted">
-          No folders yet. Attach one with <code className="font-mono">convyio-toolman project add</code>.
+          No folders yet. The setup prompt attaches the checkout open in your editor.
         </p>
       ) : (
         <div className="space-y-2 border-t border-divider p-2">
