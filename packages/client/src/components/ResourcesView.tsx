@@ -42,7 +42,7 @@ export function toolmanSetupPrompt(apiUrl: string, pairingCode: string, nodeName
   return [
     `Set up Convyio Toolman on this computer as machine "${nodeName}", and attach the folder already open here.`,
     "",
-    "Toolman is a small local process. It is the pipe from this workspace to one checkout on this machine. Agents never see the rest of the disk. It does not host an LLM and does not need an API key.",
+    "Toolman is a small local process. It streams one folder from this machine into the workspace. Agents never see the rest of the disk. It does not host an LLM and does not need an API key. A dirty or uncommitted tree is fine — do not ask the human to commit or stash.",
     "",
     "Pairing command (one-time, expires in about 10 minutes — run it immediately):",
     toolmanPairCommand(apiUrl, pairingCode),
@@ -51,13 +51,12 @@ export function toolmanSetupPrompt(apiUrl: string, pairingCode: string, nodeName
     "1. Confirm Node.js 22+ with `node -v`.",
     "2. Put `convyio-toolman` on PATH. It is not a published npm package.",
     "   - If `convyio-toolman` already runs, continue.",
-    "   - Else if this workspace or a parent contains packages/toolman/package.json named @workspace/toolman, from that checkout run:",
+    "   - Else if this workspace or a parent contains packages/toolman/package.json named @workspace/toolman, from that folder run:",
     "     npm install && npm run build -w @workspace/toolman && npm link -w @workspace/toolman",
-    "   - Else stop and tell the human they need a Convyio checkout to build the CLI.",
-    "3. From the project directory already open here, run the pairing command above.",
-    "4. Attach this same directory. It must be a clean git checkout or a plain folder:",
+    "   - Else stop and tell the human they need the Convyio app repo to build the CLI.",
+    "3. From the folder already open here, run the pairing command above.",
+    "4. Attach this same folder, dirty or not:",
     "     convyio-toolman project add .",
-    "     If git reports a dirty tree, stop and tell the human to commit or stash first.",
     "5. Start Toolman in this terminal and keep it running: `convyio-toolman run`",
     "6. Tell the human to return to the Convyio Resources tab. The machine and folder appear when Toolman joins.",
     "",
@@ -181,8 +180,8 @@ export function ResourcesView() {
         <section>
           <h1 className="mb-2 text-lg font-semibold text-body">Share a folder</h1>
           <p className="mb-4 text-sm text-muted">
-            Toolman is a small process on this computer — the pipe from the workspace to one
-            local checkout. Paste a prompt into Claude Code, Cursor, Codex, or any coding agent
+            Toolman is a small process on this computer — it streams one local folder into the
+            workspace. Paste a prompt into Claude Code, Cursor, Codex, or any coding agent
             here; it pairs the machine and attaches the folder already open there. Agents never
             see the rest of the disk.
           </p>
@@ -359,7 +358,7 @@ function DeviceTree({
       </div>
       {folders.length === 0 ? (
         <p className="border-t border-divider px-3 py-2 text-xs text-muted">
-          No folders yet. The setup prompt attaches the checkout open in your editor.
+          No folders yet. The setup prompt attaches the folder open in your editor.
         </p>
       ) : (
         <div className="space-y-2 border-t border-divider p-2">

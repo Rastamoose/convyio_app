@@ -104,6 +104,26 @@ export function useAttachmentDrafts(
 
   return {
     draftsFor: (channel: string): AttachmentDraft[] => drafts[channel] ?? [],
+    /** Upload one file and return its attachment, without parking it in the draft tray. */
+    uploadNow: async (file: File): Promise<Attachment> => {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`${file.name} is larger than 10 MiB`);
+      }
+      const headers: Record<string, string> = {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name),
+      };
+      const request = api.fetch("/api/uploads", {
+        method: "POST",
+        body: file,
+        headers,
+      });
+      if (!request) throw new Error("not connected");
+      const res = await request;
+      if (!res.ok) throw new Error(await api.errorMessage(res));
+      const data = (await res.json()) as { attachment: Attachment };
+      return data.attachment;
+    },
     add: (channel: string, files: File[]) => {
       let room =
         MAX_ATTACHMENTS_PER_MESSAGE - (draftsRef.current[channel] ?? []).length;

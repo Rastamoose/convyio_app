@@ -123,6 +123,14 @@ describe("Sidebar", () => {
     expect(screen.getAllByTitle("Online").length).toBeGreaterThan(0);
   });
 
+  it("shows noodle's mascot even without managedAgent on the participant", () => {
+    participants = [agent("n1", "noodle", false)];
+    const { container } = renderSidebar();
+    const img = container.querySelector("img[src='/favicon.svg']");
+    expect(img).not.toBeNull();
+    expect(screen.getByText("Offline")).toBeInTheDocument();
+  });
+
   it("hides the Offline section when everyone is online", () => {
     participants = [human("h1", "bea", true)];
     renderSidebar();

@@ -1,9 +1,8 @@
 import { WebSocket } from "ws";
-import type { ProjectAction, ProjectAssignment } from "@workspace/shared";
+import type { ProjectAction } from "@workspace/shared";
 import { deleteFile, editTextFile, listFiles, moveFile, PathDeniedError, readTextFile, writeTextFile } from "./fsSafe";
 import { runCommand, type RunningCommand } from "./command";
 import type { StoredToolman } from "./installation";
-import { ensureWorktree } from "./projects";
 
 interface ExecuteFrame {
   type: "toolman_execute";
@@ -15,8 +14,8 @@ interface ExecuteFrame {
 }
 
 /**
- * Outbound node session. The local process owns checkout paths and never
- * sends them back; the server only ever sees opaque keys and results.
+ * Outbound node session. The local process owns the live folder path and
+ * never sends it back; the server only ever sees opaque keys and results.
  */
 export async function runNode(installation: StoredToolman): Promise<void> {
   const socketUrl = new URL(installation.wsUrl);
@@ -40,17 +39,7 @@ export async function runNode(installation: StoredToolman): Promise<void> {
   await new Promise<void>((resolve) => socket.once("close", () => resolve()));
 
   async function handle(event: Record<string, unknown>): Promise<void> {
-    if (event.type === "toolman_assignment_sync") {
-      const assignments = Array.isArray(event.assignments) ? event.assignments as Array<{ projectId: string; agentId: string; agentName?: string }> : [];
-      for (const assignment of assignments) {
-        const mount = installation.mounts.find((item) => item.projectId === assignment.projectId);
-        if (!mount) continue;
-        await ensureWorktree(installation, mount, assignment.agentId, assignment.agentName ?? assignment.agentId).catch((err) => {
-          console.warn("[toolman] worktree reconcile failed:", err instanceof Error ? err.message : err);
-        });
-      }
-      return;
-    }
+    if (event.type === "toolman_assignment_sync") return;
     if (event.type === "toolman_cancel" && typeof event.requestId === "string") {
       inflight.get(event.requestId)?.cancel();
       return;
@@ -62,13 +51,7 @@ export async function runNode(installation: StoredToolman): Promise<void> {
       socket.send(JSON.stringify({ type: "toolman_execution_result", requestId: frame.requestId, ok: false, error: "this node does not mount that project" }));
       return;
     }
-    const assignment = {
-      projectId: frame.projectId,
-      agentId: frame.agentId,
-      checkoutKey: frame.checkoutKey,
-    } as Pick<ProjectAssignment, "projectId" | "agentId" | "checkoutKey">;
-    const checkout = await ensureWorktree(installation, mount, assignment.agentId, assignment.agentId);
-    const result = await runAction(checkout.checkoutPath, frame.action, (running) => {
+    const result = await runAction(mount.absolutePath, frame.action, (running) => {
       inflight.set(frame.requestId, running);
     });
     inflight.delete(frame.requestId);

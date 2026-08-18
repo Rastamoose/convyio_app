@@ -189,6 +189,30 @@ describe("useAttachmentDrafts", () => {
     expect(result.current.draftsFor("general")).toHaveLength(0);
   });
 
+  it("uploadNow posts the file and returns the attachment without a draft", async () => {
+    const { result } = renderDrafts();
+    const attachment = makeAttachment("up-now", "message.txt");
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { attachment }));
+    const file = makeFile("message.txt", "text/plain");
+
+    let uploaded: Attachment | undefined;
+    await act(async () => {
+      uploaded = await result.current.uploadNow(file);
+    });
+    expect(uploaded).toEqual(attachment);
+    expect(result.current.draftsFor("general")).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/uploads",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "text/plain",
+          "X-File-Name": "message.txt",
+        }),
+      }),
+    );
+  });
+
   it("remove drops an in-flight entry and revokes its preview URL", async () => {
     const { result } = renderDrafts();
     // The upload never settles; removal must not wait for it.

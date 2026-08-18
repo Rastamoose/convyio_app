@@ -190,10 +190,19 @@ describe("workspace access lifecycle", () => {
       assert.equal(noodle.role, "member");
       const messages = await migrated.db.sql<{ content: string }[]>`
         SELECT content FROM messages
-        WHERE workspace_id = 'legacy-noodle-workspace'
-        ORDER BY created_at, seq
+        WHERE workspace_id = 'legacy-noodle-workspace' AND id LIKE 'managed-welcome:%'
+        ORDER BY id
       `;
       assert.deepEqual(messages.map((message) => message.content), noodleWelcomeMessages("legacy-noodle-owner"));
+      const notices = await migrated.db.sql<{ content: string }[]>`
+        SELECT content FROM messages
+        WHERE workspace_id = 'legacy-noodle-workspace' AND author_kind = 'system'
+        ORDER BY author_name
+      `;
+      assert.deepEqual(notices.map((message) => message.content), [
+        "legacy-noodle-owner joined the workspace",
+        "noodle joined the workspace",
+      ]);
     } finally {
       await migrated.drop();
     }

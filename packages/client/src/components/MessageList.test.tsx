@@ -47,6 +47,8 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     firstUnreadId: () => null,
     markRead,
     loadOlder,
+    attachmentUrl: (a: { url: string }) => `http://api.test${a.url}`,
+    apiFetch: vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
   }),
 }));
 
@@ -389,6 +391,16 @@ describe("MessageList", () => {
     expect(screen.getByText("write_file billing/round.ts")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
     expect(document.getElementById("interaction-req-1")).toBeTruthy();
+  });
+
+  it("copies message text from the hover rail", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    messages = [msg({ id: "m1", content: "copy me" })];
+    render(<Harness />);
+
+    fireEvent.click(screen.getByTitle("Copy message"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("copy me"));
   });
 
   it("pins an unpinned message and unpins a pinned message", () => {

@@ -186,7 +186,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_read_file",
-    description: "Read a text file from an assigned project checkout.",
+    description: "Read a text file from an assigned local folder.",
     parameters: {
       type: "object",
       properties: {
@@ -198,7 +198,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_list_files",
-    description: "List files in an assigned project checkout.",
+    description: "List files in an assigned local folder.",
     parameters: {
       type: "object",
       properties: {
@@ -210,7 +210,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_search_files",
-    description: "Search text in an assigned project checkout.",
+    description: "Search text in an assigned local folder.",
     parameters: {
       type: "object",
       properties: {
@@ -223,7 +223,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_write_file",
-    description: "Write a text file in an assigned project worktree. Requires a workable project-bound ticket.",
+    description: "Write a text file in an assigned local folder. Requires a workable project-bound ticket.",
     parameters: {
       type: "object",
       properties: {
@@ -253,7 +253,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "project_run_command",
     description:
-      "Run a non-interactive command, including ordinary Git commands, in the agent's assigned worktree. " +
+      "Run a non-interactive command in the assigned local folder. " +
       "Requires a workable project-bound ticket with shell_repo. This is not an OS sandbox.",
     parameters: {
       type: "object",
@@ -286,7 +286,7 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
   PROJECT_REQUIRED: "That action needs a project.",
   PROJECT_MISMATCH: "That action named the wrong project.",
   PROJECT_UNASSIGNED: "You are not assigned to that project.",
-  CHECKOUT_UNAVAILABLE: "The assigned checkout is not ready.",
+  CHECKOUT_UNAVAILABLE: "The assigned folder is not available. The owner's Toolman node may be offline.",
   OWNER_OFFLINE: "The folder owner is offline, so local files are unavailable. Wait until they return.",
   FOLDER_DENIED: "The folder owner has denied local access. Do not retry; ask them to change the folder policy.",
   UNKNOWN_ACTION: "That action is not classified and cannot be authorized.",

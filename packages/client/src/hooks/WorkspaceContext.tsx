@@ -86,6 +86,8 @@ export interface WorkspaceState {
   removeAttachment: (channel: string, localId: string) => void;
   /** Clears the channel's drafts, returning the completed uploads' ids. */
   takeReadyAttachmentIds: (channel: string) => string[];
+  /** Upload a file immediately and return the server attachment (no draft tray). */
+  uploadAttachment: (file: File) => Promise<Attachment>;
   /** Displayable absolute URL for an attachment's server-relative url. */
   attachmentUrl: (attachment: Attachment) => string;
   setStatus: (status: string) => void;
@@ -612,6 +614,7 @@ export function WorkspaceProvider({
     addAttachments: attachments.add,
     removeAttachment: attachments.remove,
     takeReadyAttachmentIds: attachments.takeReadyIds,
+    uploadAttachment: attachments.uploadNow,
     attachmentUrl: (attachment) => api.url(attachment.url),
     pendingInteractions: interactions.pending.filter(
       (request) => !request.targetActorId || request.targetActorId === connection.self?.id,

@@ -69,7 +69,7 @@ describe("ResourcesView", () => {
     expect(
       await screen.findByText(/Paste a prompt into Claude Code, Cursor, Codex/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/pipe from the workspace to one local checkout/)).toBeInTheDocument();
+    expect(screen.getByText(/streams one local folder into the/)).toBeInTheDocument();
 
     await user.click(screen.getByText("Share this folder"));
 
@@ -97,6 +97,8 @@ describe("ResourcesView", () => {
     expect(prompt).toContain("convyio-toolman run");
     expect(prompt).toContain('machine "laptop"');
     expect(prompt).toContain("does not need an API key");
+    expect(prompt).toContain("A dirty or uncommitted tree is fine");
+    expect(prompt).not.toContain("commit or stash first");
     expect(prompt).toContain("Do not put the pairing code in git, chat, or logs");
   });
 });

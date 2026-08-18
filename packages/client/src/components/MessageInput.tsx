@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage, Participant } from "@workspace/shared";
 import { buildMentionRegex, renderContent } from "../lib/markdown";
+import { MESSAGE_BODY_LIMIT, splitOversizedMessage } from "../lib/textAttachment";
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../hooks/useAttachmentDrafts";
 import { useMessageDrafts } from "../hooks/useMessageDrafts";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
@@ -26,7 +28,6 @@ interface SlashCommand {
   description: string;
 }
 
-const MAX_LENGTH = 4000;
 const COUNTER_AT = 200;
 const REPLY_PREVIEW_LENGTH = 120;
 
@@ -152,6 +153,8 @@ export function MessageInput({
     removeAttachment,
     takeReadyAttachmentIds,
     sendTyping,
+    uploadAttachment,
+    notify,
   } = useWorkspace();
   const { draft, setDraft, clearDraft } = useMessageDrafts(workspaceId, channel);
   const [mention, setMention] = useState<MentionQuery | null>(null);
@@ -159,6 +162,7 @@ export function MessageInput({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [commandDismissed, setCommandDismissed] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
+  const [sendingLong, setSendingLong] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -168,7 +172,7 @@ export function MessageInput({
   const attachments = attachmentDraftsFor(channel);
   const uploadsInFlight = attachments.some((a) => a.status === "uploading");
   const hasReadyAttachment = attachments.some((a) => a.status === "ready");
-  const remaining = MAX_LENGTH - draft.length;
+  const remaining = MESSAGE_BODY_LIMIT - draft.length;
 
   useEffect(() => {
     if (!prefill) return;
@@ -325,15 +329,39 @@ export function MessageInput({
   };
 
   const submit = () => {
-    if (uploadsInFlight) return;
+    if (uploadsInFlight || sendingLong) return;
     const trimmed = draft.trim();
     if (!trimmed && !hasReadyAttachment) return;
+    const overflow = splitOversizedMessage(trimmed);
+    if (overflow) {
+      void sendAsFile(overflow.content, overflow.file);
+      return;
+    }
     // Attachments are only taken when present (they force a message send, so
     // onSend consumes them); a refused command must not eat the tray.
     const ids = hasReadyAttachment ? takeReadyAttachmentIds(channel) : [];
     if (!onSend(trimmed, ids)) return;
     clearDraft();
     setMention(null);
+  };
+
+  const sendAsFile = async (content: string, file: File) => {
+    if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      notify("A message can carry at most 10 attachments");
+      return;
+    }
+    setSendingLong(true);
+    try {
+      const uploaded = await uploadAttachment(file);
+      const existing = hasReadyAttachment ? takeReadyAttachmentIds(channel) : [];
+      if (!onSend(content, [...existing, uploaded.id])) return;
+      clearDraft();
+      setMention(null);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not send as a file");
+    } finally {
+      setSendingLong(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -734,7 +762,7 @@ export function MessageInput({
             className="text-input-no-focus-ring relative block max-h-[40vh] w-full resize-none overflow-y-auto break-words bg-transparent py-2.5 text-transparent outline-none"
             style={{ caretColor: "var(--color-body)" }}
             placeholder=""
-            maxLength={MAX_LENGTH}
+            disabled={sendingLong}
           />
         </div>
         {remaining <= COUNTER_AT && (
@@ -743,7 +771,7 @@ export function MessageInput({
               remaining < 50 ? "text-dead" : "text-muted"
             }`}
           >
-            {remaining}
+            {remaining < 0 ? "Sends as a file" : remaining}
           </span>
         )}
       </div>

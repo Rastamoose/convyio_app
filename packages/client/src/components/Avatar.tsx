@@ -20,15 +20,16 @@ export function Avatar({
   name,
   size = 40,
   grayscale = false,
-  mascot = false,
+  mascot,
 }: {
   name: string;
   size?: number;
   /** Desaturate, e.g. for offline members. */
   grayscale?: boolean;
+  /** Force the hosted mascot. Noodle also matches by reserved name. */
   mascot?: boolean;
 }) {
-  if (mascot) {
+  if (mascot || name.toLowerCase() === "noodle") {
     return (
       <img
         src="/favicon.svg"

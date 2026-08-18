@@ -6,9 +6,12 @@ import { AttachmentGallery } from "./AttachmentGallery";
 
 // The gallery reads attachmentUrl from the workspace context; the gallery is
 // the unit under test, so only that collaborator is replaced.
+const apiFetch = vi.fn();
+
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     attachmentUrl: (a: Attachment) => `http://api.test${a.url}`,
+    apiFetch,
   }),
 }));
 
@@ -29,9 +32,23 @@ const pdf: Attachment = {
   url: "/api/uploads/up-pdf/report.pdf",
 };
 
+const notes: Attachment = {
+  id: "up-txt",
+  name: "notes.txt",
+  mime: "text/plain",
+  size: 42,
+  url: "/api/uploads/up-txt/notes.txt",
+};
+
 describe("AttachmentGallery", () => {
   const onImageClick = vi.fn();
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiFetch.mockResolvedValue({
+      ok: true,
+      text: async () => "line one\nline two",
+    });
+  });
 
   it("renders a single image as a thumbnail with the session-prefixed src and reserved box", () => {
     render(
@@ -79,12 +96,13 @@ describe("AttachmentGallery", () => {
   it("renders a non-image as a download card with name link and human size", () => {
     render(<AttachmentGallery attachments={[pdf]} onImageClick={onImageClick} />);
 
-    const link = screen.getByRole("link", { name: "report.pdf" });
+    const link = screen.getByRole("link", { name: "Download report.pdf" });
     expect(link).toHaveAttribute(
       "href",
       "http://api.test/api/uploads/up-pdf/report.pdf",
     );
-    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("download", "report.pdf");
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
     expect(screen.getByText("12.3 MB")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
@@ -98,6 +116,19 @@ describe("AttachmentGallery", () => {
     );
 
     expect(screen.getByRole("img", { name: "cat.png" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "report.pdf" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download report.pdf" })).toBeInTheDocument();
+  });
+
+  it("renders a text file as an inline readable card, not a download-only link", async () => {
+    render(<AttachmentGallery attachments={[notes]} onImageClick={onImageClick} />);
+
+    expect(await screen.findByText((value) => value.includes("line one"))).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download notes.txt" })).toHaveAttribute(
+      "href",
+      "http://api.test/api/uploads/up-txt/notes.txt",
+    );
+    expect(screen.queryByRole("link", { name: "notes.txt" })).not.toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledWith("/api/uploads/up-txt/notes.txt");
   });
 });

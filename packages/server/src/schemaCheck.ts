@@ -14,6 +14,7 @@ import type { Sql } from "./db";
  */
 const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "actors" },
+  { table: "actors", column: "managed_agent" },
   { table: "workspaces" },
   { table: "workspaces", column: "public_code" },
   { table: "workspaces", column: "created_by" },

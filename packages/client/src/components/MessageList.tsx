@@ -131,6 +131,15 @@ function ReplyIcon({ className }: { className?: string }) {
   );
 }
 
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
 function EditIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -180,6 +189,7 @@ function HoverRail({
   deleteArmed,
   onReact,
   onReply,
+  onCopy,
   onEdit,
   onDelete,
   onPin,
@@ -189,6 +199,7 @@ function HoverRail({
   deleteArmed: boolean;
   onReact: () => void;
   onReply: () => void;
+  onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onPin: () => void;
@@ -200,6 +211,9 @@ function HoverRail({
       </RailButton>
       <RailButton title="Reply" onClick={onReply}>
         <ReplyIcon className="h-4 w-4" />
+      </RailButton>
+      <RailButton title="Copy message" onClick={onCopy}>
+        <CopyIcon className="h-4 w-4" />
       </RailButton>
       {own && (
         <RailButton title="Edit" onClick={onEdit}>
@@ -265,6 +279,7 @@ function MessageContextMenu({
   confirmingDelete,
   onReact,
   onReply,
+  onCopy,
   onEdit,
   onDelete,
   onPin,
@@ -277,6 +292,7 @@ function MessageContextMenu({
   confirmingDelete: boolean;
   onReact: (emoji: string) => void;
   onReply: () => void;
+  onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onPin: () => void;
@@ -332,6 +348,13 @@ function MessageContextMenu({
           label="Reply"
           onClick={() => {
             onReply();
+            onClose();
+          }}
+        />
+        <MessageMenuItem
+          label="Copy"
+          onClick={() => {
+            onCopy();
             onClose();
           }}
         />
@@ -812,7 +835,12 @@ export function MessageList({
   const messageExtras = (m: LocalMessage) => (
     <>
       {m.attachments && m.attachments.length > 0 && (
-        <AttachmentGallery attachments={m.attachments} onImageClick={setLightbox} />
+        <AttachmentGallery
+          attachments={m.attachments}
+          onImageClick={setLightbox}
+          mentionRegex={mentionRegex}
+          onRefClick={onRefClick}
+        />
       )}
       {m.actions?.some((action) => action.type === "add_agent") && onAddAgent && (
         <button
@@ -837,6 +865,9 @@ export function MessageList({
           deleteArmed={confirmDeleteId === m.id}
           onReact={() => setReactPickerFor((cur) => (cur === m.id ? null : m.id))}
           onReply={() => onReply(m)}
+          onCopy={() => {
+            void navigator.clipboard.writeText(m.content).catch(() => {});
+          }}
           onEdit={() => onEditingIdChange(m.id)}
           onDelete={() => handleDeleteClick(m.id)}
           onPin={() => pinMessage(m.id, m.pinnedAt == null)}
@@ -1031,6 +1062,9 @@ export function MessageList({
           confirmingDelete={confirmDeleteId === contextMenuMessage.id}
           onReact={(emoji) => reactToMessage(contextMenuMessage.id, emoji, "add")}
           onReply={() => onReply(contextMenuMessage)}
+          onCopy={() => {
+            void navigator.clipboard.writeText(contextMenuMessage.content).catch(() => {});
+          }}
           onEdit={() => onEditingIdChange(contextMenuMessage.id)}
           onDelete={() => handleDeleteClick(contextMenuMessage.id)}
           onPin={() => pinMessage(contextMenuMessage.id, contextMenuMessage.pinnedAt == null)}
