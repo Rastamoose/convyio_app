@@ -52,7 +52,15 @@ vi.mock("./ws", () => {
       for (const listener of this.listeners) {
         listener({
           type: "welcome",
-          workspace: { id: this.workspaceId, name: this.workspaceId === "ws-1" ? "test_space" : "second_space" },
+          workspace: {
+            id: this.workspaceId,
+            name:
+              this.workspaceId === "ws-1"
+                ? "test_space"
+                : this.workspaceId === "ws-starter"
+                  ? "hana's workspace"
+                  : "second_space",
+          },
           self,
           history: historySeed,
           participants: [self],
@@ -197,6 +205,10 @@ describe("App boot decision", () => {
 
     expect(await screen.findByText("Pick a username")).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
+    expect(screen.getByAltText("convyio")).toHaveAttribute("src", "/mark-yellow.svg");
+    expect(
+      screen.getByRole("button", { name: "Back to sign in" }).querySelector("img"),
+    ).toHaveAttribute("src", "/mark-yellow.svg");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/account"),
       expect.objectContaining({
@@ -205,6 +217,32 @@ describe("App boot decision", () => {
         }),
       }),
     );
+  });
+
+  it("a newly claimed account with one starter workspace opens it", async () => {
+    authState.session = { access_token: "tok-1" };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { googleAuthEnabled: true, emailAuthEnabled: false }),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: "ok",
+      username: "hana",
+      workspaces: [{
+        id: "ws-starter",
+        name: "hana's workspace",
+        publicCode: "CV-STARTER",
+        role: "owner",
+        joinedAt: 1,
+      }],
+      accessRequests: [],
+    }));
+
+    render(<App />);
+
+    expect(
+      await screen.findByText("hana's workspace", { selector: "span.truncate" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Choose a workspace" })).not.toBeInTheDocument();
   });
 
   it("a user without memberships sees the workspace lobby", async () => {
@@ -271,6 +309,8 @@ describe("Workspace switching", () => {
     vi.stubGlobal("sessionStorage", makeStorage());
     window.history.replaceState({}, "", "/");
     window.localStorage.setItem("convyio:last-workspace", "ws-1");
+    window.localStorage.setItem("convyio:opened:ws-1", "1");
+    window.localStorage.setItem("convyio:opened:ws-2", "1");
     authState.session = { access_token: "tok-1" };
     connectedWorkspaces.length = 0;
     closedWorkspaces.length = 0;
@@ -353,6 +393,7 @@ describe("Workspace composer", () => {
       // Board snapshot etc.: stay pending, irrelevant to these tests.
       return new Promise<Response>(() => {});
     });
+    window.localStorage.setItem("convyio:opened:ws-1", "1");
     render(<App />);
     return await screen.findByLabelText("Message general");
   };
@@ -497,6 +538,7 @@ describe("Workspace keyboard navigation", () => {
       }
       return new Promise<Response>(() => {});
     });
+    window.localStorage.setItem("convyio:opened:ws-1", "1");
     render(<App />);
     return await screen.findByLabelText("Message general");
   };

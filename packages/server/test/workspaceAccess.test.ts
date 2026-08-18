@@ -3,9 +3,11 @@ import { after, before, describe, test } from "node:test";
 import { AccountStore, type AccountIdentity } from "../src/auth/AccountStore";
 import { WorkspaceAccess } from "../src/auth/WorkspaceAccess";
 import { ApiError } from "../src/board/BoardService";
+import { noodleWelcomeMessages } from "../src/managedAgents";
 import { createTestDb } from "./pgSchema";
 
 const REUSABLE_INVITES_MIGRATION = "20260816210000_reusable_workspace_invites.sql";
+const MANAGED_NOODLE_MIGRATION = "20260818120000_managed_noodle.sql";
 
 describe("workspace access lifecycle", () => {
   let drop: () => Promise<void>;
@@ -24,6 +26,44 @@ describe("workspace access lifecycle", () => {
   });
 
   after(async () => drop());
+
+  test("new workspaces atomically include noodle and his welcome messages", async () => {
+    const workspace = await access.createWorkspace(owner, "Noodle Welcome");
+    const [noodle] = await accounts.sql<{
+      id: string;
+      display_name: string;
+      managed_agent: string;
+      role: string;
+    }[]>`
+      SELECT a.id, a.display_name, a.managed_agent, m.role
+      FROM workspace_members m
+      JOIN actors a ON a.id = m.actor_id
+      WHERE m.workspace_id = ${workspace.id} AND a.managed_agent = 'noodle'
+    `;
+    assert.ok(noodle);
+    assert.equal(noodle.display_name, "noodle");
+    assert.equal(noodle.role, "member");
+
+    const messages = await accounts.sql<{ content: string; author_id: string; author_kind: string }[]>`
+      SELECT content, author_id, author_kind FROM messages
+      WHERE workspace_id = ${workspace.id}
+      ORDER BY created_at, seq
+    `;
+    assert.deepEqual(messages.map((message) => message.content), [
+      `${owner.displayName} joined the workspace`,
+      "noodle joined the workspace",
+      ...noodleWelcomeMessages(owner.displayName),
+    ]);
+    assert.equal(messages[0].author_kind, "system");
+    assert.equal(messages[1].author_kind, "system");
+    assert.ok(messages.slice(2).every((message) => message.author_id === noodle.id));
+
+    const [{ count }] = await accounts.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM thread_events
+      WHERE workspace_id = ${workspace.id} AND kind = 'message.created' AND actor_id = ${noodle.id}
+    `;
+    assert.equal(count, 4);
+  });
 
   test("workspace codes create idempotent pending requests that only owners resolve", async () => {
     const workspace = await access.createWorkspace(owner, "Access Test");
@@ -115,6 +155,66 @@ describe("workspace access lifecycle", () => {
     } finally {
       await migrated.drop();
     }
+  });
+
+  test("the managed-noodle migration appends noodle and messages to existing workspaces", async () => {
+    const migrated = await createTestDb({
+      beforeMigration: MANAGED_NOODLE_MIGRATION,
+      seed: async (sql) => {
+        await sql`
+          INSERT INTO actors (id, kind, display_name)
+          VALUES ('legacy-noodle-owner', 'human', 'legacy-noodle-owner')
+        `;
+        await sql`
+          INSERT INTO workspaces (id, name, public_code, created_by, created_at, updated_at)
+          VALUES ('legacy-noodle-workspace', 'Legacy Noodle', 'CV-NOODLE01', 'legacy-noodle-owner', 1000, 1000)
+        `;
+        await sql`
+          INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+          VALUES ('legacy-noodle-workspace', 'legacy-noodle-owner', 'owner', 1000)
+        `;
+        await sql`
+          INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at)
+          VALUES ('legacy-noodle-general', 'legacy-noodle-workspace', 'general', 'legacy-noodle-owner', false, 1000)
+        `;
+      },
+    });
+    try {
+      const [noodle] = await migrated.db.sql<{ id: string; role: string }[]>`
+        SELECT a.id, m.role
+        FROM workspace_members m
+        JOIN actors a ON a.id = m.actor_id
+        WHERE m.workspace_id = 'legacy-noodle-workspace' AND a.managed_agent = 'noodle'
+      `;
+      assert.ok(noodle);
+      assert.equal(noodle.role, "member");
+      const messages = await migrated.db.sql<{ content: string }[]>`
+        SELECT content FROM messages
+        WHERE workspace_id = 'legacy-noodle-workspace'
+        ORDER BY created_at, seq
+      `;
+      assert.deepEqual(messages.map((message) => message.content), noodleWelcomeMessages("legacy-noodle-owner"));
+    } finally {
+      await migrated.drop();
+    }
+  });
+
+  test("owners can remove and restore noodle without repeating welcome messages", async () => {
+    const workspace = await access.createWorkspace(owner, "Noodle Restore");
+    const [noodle] = await accounts.sql<{ id: string }[]>`
+      SELECT a.id FROM workspace_members m
+      JOIN actors a ON a.id = m.actor_id
+      WHERE m.workspace_id = ${workspace.id} AND a.managed_agent = 'noodle'
+    `;
+    await access.removeMember(workspace.id, noodle.id, owner.id);
+    assert.equal(await accounts.role(workspace.id, noodle.id), null);
+    await access.restoreNoodle(workspace.id, owner.id);
+    assert.equal(await accounts.role(workspace.id, noodle.id), "member");
+    const [{ count }] = await accounts.sql<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM messages
+      WHERE workspace_id = ${workspace.id} AND author_id = ${noodle.id}
+    `;
+    assert.equal(count, 4);
   });
 
   test("last-owner protection survives self-service leave and demotion", async () => {

@@ -15,6 +15,7 @@ Before architecture-affecting work, read every current-state page relevant to th
 - Client build: `npm run build -w @workspace/client`
 - Env overrides: `PORT`, `CORS_ORIGIN`, `DATA_DIR`, `GOOGLE_AUTH_ENABLED`, `EMAIL_AUTH`, `AGENT_TOKEN`, `CLIENT_DIST`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_DB_URL` (server), `WS_URL`, `AGENT_TOKEN`, `AGENT_PROVIDER`, `CLAUDE_WORKDIR`, `GEMINI_API_KEY`, `AGENT_NAME`, `AGENT_MODEL` (agent), `VITE_WS_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` (client). Full table in `AGENTS/DEPLOY.md`.
 - One `.env` at the repo root (see `.env.example`) feeds `npm run dev` for all three processes: server/agent `config.ts` load it explicitly via `dotenv.config({ path: <repo root>/.env })` (npm workspaces run scripts with cwd = the package dir, so a bare `dotenv.config()` misses it), and `packages/client/vite.config.ts` sets `envDir` to the repo root so `VITE_*` vars resolve the same way. Docker Compose doesn't need any of this — it injects `.env` as real container env vars.
+- Local dev DB (for networks that block outbound 5432): `npm run dev:db` starts an embedded Postgres 17 in `data/dev-db/`, applies `supabase/migrations/*.sql`, then point `SUPABASE_DB_URL` at `postgresql://postgres:postgres@localhost:55432/postgres`.
 - Deploy: `AGENTS/DEPLOY.md` — one origin in production (server serves the built client), Dockerfile/compose at root.
 
 ## Architecture invariants

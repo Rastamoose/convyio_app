@@ -1,4 +1,7 @@
 export type ParticipantKind = "human" | "agent";
+export type MessageAuthorKind = ParticipantKind | "system";
+
+export type ManagedAgent = "noodle";
 
 export type RunState = "idle" | "working" | "blocked" | "done" | "dead";
 
@@ -6,6 +9,7 @@ export interface Participant {
   id: string;
   name: string;
   kind: ParticipantKind;
+  managedAgent?: ManagedAgent;
   status: string;
   runState: RunState;
   online: boolean;
@@ -41,13 +45,20 @@ export interface MessageReaction {
   actors: { id: string; name: string }[];
 }
 
+export type MessageAction = {
+  type: "add_agent";
+  label?: string;
+};
+
 export interface ChatMessage {
   id: string;
   authorId: string;
   authorName: string;
-  authorKind: ParticipantKind;
+  authorKind: MessageAuthorKind;
   content: string;
   timestamp: number;
+  /** Durable in-message buttons, used by hosted noodle for the hourly-limit CTA. */
+  actions?: MessageAction[];
   /** Stable identity of the channel that owns this message. */
   channelId?: string;
   /** Server-derived actor ids genuinely @mentioned by this message. */

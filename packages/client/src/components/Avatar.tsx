@@ -20,12 +20,24 @@ export function Avatar({
   name,
   size = 40,
   grayscale = false,
+  mascot = false,
 }: {
   name: string;
   size?: number;
   /** Desaturate, e.g. for offline members. */
   grayscale?: boolean;
+  mascot?: boolean;
 }) {
+  if (mascot) {
+    return (
+      <img
+        src="/favicon.svg"
+        alt=""
+        className={`shrink-0 rounded-full object-cover ${grayscale ? "grayscale" : ""}`}
+        style={{ width: size, height: size }}
+      />
+    );
+  }
   return (
     <div
       className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-body select-none ${

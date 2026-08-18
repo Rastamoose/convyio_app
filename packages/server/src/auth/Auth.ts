@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AccountSession, Actor } from "@workspace/shared";
+import type { AccountSession, Actor, WorkspaceSummary } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import { AccountStore, type AccountIdentity } from "./AccountStore";
+import type { WorkspaceAccess } from "./WorkspaceAccess";
 
 // 1-32 chars of letters/digits/spaces/-/_; applied after trim, so a name
 // can never be only whitespace.
@@ -22,6 +23,7 @@ export class Auth {
   constructor(
     private store: AccountStore,
     private supabase: SupabaseClient,
+    private workspaces: WorkspaceAccess,
   ) {}
 
   /** Verify a Supabase access token and resolve it to a bound actor, or
@@ -56,9 +58,20 @@ export class Auth {
       if (USERNAME_PATTERN.test(name) && !(await this.store.findHumanByName(name))) {
         try {
           const created = await this.store.createHuman(user.id, name, user.email);
-          return { status: "ok", username: created.displayName, workspaces: [] };
+          return {
+            status: "ok",
+            username: created.displayName,
+            workspaces: await this.createStarterWorkspace(created),
+          };
         } catch {
-          // Two tabs confirming at once: the other one won the insert.
+          const raced = await this.store.getHuman(user.id);
+          if (raced) {
+            return {
+              status: "ok",
+              username: raced.displayName,
+              workspaces: await this.store.listWorkspaces(raced.id),
+            };
+          }
         }
       }
     }
@@ -84,7 +97,13 @@ export class Auth {
       throw new ApiError(409, "USERNAME_TAKEN", `the name ${name} is taken`);
     }
     const actor = await this.store.createHuman(user.id, name, user.email);
+    await this.createStarterWorkspace(actor);
     return { username: actor.displayName };
+  }
+
+  private async createStarterWorkspace(actor: AccountIdentity): Promise<WorkspaceSummary[]> {
+    const workspace = await this.workspaces.createWorkspace(actor, `${actor.displayName}'s workspace`);
+    return [workspace];
   }
 
   /** Availability check for the signup form (GET /api/auth/username-available).

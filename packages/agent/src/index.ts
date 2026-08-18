@@ -10,6 +10,8 @@ import {
   GEMINI_API_KEY,
   WS_URL,
 } from "./config";
+import { HostedUsageLimiter } from "./hostedLimiter";
+import { HostedSupervisor, httpUrlFromWs } from "./hostedSupervisor";
 import { runAgent } from "./runtime";
 
 async function main(): Promise<void> {
@@ -18,6 +20,25 @@ async function main(): Promise<void> {
   }
   if (AGENT_PROVIDER === "codex") throw new Error("Codex provider is not yet supported.");
   const charter = await loadCharter();
+  if (AGENT_TOKEN) {
+    const supervisor = new HostedSupervisor({
+      apiUrl: httpUrlFromWs(WS_URL),
+      token: AGENT_TOKEN,
+      name: AGENT_NAME,
+      provider: AGENT_PROVIDER,
+      model: AGENT_MODEL,
+      geminiApiKey: GEMINI_API_KEY,
+      workspace: CLAUDE_WORKDIR,
+      dataDir: DATA_DIR,
+      charter,
+      limiter: new HostedUsageLimiter(),
+    });
+    const shutdown = () => supervisor.close();
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    supervisor.start();
+    return;
+  }
   await runAgent({
     mode: "legacy",
     name: AGENT_NAME,

@@ -147,6 +147,7 @@ describe("multi-workspace schema foundation", () => {
       assert.deepEqual([...members], [
         { actor_id: "legacy-agent", role: "member" },
         { actor_id: "legacy-human", role: "owner" },
+        { actor_id: "managed-agent:noodle:legacy-workspace", role: "member" },
       ]);
 
       const workspaceRows = await db.sql<{ relation: string; workspace_id: string }[]>`
@@ -163,6 +164,9 @@ describe("multi-workspace schema foundation", () => {
         { relation: "attachments", workspace_id: "legacy-workspace" },
         { relation: "channels", workspace_id: "legacy-workspace" },
         { relation: "message_reactions", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
         { relation: "messages", workspace_id: "legacy-workspace" },
       ]);
       const [attachment] = await db.sql<{ storage_key: string }[]>`

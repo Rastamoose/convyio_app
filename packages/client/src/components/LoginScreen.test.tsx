@@ -61,6 +61,7 @@ describe("LoginScreen", () => {
     expect(screen.getByRole("heading", { name: "Create your account" })).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create account" })).toBeInTheDocument();
+    expect(screen.getByAltText("convyio")).toHaveAttribute("src", "/mark-yellow.svg");
   });
 
   it("opens on login mode without ?signup", () => {
@@ -68,6 +69,7 @@ describe("LoginScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("convyio")).not.toBeInTheDocument();
   });
 
   it("enables Sign in with a short password — the >=8 rule only gates signup", async () => {

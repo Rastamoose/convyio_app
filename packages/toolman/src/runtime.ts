@@ -35,6 +35,10 @@ export async function runNode(installation: StoredToolman): Promise<void> {
     });
   });
 
+  // Without this, the function returns right after sending `hello` and the
+  // CLI's `process.exit()` kills the process before any messages arrive.
+  await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+
   async function handle(event: Record<string, unknown>): Promise<void> {
     if (event.type === "toolman_assignment_sync") {
       const assignments = Array.isArray(event.assignments) ? event.assignments as Array<{ projectId: string; agentId: string; agentName?: string }> : [];

@@ -12,15 +12,18 @@
     "dev:agent": "npm run dev -w @workspace/agent",
     "test": "npm test -w @workspace/shared && npm test -w @workspace/server && npm test -w @workspace/agent && npm test -w @workspace/toolman && npm test -w @workspace/client",
     "db:wipe": "bash scripts/reset-data.sh",
+    "dev:db": "node scripts/dev-db.mjs",
     "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/server && tsc --noEmit -p packages/client && tsc --noEmit -p packages/agent && tsc --noEmit -p packages/toolman"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "embedded-postgres": "^17.10.0-beta.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
-    "esbuild@0.25.12": true
+    "esbuild@0.25.12": true,
+    "@embedded-postgres/linux-x64@17.10.0-beta.17": true
   }
 }

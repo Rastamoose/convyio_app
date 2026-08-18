@@ -18,6 +18,7 @@ import { Roster } from "../src/roster";
 import { Auth } from "../src/auth/Auth";
 import { AccountStore } from "../src/auth/AccountStore";
 import { AgentInvites } from "../src/auth/AgentInvites";
+import { WorkspaceAccess } from "../src/auth/WorkspaceAccess";
 import { createJoinGate } from "../src/auth/joinPolicy";
 import { BoardService } from "../src/board/BoardService";
 import { Sessions } from "../src/board/sessions";
@@ -100,7 +101,7 @@ export interface Env {
 }
 
 /** An isolated Postgres schema + board + HTTP API on an ephemeral port, shared by every suite. */
-export async function createEnv(): Promise<Env> {
+export async function createEnv(options: { hostedAgentToken?: string | null } = {}): Promise<Env> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
   const plans = new PlanService(db, threadEvents);
@@ -131,6 +132,7 @@ export async function createEnv(): Promise<Env> {
     channels,
     attachments,
     corsOrigin: "*",
+    hostedAgentToken: options.hostedAgentToken ?? null,
     agentInvites,
     runnerRuntime,
     snapshot,
@@ -282,8 +284,9 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const plans = new PlanService(db, threadEvents);
   const service = new BoardService(db, threadEvents, plans);
   const sessions = new Sessions();
+  const accounts = new AccountStore(db.sql);
   const auth = options.auth
-    ? new Auth(new AccountStore(db.sql), fakeSupabase(options.auth.users))
+    ? new Auth(accounts, fakeSupabase(options.auth.users), new WorkspaceAccess(db.sql, accounts))
     : null;
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
   const toolman = new Toolman(service, workspaceDir);
@@ -335,7 +338,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       workspace: { id: db.workspaceId, name: db.workspaceName },
       demoChannels: [],
       authorizeJoin: auth
-        ? createJoinGate(auth, db.workspaceId, options.auth?.agentToken ?? null, agentInvites)
+        ? createJoinGate(auth, db.workspaceId, options.auth?.agentToken ?? null, agentInvites, db)
         : undefined,
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
       threadEvents,
@@ -453,9 +456,19 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
       // Truncate all mutable tables, keep the workspaces row so
       // db.workspaceId stays valid.
       await db.sql`TRUNCATE TABLE workspaces, actors RESTART IDENTITY CASCADE`;
+      const now = Date.now();
+      const noodleId = `managed-agent:noodle:${db.workspaceId}`;
       await db.sql`
         INSERT INTO workspaces (id, name, public_code, created_at, updated_at)
-        VALUES (${db.workspaceId}, ${db.workspaceName}, 'CV-TEST000001', ${Date.now()}, ${Date.now()})
+        VALUES (${db.workspaceId}, ${db.workspaceName}, 'CV-TEST000001', ${now}, ${now})
+      `;
+      await db.sql`
+        INSERT INTO actors (id, kind, display_name, managed_agent)
+        VALUES (${noodleId}, 'agent', 'noodle', 'noodle')
+      `;
+      await db.sql`
+        INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+        VALUES (${db.workspaceId}, ${noodleId}, 'member', ${now})
       `;
       await db.sql`
         INSERT INTO ref_counters (workspace_id, n) VALUES (${db.workspaceId}, 0)

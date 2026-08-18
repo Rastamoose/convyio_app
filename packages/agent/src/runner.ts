@@ -7,6 +7,7 @@ import type {
   BoardItem,
   ChannelInfo,
   JsonValue,
+  MessageAction,
   NormalizedUsage,
   PermissionMode,
 } from "@workspace/shared";
@@ -24,6 +25,7 @@ import type { ConversationSessions } from "./conversationSessions";
 import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
 
 export interface WorkItem {
+  authorId?: string;
   authorName: string;
   content: string;
   channel: string;
@@ -69,6 +71,7 @@ export class AgentRunner {
     private conversationSessions: ConversationSessions,
     private presence: Presence,
     private systemPrompt: string,
+    private limiter?: { check(authorId: string): { allowed: boolean; announce: boolean } },
   ) {}
 
   /** Profile changes affect the next run; an input already handed to a brain stays immutable. */
@@ -117,6 +120,7 @@ export class AgentRunner {
       serverProviderSessionId: conversation.providerSessionId,
       permissionMode: conversation.permissionMode,
       triggerMessageId: trigger.id,
+      authorId: trigger.authorId,
       authorName: trigger.authorName,
       content: trigger.content,
       channel: trigger.channel ?? "general",
@@ -259,8 +263,17 @@ export class AgentRunner {
     let error: string | undefined;
     let usage: NormalizedUsage | undefined;
     let outcome: AgentRunFinishEvent["outcome"] = "completed";
-
-    try {
+    let actions: MessageAction[] | undefined;
+    const quotaAuthor = batch.find((item) => item.authorId)?.authorId;
+    const quota = quotaAuthor && this.limiter ? this.limiter.check(quotaAuthor) : { allowed: true, announce: false };
+    if (!quota.allowed) {
+      outcome = "failed";
+      error = "Hosted agent hourly limit";
+      if (quota.announce) {
+        finalText = "That’s my 10 for this hour — time for a quick noodle break. Add your own local agent for more power and no shared limit.";
+        actions = [{ type: "add_agent", label: "Add agent" }];
+      }
+    } else try {
       const result = await this.brain.run(
         {
           system: this.systemPrompt,
@@ -311,6 +324,7 @@ export class AgentRunner {
       requestIds,
       outcome,
       finalContent,
+      ...(actions ? { actions } : {}),
       ...(error ? { error } : {}),
       ...(usage ? { usage } : {}),
     });

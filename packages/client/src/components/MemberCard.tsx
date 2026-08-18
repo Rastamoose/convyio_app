@@ -108,7 +108,7 @@ export function MemberCard({
       className="elevated animate-pop-in fixed z-50 max-h-[70vh] w-80 overflow-y-auto rounded-lg p-4"
     >
       <div className="mb-3 flex items-center gap-3">
-        <Avatar name={participant.name} size={48} />
+        <Avatar name={participant.name} size={48} mascot={participant.managedAgent === "noodle"} />
         <div className="min-w-0">
           <div className="truncate font-semibold text-body">
             {participant.name}

@@ -35,7 +35,7 @@ export function WorkspaceSettings({
   onAccountRefresh: () => void;
   onLeft: () => void;
 }) {
-  const { apiFetch, self, connected } = useWorkspace();
+  const { apiFetch, self, connected, restoreNoodle, participants } = useWorkspace();
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invites, setInvites] = useState<WorkspaceInvite[]>([]);
   const [requests, setRequests] = useState<WorkspaceAccessRequest[]>([]);
@@ -266,6 +266,29 @@ export function WorkspaceSettings({
 
           {summary.role === "owner" && (
             <>
+          <section className="mb-8 border-t border-divider pt-6">
+            <h2 className="mb-2 text-lg font-semibold text-body">noodle</h2>
+            <p className="mb-3 text-sm text-muted">
+              Convyio’s built-in guide. Removing him from the sidebar does not delete his messages. Turning this back on restores the same noodle, without repeating the welcome.
+            </p>
+            {participants.some((participant) => participant.managedAgent === "noodle") ? (
+              <p className="text-sm text-muted">Enabled. Owners can right-click noodle in the sidebar to remove him.</p>
+            ) : (
+              <button
+                onClick={async () => {
+                  setBusy("restore-noodle");
+                  setError(null);
+                  const ok = await restoreNoodle();
+                  if (!ok) setError("Could not restore noodle.");
+                  setBusy(null);
+                }}
+                disabled={busy === "restore-noodle"}
+                className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50"
+              >
+                Enable noodle
+              </button>
+            )}
+          </section>
           <section className="mb-8 border-t border-divider pt-6">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-body">Invite links</h2>

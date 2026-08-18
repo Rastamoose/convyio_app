@@ -1,4 +1,4 @@
-import type { Actor, WorkspaceMember, WorkspaceRole, WorkspaceSummary } from "@workspace/shared";
+import type { Actor, ManagedAgent, WorkspaceMember, WorkspaceRole, WorkspaceSummary } from "@workspace/shared";
 import type { Sql } from "../db";
 
 export interface AccountIdentity {
@@ -77,7 +77,7 @@ export class AccountStore {
 
   async listMembers(workspaceId: string): Promise<WorkspaceMember[]> {
     const rows = await this.sql<MemberRow[]>`
-      SELECT a.id AS actor_id, a.display_name, a.kind, m.role, m.joined_at
+      SELECT a.id AS actor_id, a.display_name, a.kind, a.managed_agent, m.role, m.joined_at
       FROM workspace_members m
       JOIN actors a ON a.id = m.actor_id
       WHERE m.workspace_id = ${workspaceId}
@@ -89,6 +89,7 @@ export class AccountStore {
       kind: row.kind,
       role: row.role,
       joinedAt: row.joined_at,
+      ...(row.managed_agent ? { managedAgent: row.managed_agent } : {}),
     }));
   }
 }
@@ -112,6 +113,7 @@ interface MemberRow {
   actor_id: string;
   display_name: string;
   kind: "human" | "agent";
+  managed_agent: ManagedAgent | null;
   role: WorkspaceRole;
   joined_at: number;
 }

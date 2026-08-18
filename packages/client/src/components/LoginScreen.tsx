@@ -265,6 +265,7 @@ function EmailAuthForm({ inviteToken }: { inviteToken?: string }) {
   if (signupSentTo) {
     return (
       <>
+        <img src="/mark-yellow.svg" alt="convyio" className="mb-6 h-8 w-8" />
         <h1 className="mb-1 text-2xl font-semibold text-body">Check your email</h1>
         <p className="mb-6 text-muted">
           Account created — we sent a confirmation link to{" "}
@@ -283,6 +284,9 @@ function EmailAuthForm({ inviteToken }: { inviteToken?: string }) {
 
   return (
     <>
+      {mode === "signup" && (
+        <img src="/mark-yellow.svg" alt="convyio" className="mb-6 h-8 w-8" />
+      )}
       <p className="mb-1 text-sm text-muted">Please enter your details</p>
       <h1 className="mb-6 text-2xl font-semibold text-body">
         {mode === "login" ? "Welcome back" : "Create your account"}

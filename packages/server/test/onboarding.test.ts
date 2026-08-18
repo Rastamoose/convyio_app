@@ -51,7 +51,10 @@ describe("sign-up/onboarding journey", async () => {
     // the first session call auto-claims it — no username step.
     const session = await get("/api/auth/session", "tok-alice");
     assert.equal(session.status, 200);
-    assert.deepEqual(session.body, { status: "ok", username: "journey1-alice", workspaces: [] });
+    assert.equal(session.body.status, "ok");
+    assert.equal(session.body.username, "journey1-alice");
+    assert.equal(session.body.workspaces.length, 1);
+    assert.equal(session.body.workspaces[0].role, "owner");
     await env.db.sql`
       INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
       VALUES (${env.db.workspaceId}, 'user-alice', 'member', ${Date.now()})
@@ -88,7 +91,9 @@ describe("sign-up/onboarding journey", async () => {
 
     const second = await get("/api/auth/session", "tok-bob");
     assert.equal(second.status, 200);
-    assert.deepEqual(second.body, { status: "ok", username: "journey2-bob", workspaces: [] });
+    assert.equal(second.body.status, "ok");
+    assert.equal(second.body.username, "journey2-bob");
+    assert.equal(second.body.workspaces.length, 1);
     await env.db.sql`
       INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
       VALUES (${env.db.workspaceId}, 'user-bob', 'member', ${Date.now()})
@@ -106,7 +111,7 @@ describe("sign-up/onboarding journey", async () => {
     assert.equal(session.status, 200);
     assert.equal(session.body.status, "ok");
     assert.equal(session.body.username, "journey2-bob");
-    assert.deepEqual(session.body.workspaces.map((workspace: { id: string }) => workspace.id), [env.db.workspaceId]);
+    assert.ok(session.body.workspaces.some((workspace: { id: string }) => workspace.id === env.db.workspaceId));
 
     // Re-claiming with a DIFFERENT name never rebinds: idempotent 200
     // returning the original (two tabs finishing signup at once).
@@ -126,9 +131,9 @@ describe("sign-up/onboarding journey", async () => {
     assert.deepEqual(humanProbe.body, { available: false, reason: "TAKEN" });
 
     // Agents are workspace-scoped and do not reserve a human username globally.
-    const bot = await env.join({ type: "join", kind: "agent", name: "botley", authToken: "agent-secret" });
-    assert.ok(bot.welcome, `expected the agent to join, got error: ${bot.error}`);
-    assert.equal(bot.welcome.self.name, "botley");
+    const owner = await env.db.upsertActor("human", "journey-owner");
+    const { invite } = await env.agentInvites.create("botley", "claude", owner);
+    assert.equal(invite.name, "botley");
 
     const agentProbe = await get("/api/auth/username-available?name=botley");
     assert.equal(agentProbe.status, 200);
@@ -144,7 +149,9 @@ describe("sign-up/onboarding journey", async () => {
     // wins the auto-claim.
     const first = await get("/api/auth/session", "tok-dup1");
     assert.equal(first.status, 200);
-    assert.deepEqual(first.body, { status: "ok", username: "journey5-dupe", workspaces: [] });
+    assert.equal(first.body.status, "ok");
+    assert.equal(first.body.username, "journey5-dupe");
+    assert.equal(first.body.workspaces.length, 1);
 
     // The loser is NOT an error — it falls back to the manual username step.
     const second = await get("/api/auth/session", "tok-dup2");
@@ -174,7 +181,9 @@ describe("sign-up/onboarding journey", async () => {
     // cache — one Auth instance serves HTTP and ws, so the HTTP session
     // call warms the cache the ws join reads.
     const before = await get("/api/auth/session", "tok-frank");
-    assert.deepEqual(before.body, { status: "ok", username: "journey6-frank", workspaces: [] });
+    assert.equal(before.body.status, "ok");
+    assert.equal(before.body.username, "journey6-frank");
+    assert.equal(before.body.workspaces.length, 1);
     await env.db.sql`
       INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
       VALUES (${env.db.workspaceId}, 'user-frank', 'member', ${Date.now()})

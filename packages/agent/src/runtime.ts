@@ -30,11 +30,15 @@ type LegacyConfiguration = {
   workspace: string;
   dataDir: string;
   charter: string;
+  limiter?: { check(authorId: string): { allowed: boolean; announce: boolean } };
+  ownProcess?: boolean;
 };
 
-type InstallationConfiguration = { mode: "installation"; installation: StoredInstallation };
+type InstallationConfiguration = { mode: "installation"; installation: StoredInstallation; ownProcess?: boolean };
 
-export async function runAgent(configuration: LegacyConfiguration | InstallationConfiguration): Promise<void> {
+export async function runAgent(
+  configuration: LegacyConfiguration | InstallationConfiguration,
+): Promise<{ close(): void }> {
   const local = await localConfiguration(configuration);
   const socket = new AgentSocket(local.wsUrl);
   const boardClient = new BoardClient(socket);
@@ -56,7 +60,16 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
   const memory = await Memory.load(local.dataDir);
   const conversationSessions = await ConversationSessions.load(local.dataDir);
   const presence = new Presence(socket, boardClient);
-  const runner = new AgentRunner(socket, local.brain, memory, boardClient, conversationSessions, presence, local.systemPrompt);
+  const runner = new AgentRunner(
+    socket,
+    local.brain,
+    memory,
+    boardClient,
+    conversationSessions,
+    presence,
+    local.systemPrompt,
+    configuration.mode === "legacy" ? configuration.limiter : undefined,
+  );
   const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";
 
@@ -149,13 +162,16 @@ export async function runAgent(configuration: LegacyConfiguration | Installation
   });
 
   socket.connect(local.name, local.token);
-  const shutdown = () => {
+  const close = () => {
     local.acp?.close();
     bridge?.close();
     socket.close();
   };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  if (configuration.ownProcess !== false) {
+    process.once("SIGINT", close);
+    process.once("SIGTERM", close);
+  }
+  return { close };
 }
 
 async function localConfiguration(configuration: LegacyConfiguration | InstallationConfiguration) {

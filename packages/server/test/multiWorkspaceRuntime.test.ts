@@ -40,8 +40,8 @@ describe("multi-workspace runtime", () => {
       "invitee-jwt": { id: "workspace-invitee", email: "invitee@example.com" },
     };
     const accounts = new AccountStore(db.sql);
-    const auth = new Auth(accounts, fakeSupabase(users));
     const access = new WorkspaceAccess(db.sql, accounts);
+    const auth = new Auth(accounts, fakeSupabase(users), access);
     await auth.claimUsername("owner-jwt", "runtime-owner");
     await auth.claimUsername("member-jwt", "runtime-member");
     await auth.claimUsername("invitee-jwt", "runtime-invitee");
@@ -114,7 +114,10 @@ describe("multi-workspace runtime", () => {
     assert.equal(response.status, 200);
     const body = await response.json() as { status: string; workspaces: WorkspaceSummary[] };
     assert.equal(body.status, "ok");
-    assert.deepEqual(new Set(body.workspaces.map((workspace) => workspace.id)), new Set([workspaceA.id, workspaceB.id]));
+    const ids = new Set(body.workspaces.map((workspace) => workspace.id));
+    assert.equal(ids.has(workspaceA.id), true);
+    assert.equal(ids.has(workspaceB.id), true);
+    assert.equal(body.workspaces.length, 3);
   });
 
   test("invite acceptance appears immediately in an active workspace roster", async () => {

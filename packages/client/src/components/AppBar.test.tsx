@@ -77,6 +77,11 @@ describe("AppBar", () => {
     pendingInteractions = [];
   });
 
+  it("uses the yellow brand mark", () => {
+    renderAppBar();
+    expect(screen.getByAltText("convyio")).toHaveAttribute("src", "/mark-yellow.svg");
+  });
+
   it("shows the combined pending count and opens the queue from the chip", async () => {
     const user = userEvent.setup();
     board = [proposal("p1", 1_000), proposal("p2", 2_000)];

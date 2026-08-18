@@ -481,7 +481,7 @@ export function MessageInput({
                     pickMention(p);
                   }}
                 >
-                  <Avatar name={p.name} size={24} />
+                  <Avatar name={p.name} size={24} mascot={p.managedAgent === "noodle"} />
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   {p.kind === "agent" && <AgentBadge />}
                 </button>

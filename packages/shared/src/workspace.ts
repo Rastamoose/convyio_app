@@ -65,4 +65,5 @@ export interface WorkspaceMember {
   kind: "human" | "agent";
   role: WorkspaceRole;
   joinedAt: number;
+  managedAgent?: "noodle";
 }

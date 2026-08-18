@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import type { Actor, ParticipantKind } from "@workspace/shared";
+import type { Actor, ManagedAgent, ParticipantKind } from "@workspace/shared";
 
 /**
  * postgres.js's tagged-template client/transaction type, derived via
@@ -86,6 +86,20 @@ export class WorkspaceDb {
     return this.sql<{ id: string; name: string }[]>`
       SELECT id, name FROM workspaces ORDER BY created_at ASC, id ASC
     `;
+  }
+
+  async listManagedAgentWorkspaces(
+    managedAgent: ManagedAgent,
+  ): Promise<Array<{ id: string; name: string; actorId: string }>> {
+    const rows = await this.sql<{ id: string; name: string; actor_id: string }[]>`
+      SELECT w.id, w.name, a.id AS actor_id
+      FROM workspace_members m
+      JOIN workspaces w ON w.id = m.workspace_id
+      JOIN actors a ON a.id = m.actor_id
+      WHERE a.kind = 'agent' AND a.managed_agent = ${managedAgent}
+      ORDER BY w.created_at ASC, w.id ASC
+    `;
+    return rows.map((row) => ({ id: row.id, name: row.name, actorId: row.actor_id }));
   }
 
   /**
@@ -180,6 +194,17 @@ export class WorkspaceDb {
     return row ? this.toActor(row) : null;
   }
 
+  async findManagedAgent(managedAgent: ManagedAgent): Promise<Actor | null> {
+    const [row] = await this.sql<ActorRow[]>`
+      SELECT a.* FROM actors a
+      JOIN workspace_members m ON m.actor_id = a.id
+      WHERE m.workspace_id = ${this.workspaceId}
+        AND a.kind = 'agent'
+        AND a.managed_agent = ${managedAgent}
+    `;
+    return row ? this.toActor(row) : null;
+  }
+
   /**
    * Create the persistent human for a Supabase-authenticated signup. `id`
    * is the Supabase Auth user id (auth.users.id) — the two systems share
@@ -255,7 +280,13 @@ export class WorkspaceDb {
    *  "this identity acting in this workspace", so the WorkspaceDb (which
    *  is per-workspace) stamps its own workspaceId. */
   private toActor(row: ActorRow): Actor {
-    return { id: row.id, kind: row.kind, displayName: row.display_name, workspaceId: this.workspaceId };
+    return {
+      id: row.id,
+      kind: row.kind,
+      displayName: row.display_name,
+      workspaceId: this.workspaceId,
+      ...(row.managed_agent ? { managedAgent: row.managed_agent } : {}),
+    };
   }
 }
 
@@ -263,10 +294,23 @@ async function ensureWorkspace(sql: Sql): Promise<{ id: string; name: string }> 
   const rows = await sql<{ id: string; name: string }[]>`SELECT id, name FROM workspaces LIMIT 1`;
   if (rows[0]) return rows[0];
   const workspace = { id: randomUUID(), name: "test_space" };
-  await sql`
-    INSERT INTO workspaces (id, name, created_at)
-    VALUES (${workspace.id}, ${workspace.name}, ${Date.now()})
-  `;
+  const createdAt = Date.now();
+  const noodleId = `managed-agent:noodle:${workspace.id}`;
+  await sql.begin(async (tx) => {
+    const scoped = tx as unknown as Sql;
+    await scoped`
+      INSERT INTO workspaces (id, name, created_at)
+      VALUES (${workspace.id}, ${workspace.name}, ${createdAt})
+    `;
+    await scoped`
+      INSERT INTO actors (id, kind, display_name, managed_agent)
+      VALUES (${noodleId}, 'agent', 'noodle', 'noodle')
+    `;
+    await scoped`
+      INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+      VALUES (${workspace.id}, ${noodleId}, 'member', ${createdAt})
+    `;
+  });
   return workspace;
 }
 
@@ -274,4 +318,5 @@ interface ActorRow {
   id: string;
   kind: ParticipantKind;
   display_name: string;
+  managed_agent: ManagedAgent | null;
 }

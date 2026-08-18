@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { Auth } from "../src/auth/Auth";
 import { AccountStore } from "../src/auth/AccountStore";
+import { WorkspaceAccess } from "../src/auth/WorkspaceAccess";
 import { ApiError } from "../src/board/BoardService";
 import { createTestDb } from "./pgSchema";
 import type { WorkspaceDb } from "../src/db";
 import { createWsEnv, fakeSupabase } from "./helpers";
+import type { FakeSupabaseUser } from "./helpers";
+
+function authFor(db: WorkspaceDb, users: Record<string, FakeSupabaseUser | "unavailable">): Auth {
+  const accounts = new AccountStore(db.sql);
+  return new Auth(accounts, fakeSupabase(users), new WorkspaceAccess(db.sql, accounts));
+}
 
 describe("Auth", () => {
   let db: WorkspaceDb;
@@ -17,17 +24,17 @@ describe("Auth", () => {
   after(() => drop());
 
   test("session() reports needs_username for a verified token with no bound actor", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-1": { id: "user-1", email: "a@example.com" } }));
+    const auth = authFor(db, { "tok-1": { id: "user-1", email: "a@example.com" } });
     assert.deepEqual(await auth.session("tok-1"), { status: "needs_username" });
   });
 
   test("session() throws BAD_CREDENTIAL for an unverifiable token", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({}));
+    const auth = authFor(db, {});
     await assert.rejects(auth.session("bad-tok"), (err) => err instanceof ApiError && err.code === "BAD_CREDENTIAL");
   });
 
   test("claimUsername() creates the actor with the Supabase user id and rejects a repeat with a different name", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-2": { id: "user-2", email: "b@example.com" } }));
+    const auth = authFor(db, { "tok-2": { id: "user-2", email: "b@example.com" } });
     const result = await auth.claimUsername("tok-2", "Dana");
     assert.equal(result.username, "Dana");
     const actor = await db.getActor("user-2");
@@ -38,19 +45,16 @@ describe("Auth", () => {
   });
 
   test("claimUsername() rejects a name already taken", async () => {
-    const auth = new Auth(
-      new AccountStore(db.sql),
-      fakeSupabase({
-        "tok-3": { id: "user-3", email: null },
-        "tok-4": { id: "user-4", email: null },
-      }),
-    );
+    const auth = authFor(db, {
+      "tok-3": { id: "user-3", email: null },
+      "tok-4": { id: "user-4", email: null },
+    });
     await auth.claimUsername("tok-3", "Taken");
     await assert.rejects(auth.claimUsername("tok-4", "Taken"), (err) => err instanceof ApiError && err.code === "USERNAME_TAKEN");
   });
 
   test("resolveSession() returns the bound actor for a claimed token, null otherwise", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-5": { id: "user-5", email: null } }));
+    const auth = authFor(db, { "tok-5": { id: "user-5", email: null } });
     assert.equal(await auth.resolveSession("tok-5", db.workspaceId), null);
     await auth.claimUsername("tok-5", "Erin");
     assert.equal(await auth.resolveSession("tok-5", db.workspaceId), null);
@@ -63,43 +67,40 @@ describe("Auth", () => {
   });
 
   test("session() auto-claims desired_username from Supabase user_metadata", async () => {
-    const auth = new Auth(
-      new AccountStore(db.sql),
-      fakeSupabase({
-        "tok-6": { id: "user-6", email: "f@example.com", user_metadata: { desired_username: "Frankie" } },
-      }),
-    );
-    assert.deepEqual(await auth.session("tok-6"), { status: "ok", username: "Frankie", workspaces: [] });
+    const auth = authFor(db, {
+      "tok-6": { id: "user-6", email: "f@example.com", user_metadata: { desired_username: "Frankie" } },
+    });
+    const session = await auth.session("tok-6");
+    assert.equal(session.status, "ok");
+    if (session.status !== "ok") return;
+    assert.equal(session.username, "Frankie");
+    assert.equal(session.workspaces.length, 1);
+    assert.equal(session.workspaces[0].name, "Frankie's workspace");
+    assert.equal(session.workspaces[0].role, "owner");
     const actor = await db.getActor("user-6");
     assert.equal(actor?.displayName, "Frankie");
   });
 
   test("session() falls back to needs_username when desired_username is already taken", async () => {
-    const auth = new Auth(
-      new AccountStore(db.sql),
-      fakeSupabase({
-        "tok-7": { id: "user-7", email: null },
-        "tok-8": { id: "user-8", email: null, user_metadata: { desired_username: "Grace" } },
-      }),
-    );
+    const auth = authFor(db, {
+      "tok-7": { id: "user-7", email: null },
+      "tok-8": { id: "user-8", email: null, user_metadata: { desired_username: "Grace" } },
+    });
     await auth.claimUsername("tok-7", "Grace");
     assert.deepEqual(await auth.session("tok-8"), { status: "needs_username" });
     assert.equal(await db.getActor("user-8"), null);
   });
 
   test("session() falls back to needs_username for an invalid desired_username", async () => {
-    const auth = new Auth(
-      new AccountStore(db.sql),
-      fakeSupabase({
-        "tok-9": { id: "user-9", email: null, user_metadata: { desired_username: "***bad***" } },
-      }),
-    );
+    const auth = authFor(db, {
+      "tok-9": { id: "user-9", email: null, user_metadata: { desired_username: "***bad***" } },
+    });
     assert.deepEqual(await auth.session("tok-9"), { status: "needs_username" });
     assert.equal(await db.getActor("user-9"), null);
   });
 
   test("usernameAvailable() reports free, taken (case-insensitively) and invalid names", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-10": { id: "user-10", email: null } }));
+    const auth = authFor(db, { "tok-10": { id: "user-10", email: null } });
     assert.deepEqual(await auth.usernameAvailable("Hana"), { available: true });
     await auth.claimUsername("tok-10", "Hana");
     assert.deepEqual(await auth.usernameAvailable("hana"), { available: false, reason: "TAKEN" });
@@ -107,7 +108,7 @@ describe("Auth", () => {
   });
 
   test("a Supabase outage is 503 AUTH_UNAVAILABLE, never a 401 rejection", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-out": "unavailable" }));
+    const auth = authFor(db, { "tok-out": "unavailable" });
     await assert.rejects(
       auth.session("tok-out"),
       (err) => err instanceof ApiError && err.status === 503 && err.code === "AUTH_UNAVAILABLE",
@@ -118,8 +119,14 @@ describe("Auth", () => {
   });
 
   test("session() keeps a bound account valid without workspace memberships", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-12": { id: "user-12", email: null } }));
+    const auth = authFor(db, { "tok-12": { id: "user-12", email: null } });
     await auth.claimUsername("tok-12", "Jules");
+    const first = await auth.session("tok-12");
+    assert.equal(first.status, "ok");
+    if (first.status !== "ok") return;
+    assert.equal(first.username, "Jules");
+    assert.equal(first.workspaces.length, 1);
+    await db.sql`DELETE FROM workspace_members WHERE actor_id = 'user-12'`;
     assert.deepEqual(await auth.session("tok-12"), {
       status: "ok",
       username: "Jules",
@@ -128,7 +135,7 @@ describe("Auth", () => {
   });
 
   test("resolveSession() returns null for a bound actor whose membership was revoked", async () => {
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase({ "tok-13": { id: "user-13", email: null } }));
+    const auth = authFor(db, { "tok-13": { id: "user-13", email: null } });
     await auth.claimUsername("tok-13", "Kian");
     await db.sql`
       INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
@@ -143,8 +150,11 @@ describe("Auth", () => {
     const users: Parameters<typeof fakeSupabase>[0] = {
       "tok-11": { id: "user-11", email: null, user_metadata: { desired_username: "Iris" } },
     };
-    const auth = new Auth(new AccountStore(db.sql), fakeSupabase(users));
-    assert.deepEqual(await auth.session("tok-11"), { status: "ok", username: "Iris", workspaces: [] });
+    const auth = authFor(db, users);
+    const warmed = await auth.session("tok-11");
+    assert.equal(warmed.status, "ok");
+    if (warmed.status !== "ok") return;
+    assert.equal(warmed.username, "Iris");
     await db.sql`
       INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
       VALUES (${db.workspaceId}, 'user-11', 'member', ${Date.now()})

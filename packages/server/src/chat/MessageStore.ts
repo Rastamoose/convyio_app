@@ -2,6 +2,7 @@ import type {
   Attachment,
   ChannelInfo,
   ChatMessage,
+  MessageAction,
   MessageReaction,
   ThreadEvent,
   ThreadEventKind,
@@ -157,14 +158,16 @@ export class MessageStore {
     await sql`
       INSERT INTO messages
         (id, workspace_id, author_id, author_name, author_kind, content, channel, channel_id,
-         mentions, run_id, trace, attachments, reply_to_id, created_at)
+         mentions, run_id, trace, attachments, reply_to_id, actions, created_at)
       VALUES (
         ${message.id}, ${this.store.workspaceId}, ${message.authorId}, ${message.authorName}, ${message.authorKind},
         ${message.content}, ${message.channel ?? "general"}, ${channelId},
         ${sql.json(message.mentions ?? [])}, ${message.runId ?? null},
         ${message.trace ? JSON.stringify(message.trace) : null},
         ${message.attachments ? JSON.stringify(message.attachments) : null},
-        ${message.replyToId ?? null}, ${message.timestamp}
+        ${message.replyToId ?? null},
+        ${message.actions ? sql.json(message.actions) : null},
+        ${message.timestamp}
       )
     `;
     return this.threadEvents.append(sql, {
@@ -423,6 +426,7 @@ interface MessageRow {
   pinned_by: string | null;
   edited_at: number | null;
   reply_to_id: string | null;
+  actions: MessageAction[] | null;
   created_at: number;
 }
 
@@ -477,6 +481,7 @@ function toMessage(row: MessageRow, reactions?: MessageReaction[]): ChatMessage 
   }
   if (row.edited_at) message.editedAt = row.edited_at;
   if (row.reply_to_id) message.replyToId = row.reply_to_id;
+  if (row.actions?.length) message.actions = row.actions;
   if (reactions?.length) message.reactions = reactions;
   return message;
 }

@@ -199,6 +199,51 @@ describe("MessageList", () => {
     expect(screen.queryByRole("button", { name: /new message/ })).not.toBeInTheDocument();
   });
 
+  it("keeps the channel intro above messages instead of replacing it", () => {
+    messages = [];
+    const { rerender } = render(<Harness />);
+    const heading = screen.getByRole("heading", { name: /general/i });
+    expect(screen.getByText(/Nothing here yet/)).toBeInTheDocument();
+
+    messages = [msg({ id: "m1", content: "first" })];
+    rerender(<Harness />);
+
+    expect(heading).toBeInTheDocument();
+    expect(screen.getByText("This is the start of #general.")).toBeInTheDocument();
+    expect(screen.getByText("first")).toBeInTheDocument();
+    expect(heading.compareDocumentPosition(screen.getByText("first")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("does not group noodle's chat after his join notice", () => {
+    const now = Date.now();
+    participants = [
+      human("self-1", "me"),
+      { id: "n1", name: "noodle", kind: "agent", status: "", runState: "idle", online: true, managedAgent: "noodle" },
+    ];
+    messages = [
+      msg({
+        id: "member-joined:ws:n1",
+        authorId: "n1",
+        authorName: "noodle",
+        authorKind: "system",
+        content: "noodle joined the workspace",
+        timestamp: now,
+      }),
+      msg({
+        id: "managed-welcome:ws:1",
+        authorId: "n1",
+        authorName: "noodle",
+        authorKind: "agent",
+        content: "Hey — I’m noodle",
+        timestamp: now + 1,
+      }),
+    ];
+    render(<Harness />);
+    expect(screen.getByText("joined the workspace")).toBeInTheDocument();
+    expect(screen.getByText("Hey — I’m noodle")).toBeInTheDocument();
+    expect(screen.getByText("noodle", { selector: "button" })).toBeInTheDocument();
+  });
+
   it("a loadOlder that resolves true without prepending anything leaves the next new message on the normal path", async () => {
     messages = [msg({ id: "m1" })];
     // Resolves true (a page came back) but never touches `messages` — the

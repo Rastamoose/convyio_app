@@ -12,6 +12,8 @@ import {
 } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { Sql } from "../db";
+import { appendJoinNotice } from "../joinNotices";
+import { managedAgentActorId, NOODLE_AGENT, seedNoodle } from "../managedAgents";
 import type { AccountIdentity, AccountStore } from "./AccountStore";
 
 const MAX_OWNED_WORKSPACES = 20;
@@ -33,6 +35,7 @@ export class WorkspaceAccess {
       publicCode: publicCode(),
       createdAt: Date.now(),
     };
+    const generalChannelId = randomUUID();
     await this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
       await sql`SELECT id FROM actors WHERE id = ${actor.id} FOR UPDATE`;
@@ -53,12 +56,19 @@ export class WorkspaceAccess {
       `;
       await sql`
         INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at)
-        VALUES (${randomUUID()}, ${workspace.id}, 'general', ${actor.id}, false, ${workspace.createdAt})
+        VALUES (${generalChannelId}, ${workspace.id}, 'general', ${actor.id}, false, ${workspace.createdAt})
       `;
+      await appendJoinNotice(
+        sql,
+        workspace,
+        { id: actor.id, displayName: actor.displayName, kind: "human" },
+        workspace.createdAt,
+      );
       await appendAccessEvent(sql, workspace.id, actor.id, "workspace.created", {
         workspaceId: workspace.id,
         name: workspace.name,
       });
+      await seedNoodle(sql, workspace, actor.displayName, generalChannelId, workspace.createdAt);
     });
     return {
       id: workspace.id,
@@ -184,11 +194,20 @@ export class WorkspaceAccess {
         return toAccessRequest(row, row.workspace_name, row.requester_name);
       }
       if (decision === "approved") {
-        await sql`
+        const inserted = await sql<{ actor_id: string }[]>`
           INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
           VALUES (${workspaceId}, ${row.requester_id}, 'member', ${now})
           ON CONFLICT (workspace_id, actor_id) DO NOTHING
+          RETURNING actor_id
         `;
+        if (inserted[0]) {
+          await appendJoinNotice(
+            sql,
+            { id: workspaceId, name: row.workspace_name },
+            { id: row.requester_id, displayName: row.requester_name, kind: "human" },
+            now,
+          );
+        }
       }
       await appendAccessEvent(sql, workspaceId, actorId, `workspace.access_${decision}`, {
         requestId,
@@ -320,6 +339,12 @@ export class WorkspaceAccess {
             UPDATE workspace_invites SET uses = uses + 1
             WHERE id = ${invite.id}
           `;
+          await appendJoinNotice(
+            sql,
+            { id: invite.workspace_id, name: invite.name },
+            { id: actor.id, displayName: actor.displayName, kind: "human" },
+            now,
+          );
           await appendAccessEvent(sql, invite.workspace_id, actor.id, "workspace.invite_accepted", {
             actorId: actor.id,
             inviteId: invite.id,
@@ -369,20 +394,59 @@ export class WorkspaceAccess {
     });
   }
 
+  async restoreNoodle(workspaceId: string, actorId: string): Promise<{ actorId: string }> {
+    await this.requireOwner(workspaceId, actorId);
+    const now = Date.now();
+    return this.sql.begin(async (tx) => {
+      const sql = tx as unknown as Sql;
+      const [existing] = await sql<{ id: string }[]>`
+        SELECT a.id
+        FROM workspace_members m
+        JOIN actors a ON a.id = m.actor_id
+        WHERE m.workspace_id = ${workspaceId} AND a.managed_agent = ${NOODLE_AGENT}
+      `;
+      if (existing) return { actorId: existing.id };
+
+      const [actor] = await sql<{ id: string }[]>`
+        SELECT id FROM actors
+        WHERE managed_agent = ${NOODLE_AGENT}
+          AND (
+            id = ${managedAgentActorId(workspaceId, NOODLE_AGENT)}
+            OR id IN (
+              SELECT DISTINCT author_id FROM messages
+              WHERE workspace_id = ${workspaceId} AND author_kind = 'agent'
+            )
+          )
+        LIMIT 1
+      `;
+      if (!actor) throw new ApiError(404, "NOT_FOUND", "noodle is not available in this workspace");
+      await sql`
+        INSERT INTO workspace_members (workspace_id, actor_id, role, joined_at)
+        VALUES (${workspaceId}, ${actor.id}, 'member', ${now})
+        ON CONFLICT DO NOTHING
+      `;
+      await appendAccessEvent(sql, workspaceId, actorId, "workspace.member_restored", {
+        actorId: actor.id,
+        managedAgent: NOODLE_AGENT,
+      });
+      return { actorId: actor.id };
+    }) as Promise<{ actorId: string }>;
+  }
+
   async removeMember(workspaceId: string, targetId: string, actorId: string): Promise<void> {
     const self = targetId === actorId;
     if (!self) await this.requireOwner(workspaceId, actorId);
     await this.sql.begin(async (tx) => {
       const sql = tx as unknown as Sql;
-      const [target] = await sql<{ role: WorkspaceRole; kind: "human" | "agent" }[]>`
-        SELECT m.role, a.kind
+      const [target] = await sql<{ role: WorkspaceRole; kind: "human" | "agent"; managed_agent: string | null }[]>`
+        SELECT m.role, a.kind, a.managed_agent
         FROM workspace_members m
         JOIN actors a ON a.id = m.actor_id
         WHERE m.workspace_id = ${workspaceId} AND m.actor_id = ${targetId}
         FOR UPDATE
       `;
       if (!target) throw new ApiError(404, "MEMBER_NOT_FOUND", "no such workspace member");
-      if (target.kind !== "human") {
+      if (target.kind !== "human" && target.managed_agent === null) {
         throw new ApiError(409, "AGENT_MEMBER", "remove agents through the agent settings flow");
       }
       if (target.role === "owner") await this.requireAnotherOwner(workspaceId, targetId, sql);

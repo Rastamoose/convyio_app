@@ -10,6 +10,8 @@ import type {
 } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { Sql, WorkspaceDb } from "../db";
+import { appendJoinNotice } from "../joinNotices";
+import { NOODLE_NAME } from "../managedAgents";
 import { USERNAME_PATTERN } from "./Auth";
 
 const TOKEN_BYTES = 32;
@@ -128,6 +130,9 @@ export class AgentInvites {
         "agent names are 1-32 characters of letters, digits, spaces, - and _",
       );
     }
+    if (trimmed.toLowerCase() === NOODLE_NAME) {
+      throw new ApiError(409, "NAME_RESERVED", `${NOODLE_NAME} is reserved for Convyio's built-in agent`);
+    }
     const human = await this.db.findMemberByName("human", trimmed);
     if (human) {
       throw new ApiError(409, "NAME_TAKEN", `the name ${trimmed} is already in use`);
@@ -142,6 +147,12 @@ export class AgentInvites {
     const token = randomBytes(TOKEN_BYTES).toString("hex");
     const inviteId = randomUUID();
     const now = Date.now();
+    await appendJoinNotice(
+      this.db.sql,
+      { id: this.db.workspaceId, name: this.db.workspaceName },
+      { id: actor.id, displayName: actor.displayName, kind: "agent" },
+      now,
+    );
 
     await this.db.sql`
       INSERT INTO agent_invites (

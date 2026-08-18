@@ -116,7 +116,7 @@ export class WorkspaceRuntime {
         workspace: { id: db.workspaceId, name: db.workspaceName },
         demoChannels,
         authorizeJoin: options.auth
-          ? createJoinGate(options.auth, db.workspaceId, options.agentToken, agentInvites)
+          ? createJoinGate(options.auth, db.workspaceId, options.agentToken, agentInvites, db)
           : async () => ({ ok: false }),
         authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
         threadEvents,

@@ -1,4 +1,5 @@
 export * from "./participant";
+export * from "./joinNotice";
 export * from "./protocol";
 export * from "./board";
 export * from "./agent";

@@ -10,6 +10,8 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     apiFetch,
     self: { id: "owner" },
     connected: true,
+    participants: [],
+    restoreNoodle: vi.fn(),
   }),
 }));
 

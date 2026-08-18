@@ -42,7 +42,7 @@ export function BoardCard({
         {planRef && <span className="truncate text-[10px] text-faint">{planRef}</span>}
         {item.ownerName && (
           <span className="ml-auto shrink-0" title={item.ownerName}>
-            <Avatar name={item.ownerName} size={16} />
+            <Avatar name={item.ownerName} size={16} mascot={item.ownerName.toLowerCase() === "noodle"} />
           </span>
         )}
       </div>

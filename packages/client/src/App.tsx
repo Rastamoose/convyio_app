@@ -17,7 +17,6 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { Toasts } from "./components/Toasts";
 import { apiBaseUrl } from "./lib/serverUrl";
 import { supabase } from "./lib/supabase";
-import { useTheme } from "./hooks/useTheme";
 import { WorkspaceLobby } from "./components/WorkspaceLobby";
 import { WorkspaceInviteFlow } from "./components/WorkspaceInviteFlow";
 import { WorkspaceSettings } from "./components/WorkspaceSettings";
@@ -432,7 +431,6 @@ function UsernameStep({
   onDone: () => void;
   onBack: () => void;
 }) {
-  const { theme } = useTheme();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -470,13 +468,10 @@ function UsernameStep({
         title="Back to sign in"
         className="absolute top-4 left-4 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg transition select-none hover:bg-input"
       >
-        <img
-          src={theme === "dark" ? "/mark-yellow.svg" : "/mark-black.svg"}
-          alt=""
-          className="h-6 w-6"
-        />
+        <img src="/mark-yellow.svg" alt="" className="h-6 w-6" />
       </button>
       <div className="elevated w-96 animate-fade-in rounded-2xl p-8">
+        <img src="/mark-yellow.svg" alt="convyio" className="mb-6 h-8 w-8" />
         <h1 className="mb-1 text-2xl font-semibold text-body">Pick a username</h1>
         <p className="mb-6 text-muted">
           This is who you are here, permanently — choose well.
@@ -627,6 +622,7 @@ function Workspace({
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.localStorage.getItem("convyio:sidebar-open") !== "0",
   );
@@ -785,6 +781,8 @@ function Workspace({
             onDiscuss={discussItem}
             onPrefill={prefillText}
             canManageMembers={activeWorkspace.role === "owner"}
+            addAgentOpen={addAgentOpen}
+            onAddAgentOpenChange={setAddAgentOpen}
           />
         </div>
         <main
@@ -812,6 +810,7 @@ function Workspace({
               onEditingIdChange={setEditingId}
               onDiscuss={discussItem}
               onPrefill={prefillText}
+              onAddAgent={() => setAddAgentOpen(true)}
             />
             <MessageInput
               channel={channel}

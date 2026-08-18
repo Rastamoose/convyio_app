@@ -23,6 +23,7 @@ import type { PlanService } from "./PlanService";
 import type { Sessions } from "./sessions";
 import type { AgentInvites } from "../auth/AgentInvites";
 import type { Auth } from "../auth/Auth";
+import { secretsEqual } from "../auth/joinPolicy";
 import { MAX_ATTACHMENT_BYTES, type Attachments } from "../chat/Attachments";
 import type { Channels } from "../chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT, type MessageStore } from "../chat/MessageStore";
@@ -37,6 +38,7 @@ import type { WorkspaceAccess } from "../auth/WorkspaceAccess";
 import type { WorkspaceRegistry } from "../WorkspaceRegistry";
 import { RateLimiter } from "../auth/RateLimiter";
 import type { WorkspaceRuntime } from "../WorkspaceRuntime";
+import { NOODLE_AGENT } from "../managedAgents";
 import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
@@ -174,6 +176,7 @@ export interface ApiServices {
   attachments: Attachments;
   corsOrigin: string;
   authGate?: AuthGate | null;
+  hostedAgentToken?: string | null;
   agentInvites?: AgentInvites | null;
   runnerRuntime?: RunnerRuntime | null;
   onUpdateAgent?: ((profile: AgentInvite) => void) | null;
@@ -202,6 +205,7 @@ export function createApiHandler(services: ApiServices) {
     attachments,
     corsOrigin,
     authGate = null,
+    hostedAgentToken = null,
     agentInvites = null,
     runnerRuntime = null,
     onUpdateAgent = null,
@@ -259,6 +263,24 @@ export function createApiHandler(services: ApiServices) {
       if (parts[1] === "health" && parts.length === 2 && method === "GET") {
         // Liveness for deploy platforms and container healthchecks; no auth.
         json(res, 200, { ok: true });
+      } else if (
+        parts[1] === "hosted-agent" &&
+        parts[2] === "workspaces" &&
+        parts.length === 3 &&
+        method === "GET"
+      ) {
+        const token = bearerToken(req);
+        if (!token || !hostedAgentToken || !secretsEqual(token, hostedAgentToken)) {
+          throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        }
+        const apiUrl = requestOrigin(req);
+        const workspaces = await db.listManagedAgentWorkspaces(NOODLE_AGENT);
+        json(res, 200, {
+          workspaces: workspaces.map((workspace) => ({
+            ...workspace,
+            wsUrl: workspaceSocketUrl(apiUrl, workspace.id),
+          })),
+        });
       } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
         await routeAuth(req, res, parts, url, authGate);
@@ -503,6 +525,15 @@ async function route(
     }
   }
 
+  if (parts[1] === "workspace" && parts[2] === "noodle" && parts.length === 3) {
+    if (!workspaceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace membership is not available");
+    if (method === "POST") {
+      const restored = await workspaceAccess.restoreNoodle(actor.workspaceId, actor.id);
+      onAddMember?.(restored.actorId);
+      return json(res, 200, { actorId: restored.actorId, enabled: true });
+    }
+  }
+
   if (parts[1] === "workspace" && parts[2] === "access-requests") {
     if (!workspaceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace access is not available");
     if (parts.length === 3 && method === "GET") {
@@ -544,7 +575,9 @@ async function route(
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove members");
     const targetId = parts[2];
     const target = await db.getActor(targetId);
-    if (!target || target.kind !== "human") throw new ApiError(404, "NOT_FOUND", "no such human member");
+    if (!target || (target.kind !== "human" && target.managedAgent !== "noodle")) {
+      throw new ApiError(404, "NOT_FOUND", "no such removable member");
+    }
     if (workspaceAccess) {
       await workspaceAccess.removeMember(actor.workspaceId, targetId, actor.id);
     } else {
@@ -1064,7 +1097,10 @@ function runtimeRouteServices(
     runnerRuntime: runtime.runnerRuntime,
     onUpdateAgent: (profile) => runtime.updateAgent(profile),
     onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
-    onRemoveMember: (actorId) => runtime.hub.closeHumanConnection(actorId),
+    onRemoveMember: (actorId) => {
+      runtime.hub.closeAgentConnection(actorId);
+      runtime.hub.closeHumanConnection(actorId);
+    },
     onAddMember: (actorId) => void runtime.hub.addOfflineMember(actorId),
     snapshot: runtime.snapshot,
     plans: runtime.plans,

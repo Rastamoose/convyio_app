@@ -140,6 +140,8 @@ export interface WorkspaceState {
   refreshAgents: () => Promise<void>;
   /** Remove a human from the workspace (humans only; not self). */
   removeMember: (actorId: string) => Promise<boolean>;
+  /** Owner-only restore of the built-in noodle member, without repeating welcome messages. */
+  restoreNoodle: () => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -501,6 +503,22 @@ export function WorkspaceProvider({
     }
   };
 
+  const restoreNoodle = async (): Promise<boolean> => {
+    const request = api.fetch("/api/workspace/noodle", { method: "POST" });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not restore noodle: ${await api.errorMessage(res)}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      pushToast(`Could not restore noodle: ${String(err)}`);
+      return false;
+    }
+  };
+
   const removeMember = async (actorId: string): Promise<boolean> => {
     const request = api.fetch(`/api/actors/${encodeURIComponent(actorId)}`, {
       method: "DELETE",
@@ -635,6 +653,7 @@ export function WorkspaceProvider({
     updateAgent,
     repairAgent,
     revokeAgent,
+    restoreNoodle,
     refreshAgents,
     removeMember,
   };

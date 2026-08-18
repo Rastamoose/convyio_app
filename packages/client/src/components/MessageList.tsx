@@ -13,6 +13,7 @@ import type {
   InteractionRequest,
   Participant,
 } from "@workspace/shared";
+import { joinNoticeMemberKind } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import type { ActiveRun } from "../hooks/useAgentTraces";
@@ -63,6 +64,8 @@ function layout(messages: LocalMessage[]): Rendered[] {
     const grouped =
       !newDay &&
       !!prev &&
+      prev.authorKind !== "system" &&
+      m.authorKind !== "system" &&
       prev.authorId === m.authorId &&
       m.timestamp - prev.timestamp < GROUP_WINDOW_MS;
     out.push({ message: m, grouped, newDay });
@@ -383,7 +386,7 @@ function ReplyPreview({
       className="mb-0.5 flex max-w-full items-center gap-1.5 pl-1 text-left text-xs text-faint hover:text-muted"
     >
       <ReplyIcon className="h-3 w-3 shrink-0 -scale-x-100" />
-      <Avatar name={original.authorName} size={14} />
+      <Avatar name={original.authorName} size={14} mascot={original.authorName.toLowerCase() === "noodle"} />
       <span className="shrink-0 font-medium text-muted">{original.authorName}</span>
       <span className="truncate">{original.content || `${original.attachments?.length ?? 0} attachment(s)`}</span>
     </button>
@@ -510,6 +513,7 @@ export function MessageList({
   onEditingIdChange,
   onDiscuss,
   onPrefill,
+  onAddAgent,
 }: {
   // TODO(channels): channel handling is bolted on (per-message string field,
   // client-side filtering). Needs a proper channel model: scoped
@@ -521,6 +525,7 @@ export function MessageList({
   onEditingIdChange: (id: string | null) => void;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
+  onAddAgent?: () => void;
 }) {
   const {
     messages: allMessages,
@@ -770,10 +775,10 @@ export function MessageList({
 
   const AuthorAvatar = ({ m }: { m: LocalMessage }) => {
     const participant = participants.find((p) => p.id === m.authorId);
-    if (!participant) return <Avatar name={m.authorName} size={40} />;
+    if (!participant) return <Avatar name={m.authorName} size={40} mascot={m.authorName.toLowerCase() === "noodle"} />;
     return (
       <button onClick={(e) => openMemberCard(m.authorId, e.currentTarget.getBoundingClientRect())}>
-        <Avatar name={m.authorName} size={40} />
+        <Avatar name={m.authorName} size={40} mascot={participant.managedAgent === "noodle"} />
       </button>
     );
   };
@@ -808,6 +813,14 @@ export function MessageList({
     <>
       {m.attachments && m.attachments.length > 0 && (
         <AttachmentGallery attachments={m.attachments} onImageClick={setLightbox} />
+      )}
+      {m.actions?.some((action) => action.type === "add_agent") && onAddAgent && (
+        <button
+          onClick={onAddAgent}
+          className="mt-2 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+        >
+          {m.actions.find((action) => action.type === "add_agent")?.label ?? "Add agent"}
+        </button>
       )}
       <ReactionsRow message={m} selfId={self?.id ?? null} onToggle={(emoji, op) => reactToMessage(m.id, emoji, op)} />
       {m.failed && m.nonce && <FailedActions nonce={m.nonce} onRetry={retryMessage} onDiscard={discardMessage} />}
@@ -854,38 +867,45 @@ export function MessageList({
         ref={containerRef}
         onScroll={handleScroll}
         data-testid="message-scroll"
-        className="min-h-0 flex-1 overflow-y-auto pt-3 pb-4"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto pt-3 pb-4"
       >
         <PinnedMessages messages={messages} onJump={jumpToMessage} />
         {loadingOlder && (
           <div className="py-3 text-center text-xs text-faint">Loading messages…</div>
         )}
-        {!hasMore && !loadingOlder && messages.length > 0 && (
-          <div className="py-3 text-center text-[10px] tracking-wider text-faint uppercase">
-            Beginning of #{channel}
-          </div>
-        )}
-        {messages.length === 0 &&
-          activeRuns.length === 0 &&
-          proposedItems.length === 0 &&
-          orphanInteractions.length === 0 && (
-          <div className="px-4 pt-12">
-            <h2 className="text-3xl font-bold tracking-tight text-body">
-              <span className="text-accent">#</span>
-              {channel}
-            </h2>
-            <p className="mt-1 max-w-md text-sm text-muted">
-              Nothing here yet.
-              {(() => {
-                const agent = participants.find((p) => p.kind === "agent");
-                return agent
-                  ? ` Say something, or mention @${agent.name} to put it to work.`
-                  : " Say something to get things moving.";
-              })()}
-            </p>
-          </div>
-        )}
+        <div className="mt-auto" />
+        <div className="px-4 pt-6 pb-4">
+          <h2 className="text-3xl font-bold tracking-tight text-body">
+            <span className="text-accent">#</span>
+            {channel}
+          </h2>
+          <p className="mt-1 max-w-md text-sm text-muted">
+            {messages.length === 0 &&
+            activeRuns.length === 0 &&
+            proposedItems.length === 0 &&
+            orphanInteractions.length === 0
+              ? (() => {
+                  const agent = participants.find((p) => p.kind === "agent");
+                  return agent
+                    ? `Nothing here yet. Say something, or mention @${agent.name} to put it to work.`
+                    : "Nothing here yet. Say something to get things moving.";
+                })()
+              : `This is the start of #${channel}.`}
+          </p>
+        </div>
         {timeline.map((entry) => {
+          if (entry.kind === "message" && entry.message.authorKind === "system") {
+            const agent = joinNoticeMemberKind(entry.message, participants) === "agent";
+            return (
+              <div key={entry.message.id} className="flex justify-center px-4 py-1.5 text-sm text-faint">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="font-medium text-muted">{entry.message.authorName}</span>
+                  {agent && <AgentBadge />}
+                  <span>joined the workspace</span>
+                </span>
+              </div>
+            );
+          }
           if (entry.kind === "board") {
             return (
               <div key={entry.line.id} className="flex justify-center px-4 py-0.5 text-[11px] text-faint">

@@ -75,7 +75,7 @@ export function TraceMessageLive({
   return (
     <div id={`trace-${runId}`} className="mt-4 flex gap-4 py-0.5 pr-4 pl-4">
       <div className="pt-0.5">
-        <Avatar name={agentName} size={40} />
+        <Avatar name={agentName} size={40} mascot={agentName.toLowerCase() === "noodle"} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

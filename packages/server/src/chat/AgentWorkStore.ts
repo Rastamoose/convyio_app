@@ -342,6 +342,7 @@ export class AgentWorkStore {
           mentions: [],
           runId: event.runId,
           trace: trace.length > 0 ? trace : undefined,
+          ...(event.actions?.length ? { actions: event.actions } : {}),
         };
         committed.push(await this.messages.appendInTransaction(sql, message, {
           conversationId: event.conversationId,

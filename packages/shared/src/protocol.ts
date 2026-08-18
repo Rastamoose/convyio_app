@@ -222,6 +222,7 @@ export const agentRunFinishEventSchema = z.object({
     .refine((ids) => new Set(ids).size === ids.length, "request ids must be unique"),
   outcome: z.enum(["completed", "cancelled", "failed"]),
   finalContent: z.string().max(4_000),
+  actions: z.array(z.object({ type: z.literal("add_agent"), label: z.string().max(40).optional() })).max(3).optional(),
   error: z.string().max(2_000).optional(),
   usage: normalizedUsageSchema.optional(),
 });

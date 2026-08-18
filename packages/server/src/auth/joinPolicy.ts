@@ -3,6 +3,8 @@ import type { JoinEvent } from "@workspace/shared";
 import type { JoinDecision } from "../hub";
 import type { AgentInvites } from "./AgentInvites";
 import type { Auth } from "./Auth";
+import type { WorkspaceDb } from "../db";
+import { NOODLE_AGENT, NOODLE_NAME } from "../managedAgents";
 
 /**
  * The auth-mode join gate. It exists so the Hub never knows whether
@@ -19,14 +21,19 @@ export function createJoinGate(
   workspaceId: string,
   agentToken: string | null,
   agentInvites: AgentInvites,
+  db: WorkspaceDb,
 ): (join: JoinEvent) => Promise<JoinDecision> {
   return async (join) => {
     if (join.kind === "agent") {
       if (join.authToken === undefined) return { ok: false };
 
-      // Server-owned global agent (AGENT_TOKEN) supplies its own name.
+      // Server-owned global agent (AGENT_TOKEN) resolves to the managed
+      // workspace member; the token cannot invent identity or restore a
+      // membership an owner removed.
       if (agentToken !== null && secretsEqual(join.authToken, agentToken)) {
-        return join.name !== undefined ? { ok: true, name: join.name } : { ok: false };
+        if (join.name?.toLowerCase() !== NOODLE_NAME) return { ok: false };
+        const managed = await db.findManagedAgent(NOODLE_AGENT);
+        return managed ? { ok: true, name: managed.displayName, actorId: managed.id } : { ok: false };
       }
 
       // User-created credentials; the stored actor identity and harness win.
@@ -48,7 +55,7 @@ export function createJoinGate(
 }
 
 /** Hash both sides so comparison time leaks neither content nor length. */
-function secretsEqual(presented: string, expected: string): boolean {
+export function secretsEqual(presented: string, expected: string): boolean {
   return timingSafeEqual(
     createHash("sha256").update(presented).digest(),
     createHash("sha256").update(expected).digest(),

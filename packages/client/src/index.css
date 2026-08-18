@@ -67,6 +67,8 @@
   --animate-slide-up-fade: slide-up-fade 150ms ease-out;
   /* Toast exit; `forwards` holds opacity 0 until React unmounts the node. */
   --animate-toast-out: toast-out 120ms ease-in forwards;
+  --animate-opening-mark: opening-mark 1.6s ease-in-out infinite;
+  --animate-opening-bar: opening-bar 1.1s ease-in-out infinite;
 
   @keyframes fade-in {
     from {
@@ -94,6 +96,23 @@
   @keyframes toast-out {
     to {
       opacity: 0;
+    }
+  }
+  @keyframes opening-mark {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+  @keyframes opening-bar {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(200%);
     }
   }
 }
@@ -185,6 +204,14 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+/* The whole app runs at the 90% browser-zoom step — the density reads
+   better slightly zoomed out, and `zoom` (Baseline since Firefox 126)
+   scales exactly like browser zoom without breaking fixed positioning
+   or viewport-unit layout the way `transform: scale` would. */
+html {
+  zoom: 0.9;
 }
 
 body {

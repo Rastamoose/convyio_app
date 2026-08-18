@@ -436,7 +436,7 @@ export function ItemDrawer({
           >
             {item.ownerName ? (
               <>
-                <Avatar name={item.ownerName} size={18} />
+                <Avatar name={item.ownerName} size={18} mascot={item.ownerName.toLowerCase() === "noodle"} />
                 <span className="text-body">{item.ownerName}</span>
               </>
             ) : (
@@ -464,7 +464,7 @@ export function ItemDrawer({
                       ownerIndex === i + 1 ? "bg-subtle" : ""
                     }`}
                   >
-                    <Avatar name={actor.displayName} size={18} />
+                    <Avatar name={actor.displayName} size={18} mascot={actor.managedAgent === "noodle"} />
                     {actor.displayName}
                     {actor.kind === "agent" && <AgentBadge />}
                   </button>

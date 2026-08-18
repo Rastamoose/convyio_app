@@ -57,6 +57,7 @@ export function useChatMessages() {
 
   return {
     messages,
+    /** Instant history replace. First-run welcome pacing lives in Workspace. */
     replaceAll: (history: ChatMessage[]) => setMessages(history),
     /**
      * A `message` broadcast arrived. When `nonce` matches a pending local

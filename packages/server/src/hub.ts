@@ -1151,6 +1151,8 @@ export class Hub {
   async addOfflineMember(actorId: string): Promise<void> {
     await this.roster.addOffline(actorId);
     this.broadcastPresence();
+    const notice = await this.messages.get(`member-joined:${this.options.workspace.id}:${actorId}`);
+    if (notice) this.broadcast({ type: "message", message: notice });
   }
 
   /** Disconnect a human whose workspace membership was just revoked and

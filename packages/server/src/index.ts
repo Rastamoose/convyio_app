@@ -59,7 +59,7 @@ async function main() {
   const workspaceAccess = new WorkspaceAccess(db.sql, accounts);
   const sessions = new Sessions();
   const auth = config.googleAuthEnabled || config.emailAuthEnabled
-    ? new Auth(accounts, supabase)
+    ? new Auth(accounts, supabase, workspaceAccess)
     : null;
   const authGate: AuthGate | null = auth
     ? {
@@ -98,11 +98,15 @@ async function main() {
     attachments: runtime.attachments,
     corsOrigin: config.corsOrigin,
     authGate,
+    hostedAgentToken: config.agentToken,
     agentInvites: runtime.agentInvites,
     runnerRuntime: runtime.runnerRuntime,
     onUpdateAgent: (profile) => runtime.updateAgent(profile),
     onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
-    onRemoveMember: (actorId) => runtime.hub.closeHumanConnection(actorId),
+    onRemoveMember: (actorId) => {
+      runtime.hub.closeAgentConnection(actorId);
+      runtime.hub.closeHumanConnection(actorId);
+    },
     onAddMember: (actorId) => void runtime.hub.addOfflineMember(actorId),
     snapshot: runtime.snapshot,
     plans: runtime.plans,

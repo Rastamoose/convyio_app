@@ -1,4 +1,4 @@
-import type { ParticipantKind } from "./participant";
+import type { ManagedAgent, ParticipantKind } from "./participant";
 import type { ProjectAction } from "./toolman";
 
 /**
@@ -13,6 +13,7 @@ export interface Actor {
   kind: ParticipantKind;
   displayName: string;
   workspaceId: string;
+  managedAgent?: ManagedAgent;
 }
 
 /**

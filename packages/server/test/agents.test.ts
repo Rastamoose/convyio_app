@@ -247,6 +247,13 @@ describe("agent HTTP invites", async () => {
     assert.equal(second.status, 409);
   });
 
+  test("agent names cannot be noodle", async () => {
+    const human = await env.actor("human", "name-owner");
+    const reserved = await env.api("POST", "/api/agents", human.token, { name: "noodle", provider: PROVIDER });
+    assert.equal(reserved.status, 409);
+    assert.equal(reserved.body.error, "NAME_RESERVED");
+  });
+
   test("agent names cannot match a human member", async () => {
     const human = await env.actor("human", "dana");
     await env.db.sql`
@@ -359,6 +366,47 @@ describe("global agent token", async () => {
   test("global AGENT_TOKEN still works", async () => {
     const joined = await env.join({ type: "join", kind: "agent", authToken: globalToken, name: "noodle" });
     assert.equal(joined.welcome?.self.name, "noodle");
+    assert.equal(joined.welcome?.self.managedAgent, "noodle");
     assert.equal(joined.error, null);
+  });
+
+  test("AGENT_TOKEN cannot invent a name or restore a removed noodle", async () => {
+    const spoofed = await env.join({ type: "join", kind: "agent", authToken: globalToken, name: "impostor" });
+    assert.equal(spoofed.welcome, null);
+
+    const [noodle] = await env.db.sql<{ id: string }[]>`
+      SELECT id FROM actors WHERE managed_agent = 'noodle'
+    `;
+    await env.db.removeMember(noodle.id);
+    const removed = await env.join({ type: "join", kind: "agent", authToken: globalToken, name: "noodle" });
+    assert.equal(removed.welcome, null);
+  });
+});
+
+describe("hosted agent workspace manifest", async () => {
+  const token = "hosted-secret";
+  const env = await createEnv({ hostedAgentToken: token });
+  after(() => env.close());
+
+  test("AGENT_TOKEN lists workspaces that still have noodle as a member", async () => {
+    const refused = await fetch(`${env.baseUrl}/api/hosted-agent/workspaces`);
+    assert.equal(refused.status, 401);
+
+    const listed = await fetch(`${env.baseUrl}/api/hosted-agent/workspaces`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(listed.status, 200);
+    const body = (await listed.json()) as { workspaces: Array<{ id: string; actorId: string; wsUrl: string }> };
+    assert.equal(body.workspaces.length, 1);
+    assert.equal(body.workspaces[0].id, env.db.workspaceId);
+    assert.match(body.workspaces[0].wsUrl, /\/ws\//);
+
+    const [noodle] = await env.db.sql<{ id: string }[]>`SELECT id FROM actors WHERE managed_agent = 'noodle'`;
+    await env.db.removeMember(noodle.id);
+    const empty = await fetch(`${env.baseUrl}/api/hosted-agent/workspaces`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const emptyBody = (await empty.json()) as { workspaces: unknown[] };
+    assert.equal(emptyBody.workspaces.length, 0);
   });
 });

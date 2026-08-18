@@ -274,7 +274,7 @@ function StatusRow({
       onContextMenu={(e) => onContextMenu(participant, e)}
     >
       <div className="relative">
-        <Avatar name={participant.name} size={32} grayscale={offline} />
+        <Avatar name={participant.name} size={32} grayscale={offline} mascot={participant.managedAgent === "noodle"} />
         <PresenceDot participant={participant} />
       </div>
       <div className="min-w-0">
@@ -309,12 +309,16 @@ export function Sidebar({
   onDiscuss,
   onPrefill,
   canManageMembers = true,
+  addAgentOpen,
+  onAddAgentOpenChange,
 }: {
   channel: string;
   onSelectChannel: (channel: string) => void;
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
   canManageMembers?: boolean;
+  addAgentOpen?: boolean;
+  onAddAgentOpenChange?: (open: boolean) => void;
 }) {
   const {
     participants,
@@ -355,7 +359,9 @@ export function Sidebar({
     x: number;
     y: number;
   } | null>(null);
-  const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [localAddAgentOpen, setLocalAddAgentOpen] = useState(false);
+  const addAgentOpenState = addAgentOpen ?? localAddAgentOpen;
+  const setAddAgentOpen = onAddAgentOpenChange ?? setLocalAddAgentOpen;
   const [renamingChannel, setRenamingChannel] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDeleteChannel, setConfirmDeleteChannel] = useState<string | null>(null);
@@ -463,15 +469,14 @@ export function Sidebar({
   const menuMember = memberMenu
     ? (participants.find((p) => p.id === memberMenu.participantId) ?? null)
     : null;
-  // Agent removal only works for invite-created agents (server-wide-token
-  // agents like the demo "noodle" have no invite to revoke); human removal
-  // works for any other human, but never for yourself.
+  // Invite-created agents revoke through their invite. Built-in noodle
+  // uses ordinary membership removal (owners only). Humans never remove themselves.
   const menuMemberInvite = menuMember
     ? (agentInvites.find((i) => i.actorId === menuMember.id) ?? null)
     : null;
   const menuMemberRemovable = menuMember
     ? menuMember.kind === "agent"
-      ? menuMemberInvite !== null
+      ? menuMemberInvite !== null || (canManageMembers && menuMember.managedAgent === "noodle")
       : canManageMembers && menuMember.id !== self?.id
     : false;
 
@@ -698,16 +703,13 @@ export function Sidebar({
           removable={menuMemberRemovable}
           onRemove={() => {
             if (!menuMemberRemovable) return;
-            if (menuMember.kind === "agent") {
-              if (menuMemberInvite) void revokeAgent(menuMemberInvite.id);
-            } else {
-              void removeMember(menuMember.id);
-            }
+            if (menuMemberInvite) void revokeAgent(menuMemberInvite.id);
+            else void removeMember(menuMember.id);
           }}
           onClose={() => setMemberMenu(null)}
         />
       )}
-      <AddAgentModal open={addAgentOpen} onClose={() => setAddAgentOpen(false)} />
+      <AddAgentModal open={addAgentOpenState} onClose={() => setAddAgentOpen(false)} />
     </aside>
   );
 }
