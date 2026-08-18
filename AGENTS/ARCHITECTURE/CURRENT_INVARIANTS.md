@@ -33,7 +33,11 @@ does not supersede them until the corresponding code change lands.
 - Every workspace-scoped runtime and store carries one immutable workspace id. Chat rows, channels, attachments, plans, board data, context, agent work, projects and Toolman records are filtered and constrained by it.
 - HTTP workspace tokens contain both actor id and workspace id; every request rechecks membership. A token issued in one workspace cannot select another.
 - Each Hub instance belongs to one `WorkspaceRuntime`, so presence and websocket broadcasts cannot cross workspace boundaries.
-- A global account with no memberships remains valid and may create or request another workspace; removal from one workspace never removes the account or its other memberships.
+- The first username claim creates a starter workspace, but a global account with no memberships remains valid after leaving and may create or request another workspace. Removal from one workspace never removes the account or its other memberships.
+- `AGENT_TOKEN` cannot choose or create an agent identity. It resolves only the active managed noodle membership in the requested workspace; removing that membership prevents rejoin, and only an owner can restore it.
+- Workspace creation writes noodle's deterministic `managed-welcome:*` history once. A member's first join writes one deterministic `member-joined:*` system message; reconnect and noodle restore replay neither record.
+- Hosted noodle executes outside the shell. Its manifest is authenticated with the same `AGENT_TOKEN`, and each listed workspace receives an independent websocket connection and state directory.
+- Hosted noodle's in-memory guardrail is global to its process: ten runs per hour per human actor across workspaces, with only the first rejected run in a window posting the break message and Add Agent action.
 - Only owners manage human membership and invites. A workspace must always retain at least one owner.
 - Client drafts and unread cursors include the workspace id in their storage key, and switching workspaces remounts the complete workspace state tree.
 - Auth mode is a config switch, not a flag: GOOGLE_AUTH_ENABLED and/or

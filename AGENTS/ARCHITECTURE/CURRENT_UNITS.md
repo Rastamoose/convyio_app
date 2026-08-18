@@ -11,6 +11,7 @@ the wire protocol (websocket) and the HTTP board API.
 
 ### packages/shared
 - `participant.ts` — participant, chat message, and trace shapes.
+- `joinNotice.ts` — canonical member-join copy and agent-pill classification, including legacy notices.
 - `board.ts` — board item/event shapes, workable statuses, authz contract.
 - `agentWork.ts` — durable agent conversation, run-request, permission-mode and interaction shapes.
 - `thread.ts` — canonical append-only workspace event and channel shapes.
@@ -22,7 +23,10 @@ the wire protocol (websocket) and the HTTP board API.
 ### packages/server
 - `WorkspaceDb` (`db.ts`) — a workspace-scoped view over the shared Supabase Postgres connection. It stamps one verified workspace identity onto actors and every domain store; scoped instances share the root connection rather than opening one pool per workspace.
 - `AccountStore` (`auth/AccountStore.ts`) — global human identity plus membership and role lookup. It never selects an active workspace for the user.
-- `WorkspaceAccess` (`auth/WorkspaceAccess.ts`) — workspace creation, public-code access requests, expiring single-use invites, owner/member role transitions and last-owner enforcement. Every accepted membership change and access decision is transactional and audited in `thread_events`.
+- `WorkspaceAccess` (`auth/WorkspaceAccess.ts`) — workspace creation (including managed noodle and one-time history), public-code access requests, expiring reusable invites, owner/member role transitions, last-owner enforcement, and owner-only noodle restore. Accepted membership changes and access decisions are transactional and audited in `thread_events`.
+- `managedAgents.ts` — managed noodle identity, deterministic workspace actor id, welcome copy and transactional workspace seed.
+- `joinNotices.ts` — writes the idempotent durable system message for a member's first workspace join.
+- `GET /api/hosted-agent/workspaces` — token-authenticated manifest of active noodle memberships with workspace-specific websocket URLs.
 - `WorkspaceRegistry` — lazily creates one `WorkspaceRuntime` per active workspace and routes `/ws/:workspaceId`, `/toolman/:workspaceId`, pairing credentials and workspace-bound API sessions to it.
 - `WorkspaceRuntime` — composes one workspace's roster, Hub, stores, Toolman sandbox, projects, context and demos. A runtime broadcasts only to its own connections.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
@@ -101,7 +105,7 @@ the wire protocol (websocket) and the HTTP board API.
 - `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
 
 ### packages/client
-- `App.tsx` — account boot and workspace navigation: sign-in, permanent username, invite continuation, membership lobby, persisted last-workspace selection and keyed `WorkspaceProvider` remounts.
+- `App.tsx` — account boot and workspace navigation: sign-in, permanent username and starter-workspace continuation, invite precedence, membership lobby, persisted last-workspace selection and keyed `WorkspaceProvider` remounts.
 - `WorkspaceLobby` — lists memberships and pending/denied requests; creates workspaces and submits access requests by public code.
 - `WorkspaceInviteFlow` — previews an invite before auth, preserves it across OAuth/email redirects and accepts it after identity is established.
 - `WorkspaceSettings` — workspace code, invite links, access decisions, roles, member removal and self-service leave.
@@ -133,6 +137,8 @@ the wire protocol (websocket) and the HTTP board API.
 
 ### packages/agent
 - `index.ts` — startup wiring and socket event routing.
+- `HostedSupervisor` (`hostedSupervisor.ts`) — polls the hosted manifest, maintains one runner connection and isolated state directory per enabled workspace, and closes removed workspaces.
+- `HostedUsageLimiter` (`hostedLimiter.ts`) — process-global in-memory allowance of ten noodle runs per hour per human actor, with one break announcement per window.
 - `AgentRunner` (`runner.ts`) — work queue + run cycle: batching, brain
   execution, trace emission, aborts.
 - `ProposalLifecycle` — reacts to board decisions (resume approved, drop

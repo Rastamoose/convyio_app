@@ -11,7 +11,7 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | Variable                    | Used by | Default                    | Meaning                                                                 |
 | ---------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------ |
 | `PORT`                      | server  | `3001`                     | HTTP + websocket port.                                                  |
-| `DATA_DIR`                  | server  | `./data` (`/data` in image)| Parent for isolated server-local Toolman sandboxes at `workspaces/<sha256(workspace-id)>/`; the database and uploads live in Supabase. |
+| `DATA_DIR`                  | server, agent | `./data` (`/data` in image)| Parent for server-local Toolman sandboxes and hosted-agent state under isolated workspace directories; the database and uploads live in Supabase. |
 | `SUPABASE_URL`              | server  | — (required)                | Supabase project URL.                                                    |
 | `SUPABASE_SECRET_KEY`       | server  | — (required)                | Secret (service-role) key: verifies user JWTs and reads/writes Storage server-side. Never expose to the client. |
 | `SUPABASE_DB_URL`           | server  | — (required)                | Postgres connection string (Supabase project settings → Database).      |
@@ -24,7 +24,7 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | `CLAUDE_WORKDIR`            | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
 | `GOOGLE_AUTH_ENABLED`       | server  | — (sign-in unavailable)    | Set to `1` = Google Sign-In offered to humans. The OAuth client itself is configured in the Supabase dashboard, not here — see "Google Sign-In" below. |
 | `EMAIL_AUTH`                | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither this nor `GOOGLE_AUTH_ENABLED` set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
-| `AGENT_TOKEN`               | both    | —                          | Shared secret agents join with when auth is on. Long and random.        |
+| `AGENT_TOKEN`               | both    | —                          | Shared secret used by the shell and hosted noodle service. The values must match exactly; the shell authenticates the manifest and workspace joins. |
 | `CLIENT_DIST`               | server  | `packages/client/dist`     | Where the built client lives; absent = API only (dev).                  |
 | `CORS_ORIGIN`               | server  | `localhost-dev`            | Dev-only: origin allowed to call the API cross-origin. The default mirrors any localhost/private-LAN origin (Vite may land on 5174+); set an explicit origin to lock it down. |
 | `VITE_WS_URL`               | client  | —                          | Dev-only build override; production derives from `window.location`.     |
@@ -59,6 +59,10 @@ GEMINI_API_KEY=... WS_URL=ws://localhost:3001 npx tsx packages/agent/src/index.t
 ```
 
 The server logs `[static] serving client from …` when it found the build.
+
+## Hosted noodle
+
+Hosted noodle runs as a separate `@workspace/agent` process, never inside the shell. With `AGENT_TOKEN` set, the agent polls the shell's `/api/hosted-agent/workspaces` endpoint and maintains one Gemini connection per workspace where the managed noodle membership is enabled. `WS_URL` must name the shell's public websocket origin, and `AGENT_TOKEN` must exactly match the shell value. `DATA_DIR` stores isolated memory and conversation state under one subdirectory per workspace.
 
 ## Claude provider (subscription auth)
 

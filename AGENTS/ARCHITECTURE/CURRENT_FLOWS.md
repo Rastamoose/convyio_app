@@ -6,17 +6,24 @@ This page describes behavior implemented now, before the target workflow in
 ## Account, workspace selection and join
 
 1. Supabase authenticates the browser and the server binds one global human actor/username.
-2. `GET /api/account` returns every workspace membership and access request. Zero memberships is a valid account state.
-3. From the lobby, the human creates a workspace as its first owner, requests access using its public code, or accepts a single-use invite.
-4. The browser connects to `/ws/:workspaceId`; the join gate verifies the Supabase token and that exact membership.
-5. `WorkspaceRegistry` resolves or creates the workspace runtime. Its Hub sends workspace-only roster, channels, history and a workspace-bound HTTP bearer token.
-6. Switching changes `/w/:workspaceId`, closes the old socket, unmounts its provider and creates a fresh workspace session.
+2. The first username claim—manual or from `desired_username` metadata—creates `{username}'s workspace` with that actor as owner.
+3. `GET /api/account` returns every workspace membership and access request. Zero memberships is valid after leaving.
+4. A pending invite continues before the client automatically opens a sole membership. Otherwise the human opens a membership or uses the lobby to create another workspace or request access.
+5. The browser connects to `/ws/:workspaceId`; the join gate verifies the Supabase token and that exact membership.
+6. `WorkspaceRegistry` resolves or creates the workspace runtime. Its Hub sends workspace-only roster, channels, history and a workspace-bound HTTP bearer token.
+7. Switching changes `/w/:workspaceId`, closes the old socket, unmounts its provider and creates a fresh workspace session.
 
 Agent and Toolman pairing codes resolve the workspace from their server-side records. A presented credential cannot choose or widen its workspace.
 
 ## Workspace access
 
-A public workspace code is a locator, not authority. Submitting it creates one idempotent pending request; an owner approval inserts membership and resolves the request in the same transaction. Invite tokens are hashed at rest, expire after seven days, are revocable and may be consumed by one actor. Membership and role changes retain actor history and append attributed workspace events.
+A public workspace code is a locator, not authority. Submitting it creates one idempotent pending request; an owner approval inserts membership and resolves the request in the same transaction. Invite tokens are hashed at rest, expire after seven days, are revocable and may be consumed by one actor. Membership and role changes retain actor history and append attributed workspace events. A member's first membership insertion also writes a durable `member-joined:{workspaceId}:{actorId}` system message. Reconnects and noodle restore do not write another.
+
+## Workspace creation and hosted noodle
+
+Workspace creation atomically inserts the workspace, owner membership, `#general`, the managed noodle actor and membership, both join notices, and three welcome messages. Stable `member-joined:*` and `managed-welcome:*` ids make those messages one-time history.
+
+The authenticated `/api/hosted-agent/workspaces` manifest lists only workspaces where noodle remains a member. The separate hosted runner maintains one connection and data directory per listed workspace and closes a connection when that membership disappears. Owner restore re-adds only the existing membership; it does not replay the join notice or welcomes.
 
 ## Chat and durable agent work
 
