@@ -221,6 +221,16 @@ export class AcpBrain implements Brain {
       this.sessions.set(providerSessionId, state);
       return state;
     } catch (error) {
+      // The stored session id can outlive the local Claude data (machine
+      // wiped, re-paired, state reset). Resume from a fresh session instead
+      // of failing every run against the same dead id; the runner reports
+      // the replacement back to the server.
+      if (error instanceof Error && /resource not found/i.test(error.message)) {
+        console.warn(`[agent] stored session ${providerSessionId} no longer exists — starting a fresh session`);
+        const session = this.spareSession ?? await this.newSession();
+        this.spareSession = null;
+        return session;
+      }
       throw this.typedFailure(error);
     }
   }

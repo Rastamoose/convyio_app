@@ -28,6 +28,7 @@ function fakeAgent(record: {
   selected: string[];
   prompts: string[];
   cancelled: string[];
+  loadFailures?: Set<string>;
 }) {
   let nextSession = 1;
   let cancelPrompt: (() => void) | undefined;
@@ -49,6 +50,9 @@ function fakeAgent(record: {
     })
     .onRequest(acp.methods.agent.session.load, (ctx) => {
       record.loaded.push(ctx.params.sessionId);
+      if (record.loadFailures?.has(ctx.params.sessionId)) {
+        throw new acp.RequestError(-32602, `Resource not found: ${ctx.params.sessionId}`);
+      }
       return { configOptions: modelOptions() };
     })
     .onRequest(acp.methods.agent.session.setConfigOption, (ctx) => {
@@ -147,6 +151,29 @@ describe("AcpBrain", () => {
     assert.equal(resumed.providerSessionId, "persisted-session");
     assert.deepEqual(record.loaded, ["persisted-session"]);
     assert.match(record.prompts[1], /new profile/);
+    brain.close();
+  });
+
+  test("starts a fresh session when the stored session no longer exists locally", async () => {
+    const workspace = await tempDir();
+    const record = {
+      newSessions: [] as string[],
+      loaded: [] as string[],
+      selected: [] as string[],
+      prompts: [] as string[],
+      cancelled: [] as string[],
+      loadFailures: new Set(["gone-session"]),
+    };
+    const brain = new AcpBrain(workspace, fakeAgent(record));
+    const result = await brain.run(
+      { system: "platform policy", context: "ctx", prompt: "question" },
+      { onEvent: () => undefined },
+      { providerSessionId: "gone-session" },
+    );
+    assert.deepEqual(record.loaded, ["gone-session"]);
+    assert.deepEqual(record.newSessions, ["session-1"]);
+    assert.equal(result.providerSessionId, "session-1");
+    assert.equal(result.text, "answer");
     brain.close();
   });
 
