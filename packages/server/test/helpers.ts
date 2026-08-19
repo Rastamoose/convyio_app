@@ -104,11 +104,11 @@ export interface Env {
 export async function createEnv(options: { hostedAgentToken?: string | null } = {}): Promise<Env> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
-  const plans = new PlanService(db, threadEvents);
-  const service = new BoardService(db, threadEvents, plans);
-  const sessions = new Sessions();
   const channels = new Channels(db);
   await channels.seed([{ name: "general", isDemo: false }]);
+  const plans = new PlanService(db, threadEvents, channels);
+  const service = new BoardService(db, threadEvents, plans, channels);
+  const sessions = new Sessions();
   const envelopes: BoardEventEnvelope[] = [];
   service.onEvent = (e) => envelopes.push(e);
   const attachments = new Attachments(db, supabaseAdmin());
@@ -116,12 +116,8 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const agentInvites = new AgentInvites(db);
   const runnerRuntime = new RunnerRuntime();
-  const snapshot = new WorkspaceSnapshotBuilder(
-    db,
-    service,
-    plans,
-    new ContextStore(db, threadEvents),
-  );
+  const context = new ContextStore(db, threadEvents);
+  const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
   const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
   const handler = createApiHandler({
     db,
@@ -138,6 +134,7 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
     snapshot,
     plans,
     envelope,
+    context,
   });
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
@@ -281,8 +278,10 @@ const WS_WAIT_MS = 5000;
 export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
-  const plans = new PlanService(db, threadEvents);
-  const service = new BoardService(db, threadEvents, plans);
+  const channels = new Channels(db);
+  await channels.seed([{ name: "general", isDemo: false }]);
+  const plans = new PlanService(db, threadEvents, channels);
+  const service = new BoardService(db, threadEvents, plans, channels);
   const sessions = new Sessions();
   const accounts = new AccountStore(db.sql);
   const auth = options.auth
@@ -291,8 +290,6 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-test-"));
   const toolman = new Toolman(service, workspaceDir);
   await toolman.init();
-  const channels = new Channels(db);
-  await channels.seed([{ name: "general", isDemo: false }]);
   const messages = new MessageStore(db, threadEvents);
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const attachments = new Attachments(db, supabaseAdmin());

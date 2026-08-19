@@ -76,8 +76,9 @@ export class WorkspaceRuntime {
     const threadEvents = new ThreadEventStore(db);
     const messages = new MessageStore(db, threadEvents);
     const agentWork = new AgentWorkStore(db, threadEvents, messages);
-    const plans = new PlanService(db, threadEvents);
-    const board = new BoardService(db, threadEvents, plans);
+    const channels = new Channels(db);
+    const plans = new PlanService(db, threadEvents, channels);
+    const board = new BoardService(db, threadEvents, plans, channels);
     const context = new ContextStore(db, threadEvents);
     const contextCursors = new ContextCursorStore(db, threadEvents);
     const workspaceDir = path.join(
@@ -86,7 +87,6 @@ export class WorkspaceRuntime {
       createHash("sha256").update(db.workspaceId).digest("hex"),
     );
     const projects = new ProjectStore(db, threadEvents);
-    const channels = new Channels(db);
     const gitRepositories = new GitRepositories(
       db,
       threadEvents,

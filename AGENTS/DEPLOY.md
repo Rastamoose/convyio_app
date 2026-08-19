@@ -15,10 +15,12 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | `SUPABASE_URL`              | server  | — (required)                | Supabase project URL.                                                    |
 | `SUPABASE_SECRET_KEY`       | server  | — (required)                | Secret (service-role) key: verifies user JWTs and reads/writes Storage server-side. Never expose to the client. |
 | `SUPABASE_DB_URL`           | server  | — (required)                | Postgres connection string (Supabase project settings → Database).      |
-| `GITHUB_CLIENT_ID`          | server  | —                           | GitHub OAuth App client id; set with the client secret and credential-encryption key to enable Projects. |
-| `GITHUB_CLIENT_SECRET`      | server  | —                           | GitHub OAuth App client secret; server-only.                             |
-| `GIT_CREDENTIAL_ENCRYPTION_KEY` | server | —                        | Exactly 32 bytes encoded as 64 hex characters or base64url; encrypts GitHub tokens at rest. |
-| `GITHUB_REDIRECT_URI`       | server  | request-derived             | Optional fixed GitHub callback URL; otherwise the server derives `/api/git/github/callback` from the request origin. |
+| `GITHUB_APP_ID`             | server  | —                           | Numeric GitHub App id used as the issuer of short-lived App JWTs.        |
+| `GITHUB_APP_SLUG`           | server  | —                           | Public GitHub App slug used to build the repository-selection installation URL. |
+| `GITHUB_CLIENT_ID`          | server  | —                           | GitHub App client id used for one-use user authorization during installation. |
+| `GITHUB_CLIENT_SECRET`      | server  | —                           | GitHub App client secret; server-only.                                   |
+| `GITHUB_APP_PRIVATE_KEY`    | server  | —                           | Generated GitHub App PEM private key; signs App JWTs and never reaches clients/agents. |
+| `GITHUB_REDIRECT_URI`       | server  | request-derived             | Optional fixed GitHub App callback; otherwise derives `/api/git/github/callback` from the shell origin. |
 | `VITE_SUPABASE_URL`         | client  | — (required)                | Same project URL, exposed to the browser bundle.                        |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | client  | — (required)            | Supabase publishable (public) key — safe to expose, used for browser sign-in. |
 | `GEMINI_API_KEY`            | agent   | —                          | Enables the agent when `AGENT_PROVIDER=gemini` (the default); unset = no agent starts under that provider. Not needed for `AGENT_PROVIDER=claude`. |
@@ -49,6 +51,9 @@ docker compose up -d --build
 ```
 
 Health: `curl http://localhost:3001/api/health` → `{"ok":true}`.
+
+Local test login for pairing and conversation-loop work: `test@test.com` /
+`testuser` (username `test`, workspace `test_space`). Details in `AGENTS.md`.
 
 ## Quick start — bare metal
 
@@ -112,14 +117,40 @@ convyio-toolman run
 The installation token and local path mapping are private mode files under
 `$XDG_CONFIG_HOME/convyio/toolman` (default `~/.config/convyio/toolman`). The
 server receives only opaque node, project and mount ids. If several nodes are
-paired, pass a node name or id to `project add --node` and `run`.
+paired, pass a node name or id to `project add --node`, `project remove --node`,
+and `run`.
 
 `run` stays in the foreground and must remain running, but reconnects after
 server/network interruption with bounded backoff. Use a process supervisor for
 an unattended device. `convyio-toolman status` asks the shell whether each
 stored installation is `ready`, `offline`, `revoked`, or `unreachable`; stored
-credentials alone do not mean the node is live. `unpair` revokes the presented
-installation and removes its local credential.
+credentials alone do not mean the node is live. `status` and `run` also remove
+local mappings for folders already removed on the server.
+
+If `run` reports a revoked credential, create a new Resources pairing with the
+same device name and run its `pair` command. The server reactivates the same
+node id and the CLI preserves its existing local mount paths; then start
+`convyio-toolman run` again. `unpair` revokes the presented installation and
+removes its local credential.
+
+Resources stages two device-level actions. An active device exposes only
+**Revoke**, which disconnects and invalidates the credential but preserves the
+device, mounts and project identity for repair. After revocation, **Delete**
+appears; the server refuses deletion before that point. Delete permanently
+removes the server-side device, all remaining mounts and mount-bound
+assignments while preserving execution history and local files. Both actions
+require explicit confirmation.
+
+Remove one shared folder without unpairing the device or deleting local files:
+
+```sh
+convyio-toolman project remove <name-or-id-or-path> [--node <name-or-id>]
+```
+
+The owner can perform the same operation with **Remove folder** in Resources.
+Assignments bound to that mount are removed; a directory project is archived
+only when its final mount is removed and reuses the same project id if shared
+again later.
 
 The project owner then selects agents and `ask` / `always` / `deny` in
 Resources. `always` permits unattended folder consent while Toolman is live,
@@ -128,33 +159,63 @@ apply. Only the owner can manage assignments or use the Resources file editor.
 
 ## GitHub repositories
 
-1. Create a GitHub OAuth App whose callback is the exact public shell origin
-   plus `/api/git/github/callback` (production:
-   `https://app.convyio.com/api/git/github/callback`). For local development,
-   use a separate app/callback at
-   `http://localhost:3001/api/git/github/callback`; OAuth returns to the
-   accepted browser origin, so a Vite client on 5173/5174 resumes there.
-2. Configure all credential variables together:
+Create a GitHub App with these production settings:
 
-   ```sh
-   GITHUB_CLIENT_ID=...
-   GITHUB_CLIENT_SECRET=...
-   GIT_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-   # Optional when request-derived callback URLs are unsuitable:
-   GITHUB_REDIRECT_URI=https://app.convyio.com/api/git/github/callback
-   ```
+- **Name**: `Convyio` (or another globally unique display name)
+- **Homepage URL**: `https://app.convyio.com`
+- **Redirect URI**: `https://app.convyio.com/api/git/github/callback`
+- **Allow wildcard matching**: off
+- **Expire user authorization tokens**: on
+- **Request user authorization (OAuth) during installation**: on
+- **Device Flow**: off
+- **Setup URL / Redirect on update**: unused/off
+- **Webhook Active**: off; no webhook URL or secret
+- **Repository permissions**: Contents read/write, Pull requests read/write,
+  Issues read/write, Checks read-only, Commit statuses read-only, Workflows
+  read/write, Metadata read-only (GitHub includes Metadata automatically)
+- **Organization, account and enterprise permissions**: none
+- **Subscribe to events**: none
+- **Where can this GitHub App be installed?**: Any account
 
-   Partial configuration makes server boot fail. Keep the encryption key
-   stable: changing it makes stored tokens unreadable and users must reconnect.
-3. The server requests `repo read:user`. Access and refresh tokens are
-   AES-256-GCM encrypted server-side, rotate when expiring, are erased on
-   disconnect and are never sent to clients or agents.
-4. The runtime host needs `git`. The Dockerfile installs it; install a current
-   Git CLI separately for bare-metal deployment.
-5. Apply `supabase/migrations/20260818150000_git_integration.sql` (normally via
-   `npx supabase db push`) before deploying this code. Managed checkouts live
-   below `DATA_DIR/workspaces/<sha256(workspace-id)>/repositories/`; preserve
-   that volume across restarts.
+The installation URL lets each user or organization select the repositories
+Convyio may access. Requesting user authorization during installation is
+required: the callback exchanges its one-use code only to verify that the
+returned installation belongs to that GitHub user, then discards the user
+token. Runtime API and Git calls use one-hour installation tokens minted from
+the App private key; no GitHub token is stored in Postgres.
+
+After creating the App, copy its numeric App ID, public slug, client id and
+client secret, then generate/download one private key. Configure the shell:
+
+```sh
+GITHUB_APP_ID=...
+GITHUB_APP_SLUG=convyio
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----"
+GITHUB_REDIRECT_URI=https://app.convyio.com/api/git/github/callback
+```
+
+Railway supports a multiline private-key value; a value containing literal
+`\n` sequences is normalized too. Partial configuration makes server boot fail.
+For local development, add
+`http://localhost:3001/api/git/github/callback` as another Redirect URI and set
+`GITHUB_REDIRECT_URI` to it; the shell returns the browser to the accepted Vite
+origin on 5173/5174.
+
+Apply both Git migrations (normally `npx supabase db push`):
+
+- `20260818150000_git_integration.sql`
+- `20260819100000_github_app_installations.sql`
+
+The second migration invalidates legacy broad OAuth mappings, adds durable
+hashed/single-use installation state and stores only the installation id and
+permissions. The runtime host also needs `git`; Docker installs it, while
+bare-metal deployments must install it separately. Managed checkouts currently
+live below `DATA_DIR/workspaces/<sha256(workspace-id)>/repositories/`, so preserve
+that volume across restarts.
 
 ## Reverse proxy + TLS
 
@@ -219,8 +280,9 @@ cloudflared tunnel --url http://localhost:3001
 
 Prints a `https://….trycloudflare.com` URL, no account needed. To test
 Google login through it, add that printed https origin to the OAuth client's
-authorized JavaScript origins. To test GitHub, set the GitHub OAuth App callback
-and `GITHUB_REDIRECT_URI` to `<printed-origin>/api/git/github/callback`.
+authorized JavaScript origins. To test GitHub, add
+`<printed-origin>/api/git/github/callback` as a GitHub App Redirect URI and set
+`GITHUB_REDIRECT_URI` to the same value.
 
 ## Data
 

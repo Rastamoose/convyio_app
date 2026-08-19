@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, test } from "node:test";
 import type { StoredToolman } from "../src/installation";
-import { addProject } from "../src/projects";
+import { addProject, removeProject } from "../src/projects";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +46,25 @@ describe("local folder attach", () => {
     assert.equal(mount.kind, "directory");
     assert.equal(mount.projectName, "desk-notes");
     assert.equal(mount.absolutePath, folder);
+  });
+
+  test("removes one local folder without unpairing the device", async () => {
+    const folder = path.join(root, "remove-me");
+    await fs.mkdir(folder);
+    const added = await addProject(installation(), folder, "remove-me", fakeMountFetch("remove-me"), env);
+    const removed = await removeProject(
+      added.installation,
+      "remove-me",
+      (async (input, init) => {
+        assert.equal(String(input), "http://127.0.0.1:3001/api/toolman/mounts/server-mount-key");
+        assert.equal(init?.method, "DELETE");
+        assert.equal((init?.headers as { Authorization: string }).Authorization, "Bearer token");
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as typeof fetch,
+      env,
+    );
+    assert.equal(removed.mount.projectName, "remove-me");
+    assert.deepEqual(removed.installation.mounts, []);
   });
 
   test("refuses a file", async () => {

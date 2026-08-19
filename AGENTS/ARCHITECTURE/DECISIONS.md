@@ -153,13 +153,34 @@ why. Current behavior is documented in the current-state pages.
   current run's conversation-scoped executor while native provider mutation
   tools remain disabled. Consequence: local-folder support does not depend on
   Claude's cwd and permission decisions retain the correct conversation.
-- 2026-08-19 — Git integration uses actor-connected GitHub repositories rather
-  than introducing a native Git host. Global AES-256-GCM-encrypted OAuth
-  credentials supply workspace-linked managed checkouts; agent actions still
-  pass project assignment, owner consent and Toolman authorization, while
-  arbitrary project commands remain local-Toolman-only. Branches create linked
-  conversation rooms that archive on delete or merge. Consequence: forge
-  collaboration runs while a user's device is offline without exposing
-  provider credentials or granting the shell general command execution, but
-  GitHub remains the remote system of record and the encryption key must remain
-  stable.
+- 2026-08-19 — Git integration uses a repository-selective GitHub App rather
+  than a broad OAuth App or native Git host. Hashed single-use installation
+  state is durable in Postgres; a one-use user token proves installation
+  ownership and is discarded, while runtime API/Git calls use short-lived
+  installation tokens minted from the App private key. Workspace-linked managed
+  checkouts still pass project assignment, owner consent and Toolman, and
+  arbitrary project commands remain local-Toolman-only. Branch rooms archive on
+  delete or merge. Consequence: GitHub remains the remote system of record,
+  repository access follows installation selection, and shell deploys/replicas
+  cannot break or replay the callback.
+- 2026-08-19 — Folder removal operates on a mount, not a device or local
+  directory. The server archives the logical directory project only after its
+  final mount disappears, while the CLI retains no authority to delete local
+  bytes. Consequence: owners can stop sharing one folder safely and re-share it
+  later under the same project identity.
+- 2026-08-19 — Re-pairing a revoked Toolman device with the same owner and name
+  reactivates its node id and rotates the installation token; the CLI preserves
+  local mount paths for that id. Consequence: revocation remains a hard stop,
+  but recovery does not require renaming the device or re-entering every folder
+  path.
+- 2026-08-19 — Device revocation is recoverable credential invalidation;
+  device deletion is permanent server-record cleanup and is allowed only after
+  revocation. Consequence: active devices cannot be deleted accidentally;
+  owners first stop the credential, then explicitly delete the device and its
+  mount-bound assignments while execution history and local bytes remain
+  untouched.
+- 2026-08-19 — Plans and tickets are conversation-native: each record keeps
+  an origin channel/event, Board is a projection of those records, and
+  constraint appends change the same Plan plus an attributed context entry.
+  Consequence: a reviewer can follow context, Plan, Ticket, work and result
+  in one thread without a parallel onboarding model.

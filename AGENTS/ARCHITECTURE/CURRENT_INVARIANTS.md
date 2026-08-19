@@ -21,7 +21,11 @@ does not supersede them until the corresponding code change lands.
   acceptance criteria and a complete impact map. Only the assigned owner may
   start, mutate, block, unblock or complete. Completion requires evidence.
 - An accepted Plan may have at most one live ticket. Plan acceptance grants
-  no mutating authority.
+  no mutating authority. Plans and tickets remember an origin channel and
+  origin thread event; later Plan/Ticket events reuse that channel so the
+  conversation remains the causal ledger. Adding a constraint updates the
+  same Plan, records an attributed change-log entry, and writes a
+  plan-scoped context entry rather than a second plan.
 - `shell_repo` is coarse because a command's writes are not statically
   knowable, so `scope_paths` cannot bound it and `file_write` never implies it.
   Server-local commands start in the workspace sandbox; local project commands
@@ -81,13 +85,31 @@ does not supersede them until the corresponding code change lands.
   executor for every mutation; their native filesystem and shell paths remain
   read-only.
 - Toolman reconnects with bounded backoff and a connection timeout. One node
-  has one live authenticated socket; re-pair, unpair or revocation evicts the
-  previous socket, revoked mounts cannot execute, unauthenticated result frames
-  are rejected, and disconnect fails in-flight executions closed.
-- GitHub credentials belong to one global human actor, are AES-256-GCM
-  encrypted at rest, rotate through encrypted refresh tokens under one refresh
-  lock, and are erased on disconnect. Raw credentials never enter browser,
-  agent, repository remote, generic command, event or log state.
+  has one live authenticated socket; unpair or revocation evicts the previous
+  socket, revoked mounts cannot execute, unauthenticated result frames are
+  rejected, and disconnect fails in-flight executions closed. A revoked
+  credential never appears to run while disconnected: startup and reconnect
+  authentication fail with an actionable re-pair instruction. Re-pairing the
+  same owner/device name rotates the token and reactivates the existing node;
+  another human cannot claim that name.
+- Individual mount removal is owner- or installation-authenticated. It never
+  deletes local files, clears only assignments bound to that mount, preserves
+  execution history, and archives a directory project only when no mounts
+  remain.
+- Revocation and permanent device deletion are distinct. Revocation invalidates
+  and disconnects the credential but preserves the node, mounts and project
+  identity for same-owner repair. Permanent deletion is owner-only and refused
+  until the node is revoked; it removes the node and all remaining mounts/
+  mount-bound assignments, nulls historical execution references instead of
+  deleting history, and leaves device files untouched.
+- GitHub connection state is random, SHA-256-hashed at rest, expires after 15
+  minutes and is atomically single-use in Postgres; it survives shell restarts
+  and cannot be replayed across replicas. The callback's one-use user token is
+  used only to prove that the installation belongs to that user, then discarded.
+  The durable record contains actor, installation id and permissions—not a
+  GitHub token. API/Git transport mints cached one-hour installation tokens from
+  a short-lived App JWT; tokens never enter browser, agent, repository remote,
+  generic command, event or log state.
 - Human Git APIs require a current workspace session; agents cannot call them
   and instead require explicit project assignment plus Toolman and owner-consent
   gates. Linking a private repository deliberately shares its readable forge

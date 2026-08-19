@@ -9,6 +9,7 @@ import {
 import type {
   Attachment,
   BoardItem,
+  BoardPlan,
   ChatMessage,
   InteractionRequest,
   Participant,
@@ -28,7 +29,10 @@ import { AttachmentLightbox } from "./AttachmentLightbox";
 import { MemberCard } from "./MemberCard";
 import { PermissionCard } from "./PermissionCard";
 import { PinIcon, PinnedMessages } from "./PinnedMessages";
+import { PlanCard } from "./PlanCard";
 import { ProposalCard } from "./ProposalCard";
+import { ResultCard } from "./ResultCard";
+import { TicketCard } from "./TicketCard";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
 
 function mentionsName(content: string, name: string | null): boolean {
@@ -77,13 +81,16 @@ type TimelineEntry =
   | ({ kind: "message" } & Rendered)
   | { kind: "board"; line: BoardLine }
   | { kind: "trace"; run: ActiveRun }
+  | { kind: "plan"; plan: BoardPlan }
   | { kind: "proposal"; item: BoardItem }
+  | { kind: "result"; item: BoardItem }
   | { kind: "interaction"; request: InteractionRequest };
 
 function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "message") return entry.message.timestamp;
   if (entry.kind === "board") return entry.line.ts;
-  if (entry.kind === "proposal") return entry.item.createdAt;
+  if (entry.kind === "proposal" || entry.kind === "result") return entry.item.createdAt;
+  if (entry.kind === "plan") return entry.plan.createdAt;
   if (entry.kind === "interaction") return entry.request.createdAt;
   return entry.run.startedAt;
 }
@@ -537,6 +544,7 @@ export function MessageList({
   onDiscuss,
   onPrefill,
   onAddAgent,
+  onOpenBoard,
 }: {
   // TODO(channels): channel handling is bolted on (per-message string field,
   // client-side filtering). Needs a proper channel model: scoped
@@ -546,13 +554,15 @@ export function MessageList({
   onReply: (message: ChatMessage) => void;
   editingId: string | null;
   onEditingIdChange: (id: string | null) => void;
-  onDiscuss: (item: BoardItem) => void;
+  onDiscuss: (item: { ref: string; title: string }) => void;
   onPrefill: (text: string) => void;
   onAddAgent?: () => void;
+  onOpenBoard: (target: { kind: "plan" | "item"; id: string; channel?: string | null }) => void;
 }) {
   const {
     messages: allMessages,
     board,
+    plans,
     boardLines,
     activeRuns,
     runDurations,
@@ -649,9 +659,26 @@ export function MessageList({
   // Decisions live in the conversation. The board and the AppBar queue are
   // the same records, not a second home — a proposed item or paused run
   // renders here as the original card, not as a faint system line.
+  const channelPlans = useMemo(
+    () => plans.filter((plan) => !plan.originChannelName || plan.originChannelName === channel),
+    [plans, channel],
+  );
   const proposedItems = useMemo(
-    () => board.filter((item) => item.status === "proposed"),
-    [board],
+    () =>
+      board.filter(
+        (item) =>
+          item.status !== "done" &&
+          item.status !== "denied" &&
+          (!item.originChannelName || item.originChannelName === channel),
+      ),
+    [board, channel],
+  );
+  const completedItems = useMemo(
+    () =>
+      board.filter(
+        (item) => item.status === "done" && (!item.originChannelName || item.originChannelName === channel),
+      ),
+    [board, channel],
   );
   const orphanInteractions = useMemo(() => {
     const liveAgents = new Set(activeRuns.map((run) => run.agentId));
@@ -663,13 +690,15 @@ export function MessageList({
       ...layout(messages).map((r) => ({ kind: "message" as const, ...r })),
       ...boardLines.map((line) => ({ kind: "board" as const, line })),
       ...activeRuns.map((run) => ({ kind: "trace" as const, run })),
+      ...channelPlans.map((plan) => ({ kind: "plan" as const, plan })),
       ...proposedItems.map((item) => ({ kind: "proposal" as const, item })),
+      ...completedItems.map((item) => ({ kind: "result" as const, item })),
       ...orphanInteractions.map((request) => ({ kind: "interaction" as const, request })),
     ];
     // Stable sort: board lines and live traces interleave with messages by
     // when they started, not appended after the fact.
     return entries.sort((a, b) => timelineTs(a) - timelineTs(b));
-  }, [messages, boardLines, activeRuns, proposedItems, orphanInteractions]);
+  }, [messages, boardLines, activeRuns, channelPlans, proposedItems, completedItems, orphanInteractions]);
 
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -929,7 +958,9 @@ export function MessageList({
           <p className="mt-1 max-w-md text-sm text-muted">
             {messages.length === 0 &&
             activeRuns.length === 0 &&
+            channelPlans.length === 0 &&
             proposedItems.length === 0 &&
+            completedItems.length === 0 &&
             orphanInteractions.length === 0
               ? (() => {
                   const agent = participants.find((p) => p.kind === "agent");
@@ -960,10 +991,40 @@ export function MessageList({
               </div>
             );
           }
+          if (entry.kind === "plan") {
+            return (
+              <div key={entry.plan.id} id={`plan-${entry.plan.id}`} className="px-4 py-2">
+                <PlanCard
+                  plan={entry.plan}
+                  tickets={board.filter((item) => item.planId === entry.plan.id)}
+                  onDiscuss={onDiscuss}
+                  onOpenBoard={() => onOpenBoard({ kind: "plan", id: entry.plan.id, channel: entry.plan.originChannelName })}
+                />
+              </div>
+            );
+          }
           if (entry.kind === "proposal") {
             return (
               <div key={entry.item.id} id={`proposal-${entry.item.id}`} className="px-4 py-2">
-                <ProposalCard item={entry.item} onDiscuss={onDiscuss} />
+                <TicketCard
+                  item={entry.item}
+                  plan={plans.find((plan) => plan.id === entry.item.planId)}
+                  onDiscuss={onDiscuss}
+                  onOpenBoard={() => onOpenBoard({ kind: "item", id: entry.item.id, channel: entry.item.originChannelName })}
+                />
+              </div>
+            );
+          }
+          if (entry.kind === "result") {
+            return (
+              <div key={`result-${entry.item.id}`} id={`result-${entry.item.id}`} className="px-4 py-2">
+                <ResultCard
+                  item={entry.item}
+                  plan={plans.find((plan) => plan.id === entry.item.planId)}
+                  executions={executions}
+                  onDiscuss={onDiscuss}
+                  onOpenBoard={() => onOpenBoard({ kind: "item", id: entry.item.id, channel: entry.item.originChannelName })}
+                />
               </div>
             );
           }

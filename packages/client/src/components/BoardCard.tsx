@@ -9,15 +9,19 @@ export function BoardCard({
   item,
   highlighted,
   planRef,
+  originChannel,
   onOpen,
   onDiscuss,
+  onOpenConversation,
   onJumpToTrace,
 }: {
   item: BoardItem;
   highlighted: boolean;
   planRef?: string;
+  originChannel?: string;
   onOpen: (itemId: string) => void;
   onDiscuss: (item: BoardItem) => void;
+  onOpenConversation: () => void;
   onJumpToTrace: (runId: string) => void;
 }) {
   const { activeRuns, approveItem, denyItem } = useWorkspace();
@@ -40,6 +44,7 @@ export function BoardCard({
           {item.ref}
         </span>
         {planRef && <span className="truncate text-[10px] text-faint">{planRef}</span>}
+        {originChannel && <span className="truncate text-[10px] text-faint">#{originChannel}</span>}
         {item.ownerName && (
           <span className="ml-auto shrink-0" title={item.ownerName}>
             <Avatar name={item.ownerName} size={16} mascot={item.ownerName.toLowerCase() === "noodle"} />
@@ -109,6 +114,12 @@ export function BoardCard({
             label="Discuss"
             tone="neutral"
             onClick={() => onDiscuss(item)}
+          />
+          <ActionButton
+            compact
+            label="Open in conversation"
+            tone="neutral"
+            onClick={onOpenConversation}
           />
         </div>
       )}

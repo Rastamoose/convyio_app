@@ -76,6 +76,24 @@ export class Channels {
     return channel ?? null;
   }
 
+  async getById(id: string): Promise<ChannelInfo | null> {
+    const [channel] = await this.store.sql<ChannelInfo[]>`
+      SELECT id, name FROM channels
+      WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
+    `;
+    return channel ?? null;
+  }
+
+  async resolve(idOrName?: string | null): Promise<ChannelInfo | null> {
+    if (idOrName) {
+      const byId = await this.getById(idOrName);
+      if (byId) return byId;
+      const byName = await this.get(idOrName);
+      if (byName) return byName;
+    }
+    return (await this.get("general")) ?? (await this.listInfo())[0] ?? null;
+  }
+
   async exists(name: string): Promise<boolean> {
     return (await this.get(name)) !== null;
   }

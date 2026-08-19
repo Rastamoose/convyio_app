@@ -9,6 +9,7 @@ import type {
   BoardItem,
   BoardItemEvent,
   BoardPlan,
+  ContextEntry,
   ChatMessage,
   ClientEvent,
   InteractionRequest,
@@ -54,6 +55,7 @@ export interface WorkspaceState {
   setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
   board: BoardItem[];
   plans: BoardPlan[];
+  context: ContextEntry[];
   boardLines: BoardLine[];
   toasts: Toast[];
   dismissToast: (id: number) => void;
@@ -106,6 +108,7 @@ export interface WorkspaceState {
   /** Resolves true when the item landed; false = failure (toast already shown). */
   createBoardItem: (draft: TicketDraft) => Promise<boolean>;
   createPlan: (draft: PlanDraft) => Promise<boolean>;
+  addPlanConstraint: (planId: string, constraint: string) => Promise<boolean>;
   acceptPlan: (planId: string) => Promise<boolean>;
   approveItem: (itemId: string, owner?: string) => void;
   denyItem: (itemId: string) => void;
@@ -557,6 +560,7 @@ export function WorkspaceProvider({
     runDurations: traces.runDurations,
     board: board.items,
     plans: board.plans,
+    context: board.context,
     boardLines: board.lines,
     toasts,
     dismissToast,
@@ -636,6 +640,7 @@ export function WorkspaceProvider({
     deleteChannel,
     createBoardItem: board.createItem,
     createPlan: board.createPlan,
+    addPlanConstraint: board.addPlanConstraint,
     acceptPlan: board.acceptPlan,
     approveItem: board.approve,
     denyItem: board.deny,

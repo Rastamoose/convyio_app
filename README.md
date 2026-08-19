@@ -23,8 +23,11 @@ npm run dev   # server ws+http on :3001, client on :5173, agent
 Copy `.env.example` to `.env` and configure Supabase plus at least one sign-in
 method. Set `GEMINI_API_KEY` for the default managed agent, or
 `AGENT_PROVIDER=claude` to use a Claude subscription. GitHub Projects is
-optional and requires the OAuth/encryption variables documented in
+optional and requires the GitHub App credentials documented in
 `AGENTS/DEPLOY.md`; that runbook also covers Toolman pairing and every override.
+
+Local test login for pairing and conversation-loop work: `test@test.com` /
+`testuser` (username `test`, workspace `test_space`). Details in `AGENTS.md`.
 
 In production the server serves the built client itself — one origin for
 page, API, and websocket (`npm run build -w @workspace/client`, then the

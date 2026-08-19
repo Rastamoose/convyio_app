@@ -5,6 +5,7 @@ import type {
   BoardItem,
   BoardItemEvent,
   BoardPlan,
+  ContextEntry,
   EcosystemImpact,
   ItemStatus,
   WorkspaceSnapshot,
@@ -35,6 +36,7 @@ export interface TicketDraft {
   owner?: string;
   scopePaths: string[];
   acceptanceCriteria: string[];
+  channel?: string;
   impactMap?: EcosystemImpact;
 }
 
@@ -43,6 +45,10 @@ export interface PlanDraft {
   objective: string;
   outline: string[];
   clarifications: string[];
+  constraints?: string[];
+  assumedOwnerId?: string;
+  assumedProjectId?: string;
+  channel?: string;
   impactMap?: EcosystemImpact;
 }
 
@@ -75,6 +81,7 @@ function boardLineText(envelope: BoardEventEnvelope): string | null {
 export function useBoard(onError: (message: string) => void, api: ApiSession) {
   const [items, setItems] = useState<BoardItem[]>([]);
   const [plans, setPlans] = useState<BoardPlan[]>([]);
+  const [context, setContext] = useState<ContextEntry[]>([]);
   const [lines, setLines] = useState<BoardLine[]>([]);
 
   const fail = (what: string, detail: string) => {
@@ -133,6 +140,7 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
   return {
     items,
     plans,
+    context,
     lines,
     /** Welcome frame arrived (API session already bound): load the snapshot. */
     startSession: () => {
@@ -151,6 +159,7 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
             for (const plan of snapshot.plans) map.set(plan.id, plan);
             return [...map.values()];
           });
+          setContext(snapshot.context);
         })
         .catch((err) => fail("Could not load the board", String(err)));
     },
@@ -208,6 +217,27 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
         })
         .catch((err) => {
           fail("Could not create the plan", String(err));
+          return false;
+        });
+    },
+    addPlanConstraint: (planId: string, constraint: string): Promise<boolean> => {
+      const request = api.fetch(`/api/board/plans/${planId}/constraints`, {
+        method: "POST",
+        body: JSON.stringify({ constraint }),
+      });
+      if (!request) return Promise.resolve(false);
+      return request
+        .then(async (res) => {
+          if (!res.ok) {
+            fail("Could not add the constraint", await api.errorMessage(res));
+            return false;
+          }
+          const data = (await res.json().catch(() => null)) as { plan?: BoardPlan } | null;
+          if (data?.plan) upsertPlan(data.plan);
+          return true;
+        })
+        .catch((err) => {
+          fail("Could not add the constraint", String(err));
           return false;
         });
     },

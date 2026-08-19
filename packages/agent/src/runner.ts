@@ -249,6 +249,7 @@ export class AgentRunner {
       }
     };
 
+    await (this.board as { refreshEnvelope?: () => Promise<unknown> }).refreshEnvelope?.();
     const executeTool = createToolExecutor(this.board, {
       onProposed: () => {},
       onTaskActive: (item) => {
@@ -258,6 +259,7 @@ export class AgentRunner {
       },
       onActivity: (line) => onBrainEvent({ type: "thought.delta", text: `[toolman] ${line}` }),
       conversationId,
+      channel,
     });
 
     const { images, notes } = await this.gatherImages(batch);

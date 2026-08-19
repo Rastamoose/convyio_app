@@ -114,6 +114,7 @@ async function main() {
     snapshot: runtime.snapshot,
     plans: runtime.plans,
     envelope: runtime.envelope,
+    context: runtime.context,
     github,
     gitRepositories: runtime.gitRepositories,
     projects: runtime.projects,

@@ -28,11 +28,12 @@ export class ApiError extends Error {
 
 const selectItem = (sql: Sql) => sql`
   SELECT i.*, c.display_name AS created_by_name, a.display_name AS approved_by_name,
-         o.display_name AS owner_name
+         o.display_name AS owner_name, ch.name AS origin_channel_name
   FROM board_items i
   JOIN actors c ON c.id = i.created_by
   LEFT JOIN actors a ON a.id = i.approved_by
   LEFT JOIN actors o ON o.id = i.owner
+  LEFT JOIN channels ch ON ch.id = i.origin_channel_id
 `;
 
 /**
@@ -48,6 +49,7 @@ export class BoardService {
     private store: WorkspaceDb,
     private threadEvents: ThreadEventStore,
     private plans?: PlanService,
+    private channels?: import("../chat/Channels").Channels,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -140,6 +142,7 @@ export class BoardService {
       owner?: string;
       acceptanceCriteria?: string[];
       impactMap?: EcosystemImpact;
+      channel?: string | null;
     },
   ): Promise<BoardItem> {
     const why = input.why?.trim();
@@ -176,6 +179,7 @@ export class BoardService {
       if (!project) throw new ApiError(400, "PROJECT_NOT_FOUND", "tickets must name an attached project");
     }
     if (input.owner) await this.requireMember(input.owner);
+    const origin = await this.resolveOrigin(input.channel, plan.originChannelId);
     const now = Date.now();
     const id = randomUUID();
     return this.mutate(actor, "item.proposed", async (sql) => {
@@ -184,7 +188,8 @@ export class BoardService {
         INSERT INTO board_items
           (id, workspace_id, ref, title, description, status, origin, created_by,
            approved_by, owner, proposal_why, proposal_effect, project_id, scope_paths,
-           capabilities, plan_id, acceptance_criteria, impact_map, created_at, approved_at)
+           capabilities, plan_id, acceptance_criteria, impact_map, created_at, approved_at,
+           origin_channel_id)
         VALUES (
           ${id}, ${actor.workspaceId}, ${ref}, ${input.title}, ${input.description ?? null},
           ${"proposed"}, ${actor.kind}, ${actor.id},
@@ -194,7 +199,7 @@ export class BoardService {
           ${capabilities ? JSON.stringify(capabilities) : null},
           ${plan.id}, ${sql.json(criteria)},
           ${input.impactMap ? sql.json(JSON.parse(JSON.stringify(input.impactMap))) : null},
-          ${now}, ${null}
+          ${now}, ${null}, ${origin?.id ?? null}
         )
       `;
       return id;
@@ -426,21 +431,29 @@ export class BoardService {
     const itemId = await this.store.transaction(async (sql) => {
       const id = await apply(sql);
       const createdAt = Date.now();
-      const [{ ref }] = await sql<{ ref: string }[]>`
-        SELECT ref FROM board_items WHERE id = ${id}
+      const [{ ref, origin_channel_id }] = await sql<{ ref: string; origin_channel_id: string | null }[]>`
+        SELECT ref, origin_channel_id FROM board_items WHERE id = ${id}
       `;
       await sql`
         INSERT INTO board_events (workspace_id, item_id, type, actor_id, payload, created_at)
         VALUES (${actor.workspaceId}, ${id}, ${type}, ${actor.id}, ${JSON.stringify(payload)}, ${createdAt})
       `;
-      await this.threadEvents.append(sql, {
+      const event = await this.threadEvents.append(sql, {
         workspaceId: actor.workspaceId,
+        channelId: origin_channel_id,
         actorId: actor.id,
         kind: type,
         subjectId: id,
         payload: { itemId: id, itemRef: ref, ...payload } as ThreadEventPayload,
         createdAt,
       });
+      if (type === "item.proposed") {
+        await sql`
+          UPDATE board_items
+          SET origin_event_id = COALESCE(origin_event_id, ${event.id})
+          WHERE id = ${id}
+        `;
+      }
       return id;
     });
     const item = (await this.find(actor.workspaceId, itemId))!;
@@ -483,6 +496,15 @@ export class BoardService {
     if (!item.owner || item.owner !== actor.id) {
       throw new ApiError(403, "OWNER_MISMATCH", `${item.ref} is owned by someone else`);
     }
+  }
+
+  private async resolveOrigin(channel?: string | null, fallbackId?: string | null) {
+    if (this.channels) {
+      const resolved = await this.channels.resolve(channel ?? fallbackId);
+      if (resolved) return resolved;
+    }
+    if (!fallbackId) return null;
+    return { id: fallbackId, name: "general" };
   }
 
   private async requireMember(actorId: string): Promise<void> {
@@ -528,6 +550,9 @@ interface ItemRow {
   started_at: number | null;
   completed_at: number | null;
   deleted_at: number | null;
+  origin_channel_id?: string | null;
+  origin_event_id?: string | null;
+  origin_channel_name?: string | null;
   created_by_name: string;
   approved_by_name: string | null;
   owner_name: string | null;
@@ -570,6 +595,9 @@ function toItem(row: ItemRow): BoardItem {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     deletedAt: row.deleted_at,
+    originChannelId: row.origin_channel_id ?? null,
+    originChannelName: row.origin_channel_name ?? undefined,
+    originEventId: row.origin_event_id ?? null,
     createdByName: row.created_by_name,
     approvedByName: row.approved_by_name ?? undefined,
     ownerName: row.owner_name ?? undefined,

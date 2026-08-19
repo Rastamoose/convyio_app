@@ -48,7 +48,6 @@ export class ToolmanNodes {
         WHERE workspace_id = ${this.store.workspaceId}
           AND name = ${name}
           AND created_by <> ${actor.id}
-          AND revoked_at IS NULL
       `;
       const [pendingCollision] = await sql<{ id: string }[]>`
         SELECT id FROM toolman_pairings
@@ -111,7 +110,6 @@ export class ToolmanNodes {
         WHERE n.workspace_id = ${this.store.workspaceId}
           AND n.name = ${consumed.node_name}
           AND n.created_by = ${consumed.created_by}
-          AND n.revoked_at IS NULL
         FOR UPDATE
       `;
       let nodeRow = existing[0];
@@ -133,9 +131,16 @@ export class ToolmanNodes {
       } else {
         await sql`
           UPDATE toolman_nodes
-          SET token_hash = ${hashToken(installationToken)}, last_connected_at = ${now}
+          SET token_hash = ${hashToken(installationToken)},
+              last_connected_at = ${now},
+              revoked_at = NULL
           WHERE id = ${nodeRow.id}
         `;
+        nodeRow = (await sql<NodeRow[]>`
+          SELECT n.*, a.display_name AS created_by_name
+          FROM toolman_nodes n JOIN actors a ON a.id = n.created_by
+          WHERE n.id = ${nodeRow.id}
+        `)[0];
       }
       await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
@@ -202,6 +207,47 @@ export class ToolmanNodes {
     });
   }
 
+  async removeNode(actor: Actor, nodeId: string): Promise<ToolmanNodeSummary> {
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove Toolman nodes");
+    const now = Date.now();
+    return this.store.transaction(async (sql) => {
+      const [node] = await sql<NodeRow[]>`
+        SELECT n.*, a.display_name AS created_by_name
+        FROM toolman_nodes n
+        JOIN actors a ON a.id = n.created_by
+        WHERE n.id = ${nodeId}
+          AND n.workspace_id = ${this.store.workspaceId}
+          AND n.created_by = ${actor.id}
+        FOR UPDATE
+      `;
+      if (!node) throw new ApiError(404, "NOT_FOUND", "no such Toolman node");
+      if (!node.revoked_at) {
+        throw new ApiError(409, "NODE_NOT_REVOKED", "revoke the device before deleting it");
+      }
+      const mounts = await sql<OwnedMountRow[]>`
+        SELECT m.*, p.created_by, p.kind AS project_kind
+        FROM project_mounts m
+        JOIN projects p ON p.id = m.project_id
+        WHERE m.node_id = ${nodeId}
+          AND p.workspace_id = ${this.store.workspaceId}
+        ORDER BY m.created_at
+        FOR UPDATE
+      `;
+      for (const mount of mounts) await this.removeMountIn(sql, mount, actor.id, now);
+      await sql`UPDATE tool_executions SET node_id = NULL WHERE node_id = ${nodeId}`;
+      await sql`DELETE FROM toolman_nodes WHERE id = ${nodeId}`;
+      await this.events.append(sql, {
+        workspaceId: this.store.workspaceId,
+        actorId: actor.id,
+        kind: "toolman.node.removed",
+        subjectId: nodeId,
+        payload: { nodeId, removedMounts: mounts.length },
+        createdAt: now,
+      });
+      return toNode(node, "revoked");
+    });
+  }
+
   async list(): Promise<ToolmanNodeSummary[]> {
     const rows = await this.store.sql<NodeRow[]>`
       SELECT n.*, a.display_name AS created_by_name
@@ -229,8 +275,23 @@ export class ToolmanNodes {
     const now = Date.now();
     return this.store.transaction(async (sql) => {
       let project = await this.findProjectByName(sql, report.projectName);
-      if (project && project.createdBy !== node.createdBy) {
-        throw new ApiError(409, "NAME_TAKEN", `another member already shared a folder named ${report.projectName}`);
+      if (project && (project.createdBy !== node.createdBy || project.kind !== report.kind)) {
+        throw new ApiError(409, "NAME_TAKEN", `another project already uses the name ${report.projectName}`);
+      }
+      if (project?.archivedAt) {
+        await sql`
+          UPDATE projects SET archived_at = NULL
+          WHERE id = ${project.id} AND workspace_id = ${this.store.workspaceId}
+        `;
+        await this.events.append(sql, {
+          workspaceId: this.store.workspaceId,
+          actorId: node.createdBy,
+          kind: "project.reactivated",
+          subjectId: project.id,
+          payload: { projectId: project.id, name: project.name },
+          createdAt: now,
+        });
+        project = await this.findProjectByName(sql, report.projectName);
       }
       if (!project) {
         const projectId = randomUUID();
@@ -290,6 +351,55 @@ export class ToolmanNodes {
     });
   }
 
+  async removeMount(
+    actor: Actor,
+    projectId: string,
+    mountId: string,
+  ): Promise<{ mount: ProjectMount; projectArchived: boolean }> {
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can remove folders");
+    const now = Date.now();
+    return this.store.transaction(async (sql) => {
+      const [row] = await sql<OwnedMountRow[]>`
+        SELECT m.*, p.created_by, p.kind AS project_kind
+        FROM project_mounts m
+        JOIN projects p ON p.id = m.project_id
+        WHERE m.id = ${mountId}
+          AND m.project_id = ${projectId}
+          AND p.workspace_id = ${this.store.workspaceId}
+        FOR UPDATE
+      `;
+      if (!row) throw new ApiError(404, "NOT_FOUND", "no such folder mount");
+      if (row.created_by !== actor.id) {
+        throw new ApiError(403, "OWNER_ONLY", "only the folder owner can remove it");
+      }
+      return this.removeMountIn(sql, row, actor.id, now);
+    });
+  }
+
+  async removeMountFromNode(
+    nodeId: string,
+    mountKey: string,
+  ): Promise<{ mount: ProjectMount; projectArchived: boolean }> {
+    const node = await this.requireActiveNode(nodeId);
+    const now = Date.now();
+    return this.store.transaction(async (sql) => {
+      const [row] = await sql<OwnedMountRow[]>`
+        SELECT m.*, p.created_by, p.kind AS project_kind
+        FROM project_mounts m
+        JOIN projects p ON p.id = m.project_id
+        WHERE m.node_id = ${nodeId}
+          AND m.mount_key = ${mountKey}
+          AND p.workspace_id = ${this.store.workspaceId}
+        FOR UPDATE
+      `;
+      if (!row) throw new ApiError(404, "NOT_FOUND", "no such folder mount");
+      if (row.created_by !== node.createdBy) {
+        throw new ApiError(403, "OWNER_ONLY", "the node does not own this folder");
+      }
+      return this.removeMountIn(sql, row, node.createdBy, now);
+    });
+  }
+
   async findMountById(mountId: string): Promise<ProjectMount | null> {
     return this.findMount(this.store.sql, mountId);
   }
@@ -325,6 +435,47 @@ export class ToolmanNodes {
     return rows.map(toMount);
   }
 
+  private async removeMountIn(
+    sql: Sql,
+    row: OwnedMountRow,
+    actorId: string,
+    now: number,
+  ): Promise<{ mount: ProjectMount; projectArchived: boolean }> {
+    await sql`UPDATE tool_executions SET mount_id = NULL WHERE mount_id = ${row.id}`;
+    await sql`DELETE FROM project_mounts WHERE id = ${row.id}`;
+    const [remaining] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM project_mounts WHERE project_id = ${row.project_id}
+    `;
+    const projectArchived = remaining.count === 0 && row.project_kind === "directory";
+    if (projectArchived) {
+      await sql`
+        UPDATE projects SET archived_at = ${now}
+        WHERE id = ${row.project_id} AND workspace_id = ${this.store.workspaceId}
+      `;
+      await sql`
+        UPDATE project_access_requests
+        SET status = 'denied', resolved_by = ${actorId}, resolved_at = ${now}
+        WHERE project_id = ${row.project_id}
+          AND workspace_id = ${this.store.workspaceId}
+          AND status = 'pending'
+      `;
+    }
+    await this.events.append(sql, {
+      workspaceId: this.store.workspaceId,
+      actorId,
+      kind: "toolman.mount.removed",
+      subjectId: row.id,
+      payload: {
+        mountId: row.id,
+        projectId: row.project_id,
+        nodeId: row.node_id,
+        projectArchived,
+      },
+      createdAt: now,
+    });
+    return { mount: toMount(row), projectArchived };
+  }
+
   private async requireActiveNode(nodeId: string): Promise<ToolmanNodeSummary> {
     const [row] = await this.store.sql<NodeRow[]>`
       SELECT n.*, a.display_name AS created_by_name
@@ -339,7 +490,7 @@ export class ToolmanNodes {
     const [row] = await sql<ProjectRow[]>`
       SELECT p.*, a.display_name AS created_by_name
       FROM projects p JOIN actors a ON a.id = p.created_by
-      WHERE p.workspace_id = ${this.store.workspaceId} AND p.name = ${name} AND p.archived_at IS NULL
+      WHERE p.workspace_id = ${this.store.workspaceId} AND p.name = ${name}
     `;
     return row
       ? {
@@ -396,6 +547,11 @@ interface MountRow {
   cleanliness: MountCleanliness;
   created_at: number;
   updated_at: number;
+}
+
+interface OwnedMountRow extends MountRow {
+  created_by: string;
+  project_kind: ProjectKind;
 }
 
 interface ProjectRow {

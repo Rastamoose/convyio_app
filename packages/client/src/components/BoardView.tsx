@@ -18,12 +18,14 @@ export function BoardView({
   openItemId,
   onOpenItem,
   onDiscuss,
+  onOpenConversation,
   onJumpToTrace,
 }: {
   highlightRef: string | null;
   openItemId: string | null;
   onOpenItem: (itemId: string | null) => void;
-  onDiscuss: (item: BoardItem) => void;
+  onDiscuss: (item: { ref: string; title: string }) => void;
+  onOpenConversation: (target: { channel?: string | null; itemId?: string | null; planId?: string | null }) => void;
   onJumpToTrace: (runId: string) => void;
 }) {
   const { board, plans, createBoardItem, createPlan, acceptPlan, fetchActors } = useWorkspace();
@@ -37,6 +39,7 @@ export function BoardView({
   const [actors, setActors] = useState<{ id: string; displayName: string }[]>([]);
   const [adding, setAdding] = useState(false);
   const [showDenied, setShowDenied] = useState(false);
+  const [creating, setCreating] = useState<"plan" | "ticket" | null>(null);
   const [planTitle, setPlanTitle] = useState("");
   const [planObjective, setPlanObjective] = useState("");
   const [planOutline, setPlanOutline] = useState("");
@@ -70,12 +73,14 @@ export function BoardView({
   const submitTicket = () => {
     if (!canSubmit) return;
     setAdding(true);
+    const origin = plans.find((plan) => plan.id === planId);
     void createBoardItem({
       title: title.trim(),
       why: why.trim(),
       effect: effect.trim(),
       planId,
       owner: owner || undefined,
+      channel: origin?.originChannelName,
       scopePaths: scope.split(/[\n,]+/).map((line) => line.trim()).filter(Boolean),
       acceptanceCriteria: criteria.split(/[\n,]+/).map((line) => line.trim()).filter(Boolean),
       impactMap: emptyImpactMap(),
@@ -86,6 +91,7 @@ export function BoardView({
       setEffect("");
       setScope("");
       setCriteria("");
+      setCreating(null);
     }).finally(() => setAdding(false));
   };
 
@@ -104,6 +110,7 @@ export function BoardView({
       setPlanObjective("");
       setPlanOutline("");
       setPlanClarification("");
+      setCreating(null);
     });
   };
 
@@ -115,11 +122,18 @@ export function BoardView({
         <div className="flex flex-wrap items-center gap-3">
           <span className="font-semibold text-body">Board</span>
           <span className="text-xs text-muted">{plans.length} plan{plans.length === 1 ? "" : "s"} · {board.length} ticket{board.length === 1 ? "" : "s"}</span>
+          <span className="text-xs text-faint">A projection of work already living in conversation.</span>
           <button
             onClick={() => setShowDenied((o) => !o)}
-            className={`ml-auto rounded-md px-2 py-1 text-xs font-semibold ${showDenied ? "bg-input text-body" : "text-muted hover:bg-subtle hover:text-body"}`}
+            className={`rounded-md px-2 py-1 text-xs font-semibold ${showDenied ? "bg-input text-body" : "text-muted hover:bg-subtle hover:text-body"}`}
           >
             {showDenied ? "Hide denied" : "Show denied"}
+          </button>
+          <button
+            onClick={() => setCreating((cur) => (cur ? null : "plan"))}
+            className="ml-auto rounded-md bg-input px-2 py-1 text-xs font-semibold text-body hover:bg-subtle"
+          >
+            {creating ? "Cancel" : "New"}
           </button>
         </div>
         {proposedPlans.length > 0 && (
@@ -129,21 +143,43 @@ export function BoardView({
                 <span className="text-[10px] font-bold text-accent">{plan.ref}</span>
                 <span className="text-body">{plan.title}</span>
                 <button onClick={() => void acceptPlan(plan.id)} className="font-semibold text-accent hover:underline">Accept</button>
+                <button
+                  onClick={() => onOpenConversation({ channel: plan.originChannelName, planId: plan.id })}
+                  className="font-semibold text-muted hover:underline"
+                >
+                  Open in conversation
+                </button>
               </div>
             ))}
           </div>
         )}
-        <div className="grid gap-2 md:grid-cols-2">
+        {creating && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setCreating("plan")}
+              className={`rounded-md px-2 py-1 text-xs font-semibold ${creating === "plan" ? "bg-accent text-on-accent" : "bg-input text-body"}`}
+            >
+              New plan
+            </button>
+            <button
+              onClick={() => setCreating("ticket")}
+              className={`rounded-md px-2 py-1 text-xs font-semibold ${creating === "ticket" ? "bg-accent text-on-accent" : "bg-input text-body"}`}
+            >
+              Next ticket
+            </button>
+          </div>
+        )}
+        {creating === "plan" && (
           <div className="space-y-1.5">
-            <div className="text-[10px] font-bold tracking-wider text-muted uppercase">New plan</div>
             <input value={planTitle} onChange={(e) => setPlanTitle(e.target.value)} aria-label="New plan title" className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Plan title" maxLength={200} />
             <input value={planObjective} onChange={(e) => setPlanObjective(e.target.value)} aria-label="New plan objective" className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Objective" />
             <textarea value={planOutline} onChange={(e) => setPlanOutline(e.target.value)} aria-label="New plan outline" rows={2} className="w-full resize-none rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="Outline, one step per line" />
             <input value={planClarification} onChange={(e) => setPlanClarification(e.target.value)} aria-label="New plan clarification" className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint focus:ring-2 focus:ring-accent" placeholder="One clarification you asked" />
             <button onClick={submitPlan} className="rounded-md bg-input px-3 py-1.5 text-sm font-semibold text-body hover:bg-subtle">Propose plan</button>
           </div>
+        )}
+        {creating === "ticket" && (
           <div className="space-y-1.5">
-            <div className="text-[10px] font-bold tracking-wider text-muted uppercase">Next ticket</div>
             <select aria-label="Ticket plan" value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none focus:ring-2 focus:ring-accent">
               <option value="">Accepted plan…</option>
               {accepted.map((plan) => <option key={plan.id} value={plan.id}>{plan.ref} {plan.title}</option>)}
@@ -159,7 +195,7 @@ export function BoardView({
             </select>
             <button onClick={submitTicket} disabled={!canSubmit} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40">Add ticket</button>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
@@ -182,8 +218,15 @@ export function BoardView({
                       item={item}
                       highlighted={highlightRef === item.ref}
                       planRef={plans.find((plan) => plan.id === item.planId)?.ref}
+                      originChannel={item.originChannelName ?? plans.find((plan) => plan.id === item.planId)?.originChannelName}
                       onOpen={onOpenItem}
                       onDiscuss={onDiscuss}
+                      onOpenConversation={() =>
+                        onOpenConversation({
+                          channel: item.originChannelName ?? plans.find((plan) => plan.id === item.planId)?.originChannelName,
+                          itemId: item.id,
+                        })
+                      }
                       onJumpToTrace={onJumpToTrace}
                     />
                   ))
@@ -194,7 +237,20 @@ export function BoardView({
         })}
       </div>
 
-      {openItem && <ItemDrawer item={openItem} onClose={() => onOpenItem(null)} onDiscuss={onDiscuss} />}
+      {openItem && (
+        <ItemDrawer
+          item={openItem}
+          originChannel={openItem.originChannelName ?? plans.find((plan) => plan.id === openItem.planId)?.originChannelName}
+          onClose={() => onOpenItem(null)}
+          onDiscuss={onDiscuss}
+          onOpenConversation={() =>
+            onOpenConversation({
+              channel: openItem.originChannelName ?? plans.find((plan) => plan.id === openItem.planId)?.originChannelName,
+              itemId: openItem.id,
+            })
+          }
+        />
+      )}
     </div>
   );
 }

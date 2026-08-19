@@ -119,7 +119,7 @@ export function GitProjectsView({ onOpenChannel }: { onOpenChannel?: (channel: s
   };
 
   const disconnect = async () => {
-    if (!window.confirm("Disconnect GitHub? Linked repositories stay in the workspace but cannot sync until you reconnect.")) return;
+    if (!window.confirm("Disconnect this GitHub App installation? Linked repositories stay in the workspace but cannot sync until you reconnect.")) return;
     const request = apiFetch("/api/git/account", { method: "DELETE" });
     if (!request) return;
     setBusy("disconnect");
@@ -210,13 +210,13 @@ export function GitProjectsView({ onOpenChannel }: { onOpenChannel?: (channel: s
       <main className="mx-auto max-w-6xl p-6">
         {available === false ? (
           <EmptyState
-            title="GitHub integration is not configured"
-            body="The server needs a GitHub OAuth app and credential encryption key before accounts can connect."
+            title="GitHub App integration is not configured"
+            body="The server needs a GitHub App id, slug, client credentials and private key before repositories can connect."
           />
         ) : !account ? (
           <EmptyState
             title="Bring your repositories into the workspace"
-            body="Connect GitHub to browse repositories, clone a managed checkout, assign agents, sync branches, and review pull requests."
+            body="Install the GitHub App on selected repositories to browse code, assign agents, sync branches, and review pull requests."
           />
         ) : section === "overview" ? (
           <Overview repositories={repositories} onOpen={setSelectedId} />
@@ -256,7 +256,7 @@ function AccountControl({
   onDisconnect: () => Promise<void>;
 }) {
   if (!available) return null;
-  if (!account) return <PrimaryButton onClick={() => void onConnect()} disabled={busy === "connect"}>Connect GitHub</PrimaryButton>;
+  if (!account) return <PrimaryButton onClick={() => void onConnect()} disabled={busy === "connect"}>Install GitHub App</PrimaryButton>;
   return (
     <div className="flex items-center gap-2">
       {account.avatarUrl && <img src={account.avatarUrl} alt="" className="h-7 w-7 rounded-md" />}

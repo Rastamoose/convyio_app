@@ -34,6 +34,14 @@ export const IMPACT_SURFACES = [
 
 export type ImpactSurface = (typeof IMPACT_SURFACES)[number];
 
+export interface PlanChange {
+  at: number;
+  actorId: string;
+  actorName?: string;
+  field: string;
+  summary: string;
+}
+
 export interface BoardPlan {
   id: string;
   workspaceId: string;
@@ -52,6 +60,14 @@ export interface BoardPlan {
   createdAt: number;
   acceptedAt: number | null;
   completedAt: number | null;
+  originChannelId?: string | null;
+  originChannelName?: string;
+  originEventId?: string | null;
+  assumedOwnerId?: string | null;
+  assumedOwnerName?: string;
+  assumedProjectId?: string | null;
+  assumedProjectName?: string;
+  changeLog?: PlanChange[];
   createdByName?: string;
   acceptedByName?: string;
 }

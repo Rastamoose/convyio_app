@@ -24,6 +24,13 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
           items: { type: "string" },
           description: "At least one clarifying question you asked, and the answer",
         },
+        constraints: {
+          type: "array",
+          items: { type: "string" },
+          description: "Known constraints that must remain true",
+        },
+        assumed_owner_id: { type: "string", description: "Proposed owner actor id" },
+        assumed_project_id: { type: "string", description: "Likely project or resource id" },
       },
       required: ["title", "objective", "outline", "clarifications"],
     },
@@ -400,6 +407,8 @@ export interface ToolHooks {
   onActivity(line: string): void;
   /** Conversation the actions belong to; selects the server-side permission mode. */
   conversationId?: string | null;
+  /** Channel name used as the origin thread for Plans and Tickets. */
+  channel?: string | null;
 }
 
 export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolExecutor {
@@ -417,6 +426,10 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             objective: str("objective"),
             outline: Array.isArray(args.outline) ? args.outline.map(String) : [],
             clarifications: Array.isArray(args.clarifications) ? args.clarifications.map(String) : [],
+            ...(Array.isArray(args.constraints) ? { constraints: args.constraints.map(String) } : {}),
+            ...(str("assumed_owner_id") ? { assumedOwnerId: str("assumed_owner_id") } : {}),
+            ...(str("assumed_project_id") ? { assumedProjectId: str("assumed_project_id") } : {}),
+            ...(hooks.channel ? { channel: hooks.channel } : {}),
           });
           hooks.onActivity(`proposed plan ${plan.ref}: ${plan.title}`);
           return {
@@ -439,6 +452,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             // SCOPE_REQUIRED rejection reaches the model verbatim.
             scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
             ...(str("project_id") ? { projectId: str("project_id") } : {}),
+            ...(hooks.channel ? { channel: hooks.channel } : {}),
             ...(Array.isArray(args.capabilities)
               ? { capabilities: args.capabilities.map(String) as WorkCapability[] }
               : {}),

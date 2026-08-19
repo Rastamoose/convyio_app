@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
+import { execFile as childExecFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,12 +9,12 @@ import { after, before, describe, test } from "node:test";
 import type { Actor } from "@workspace/shared";
 import { Channels } from "../src/chat/Channels";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
-import { GitHub } from "../src/projects/GitHub";
+import { GitHub, type GitHubConfig } from "../src/projects/GitHub";
 import { GitRepositories } from "../src/projects/GitRepositories";
 import { ProjectStore } from "../src/projects/ProjectStore";
 import { createTestDb } from "./pgSchema";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(childExecFile);
 
 describe("GitHub repository integration", () => {
   let db: Awaited<ReturnType<typeof createTestDb>>["db"];
@@ -25,6 +26,8 @@ describe("GitHub repository integration", () => {
   let github: GitHub;
   let repositories: GitRepositories;
   let projects: ProjectStore;
+  let completedState: string;
+  let config: GitHubConfig;
 
   before(async () => {
     ({ db, drop } = await createTestDb());
@@ -32,18 +35,28 @@ describe("GitHub repository integration", () => {
     remoteUrl = await createRemote(root);
     owner = await db.upsertActor("human", "git-owner");
     agent = await db.upsertActor("agent", "git-agent");
-    github = new GitHub(
-      db.sql,
-      {
-        clientId: "client-id",
-        clientSecret: "client-secret",
-        encryptionKey: Buffer.alloc(32, 7),
-        redirectUri: "http://localhost:3001/api/git/github/callback",
-      },
-      fakeGitHub(remoteUrl),
-    );
-    const authorization = new URL(github.authorize(owner, db.workspaceId, "http://localhost:3001"));
-    await github.complete("oauth-code", authorization.searchParams.get("state")!);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    config = {
+      appId: "12345",
+      slug: "convyio",
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      callbackUri: "http://localhost:3001/api/git/github/callback",
+    };
+    const fetcher = fakeGitHub(remoteUrl);
+    const firstProcess = new GitHub(db.sql, config, fetcher);
+    const installationUrl = new URL(await firstProcess.authorize(
+      owner,
+      db.workspaceId,
+      "http://localhost:3001",
+      "http://localhost:5173",
+    ));
+    assert.equal(installationUrl.pathname, "/apps/convyio/installations/new");
+    completedState = installationUrl.searchParams.get("state")!;
+    github = new GitHub(db.sql, config, fetcher);
+    const completed = await github.complete("user-code", "99", completedState);
+    assert.deepEqual(completed, { workspaceId: db.workspaceId, returnOrigin: "http://localhost:5173" });
     const events = new ThreadEventStore(db);
     projects = new ProjectStore(db, events);
     const localProvider = {
@@ -60,7 +73,7 @@ describe("GitHub repository integration", () => {
         cloneUrl: remoteUrl,
         updatedAt: Date.parse("2026-08-18T00:00:00Z"),
       }),
-      tokenForConnection: async () => "provider-secret",
+      tokenForConnection: async () => "installation-secret",
       requestForConnection: async (_connectionId: string, requestPath: string) => {
         if (requestPath.includes("/pulls?")) return [];
         throw new Error(`unexpected provider request: ${requestPath}`);
@@ -77,23 +90,58 @@ describe("GitHub repository integration", () => {
     await drop();
   });
 
-  test("stores the GitHub token encrypted and exposes only account metadata", async () => {
+  test("installation state survives restart and is hashed, expiring, and single-use", async () => {
+    const [stored] = await db.sql<{ token_hash: string; consumed_at: number | null }[]>`
+      SELECT token_hash, consumed_at FROM git_connection_states
+      WHERE actor_id = ${owner.id} ORDER BY created_at ASC LIMIT 1
+    `;
+    assert.equal(stored.token_hash.length, 64);
+    assert.equal(stored.token_hash.includes(completedState), false);
+    assert.ok(stored.consumed_at);
+    await assert.rejects(
+      () => github.complete("user-code", "99", completedState),
+      (error: unknown) => error instanceof Error && error.message.includes("already used"),
+    );
+
+    const expiring = new GitHub(db.sql, config, fakeGitHub(remoteUrl));
+    const expiringUrl = new URL(await expiring.authorize(owner, db.workspaceId, "http://localhost:3001"));
+    const expiringState = expiringUrl.searchParams.get("state")!;
+    await db.sql`
+      UPDATE git_connection_states SET expires_at = ${Date.now() - 1}
+      WHERE consumed_at IS NULL AND actor_id = ${owner.id}
+    `;
+    assert.equal(await new GitHub(db.sql, config, fakeGitHub(remoteUrl)).pending(expiringState), null);
+    await assert.rejects(
+      () => expiring.complete("user-code", "99", expiringState),
+      (error: unknown) => error instanceof Error && error.message.includes("expired"),
+    );
+  });
+
+  test("verifies installation ownership and stores no durable GitHub token", async () => {
     const account = await github.account(owner.id);
     assert.equal(account?.login, "octocat");
-    assert.deepEqual(account?.scopes, ["repo", "read:user"]);
-    const [stored] = await db.sql<{ token_ciphertext: string }[]>`
-      SELECT token_ciphertext FROM git_connections WHERE actor_id = ${owner.id}
+    assert.ok(account?.scopes.includes("repositories:selected"));
+    assert.ok(account?.scopes.includes("contents:write"));
+    const [stored] = await db.sql<{
+      installation_id: string;
+      token_ciphertext: string;
+      refresh_token_ciphertext: string | null;
+    }[]>`
+      SELECT installation_id, token_ciphertext, refresh_token_ciphertext
+      FROM git_connections WHERE actor_id = ${owner.id}
     `;
-    assert.ok(stored.token_ciphertext.startsWith("v1."));
-    assert.equal(stored.token_ciphertext.includes("provider-secret"), false);
+    assert.equal(stored.installation_id, "99");
+    assert.equal(stored.token_ciphertext, "");
+    assert.equal(stored.refresh_token_ciphertext, null);
+    assert.equal(await github.tokenForConnection(account!.id), "installation-secret");
+    const selected = await github.repositories(owner.id);
+    assert.deepEqual(selected.map((repository) => repository.fullName), ["acme/selected"]);
 
-    await db.sql`UPDATE git_connections SET token_expires_at = ${Date.now() - 1} WHERE id = ${account!.id}`;
-    assert.equal(await github.tokenForConnection(account!.id), "provider-refreshed");
-    const [refreshed] = await db.sql<{ token_ciphertext: string; refresh_token_ciphertext: string }[]>`
-      SELECT token_ciphertext, refresh_token_ciphertext FROM git_connections WHERE id = ${account!.id}
-    `;
-    assert.equal(refreshed.token_ciphertext.includes("provider-refreshed"), false);
-    assert.equal(refreshed.refresh_token_ciphertext.includes("refresh-rotated"), false);
+    const deniedUrl = new URL(await github.authorize(owner, db.workspaceId, "http://localhost:3001"));
+    await assert.rejects(
+      () => github.complete("user-code", "100", deniedUrl.searchParams.get("state")!),
+      (error: unknown) => error instanceof Error && error.message.includes("does not belong"),
+    );
   });
 
   test("rejects repository clone URLs outside GitHub HTTPS", async () => {
@@ -181,13 +229,14 @@ describe("GitHub repository integration", () => {
     assert.ok(history.some((event) => event.kind === "git.repository.unlinked"));
   });
 
-  test("disconnect revokes the account and erases the stored credential", async () => {
+  test("disconnect revokes the installation mapping", async () => {
     await github.disconnect(owner);
     assert.equal(await github.account(owner.id), null);
-    const [stored] = await db.sql<{ token_ciphertext: string }[]>`
-      SELECT token_ciphertext FROM git_connections WHERE actor_id = ${owner.id}
+    const [stored] = await db.sql<{ token_ciphertext: string; revoked_at: number | null }[]>`
+      SELECT token_ciphertext, revoked_at FROM git_connections WHERE actor_id = ${owner.id}
     `;
     assert.equal(stored.token_ciphertext, "");
+    assert.ok(stored.revoked_at);
   });
 });
 
@@ -210,19 +259,45 @@ async function createRemote(root: string): Promise<string> {
 function fakeGitHub(remoteUrl: string): typeof fetch {
   return (async (input, init) => {
     const url = String(input);
+    const authorization = new Headers(init?.headers).get("Authorization") ?? "";
     if (url === "https://github.com/login/oauth/access_token") {
-      const body = JSON.parse(String(init?.body)) as { grant_type?: string };
-      return body.grant_type === "refresh_token"
-        ? jsonResponse({ access_token: "provider-refreshed", refresh_token: "refresh-rotated", expires_in: 3600 })
-        : jsonResponse({ access_token: "provider-secret", refresh_token: "refresh-secret", expires_in: 3600 });
+      return jsonResponse({ access_token: "user-install-token" });
     }
-    if (url === "https://api.github.com/user") {
-      return jsonResponse(
-        { id: 1, login: "octocat", name: "Octo Cat", avatar_url: "https://avatars.githubusercontent.com/u/1" },
-        { "x-oauth-scopes": "repo, read:user" },
-      );
+    if (url.startsWith("https://api.github.com/user/installations")) {
+      assert.equal(authorization, "Bearer user-install-token");
+      return jsonResponse({ installations: [{ id: 99 }] });
+    }
+    if (url === "https://api.github.com/app/installations/99") {
+      assert.equal(authorization.split(".").length, 3);
+      return jsonResponse({
+        id: 99,
+        app_id: 12345,
+        account: { id: 1, login: "octocat", avatar_url: "https://avatars.githubusercontent.com/u/1", type: "User" },
+        repository_selection: "selected",
+        permissions: { contents: "write", pull_requests: "write", issues: "write", checks: "read", metadata: "read" },
+      });
+    }
+    if (url === "https://api.github.com/app/installations/99/access_tokens") {
+      assert.equal(authorization.split(".").length, 3);
+      return jsonResponse({ token: "installation-secret", expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+    }
+    if (url.startsWith("https://api.github.com/installation/repositories")) {
+      assert.equal(authorization, "Bearer installation-secret");
+      return jsonResponse({ repositories: [{
+        id: 7,
+        name: "selected",
+        full_name: "acme/selected",
+        description: "Selected repository",
+        private: true,
+        default_branch: "main",
+        html_url: "https://github.com/acme/selected",
+        clone_url: "https://github.com/acme/selected.git",
+        updated_at: "2026-08-18T00:00:00Z",
+        owner: { login: "acme" },
+      }] });
     }
     if (url === "https://api.github.com/repos/acme/demo") {
+      assert.equal(authorization, "Bearer installation-secret");
       return jsonResponse({
         id: 42,
         name: "demo",

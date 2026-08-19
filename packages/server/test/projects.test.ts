@@ -66,6 +66,12 @@ describe("projects and Toolman nodes", () => {
     assert.equal((await nodes.findActiveMountById(mount.id))?.id, mount.id);
     await nodes.revoke(human.actor, exchanged.node.id);
     assert.equal(await nodes.findActiveMountById(mount.id), null);
+
+    const repair = await nodes.createPairing(human.actor, "desk");
+    const repaired = await nodes.exchangePairing(repair.pairingCode);
+    assert.equal(repaired?.node.id, exchanged.node.id);
+    assert.equal(repaired?.node.revokedAt, null);
+    assert.equal((await nodes.findActiveMountById(mount.id))?.id, mount.id);
   });
 
   test("agents cannot create projects and humans cannot request access", async () => {
@@ -122,6 +128,40 @@ describe("projects and Toolman nodes", () => {
     );
   });
 
+  test("only the owner can permanently remove a device without deleting local files", async () => {
+    const owner = { actor: await actor("human", "device-owner") };
+    const other = { actor: await actor("human", "device-other") };
+    const agent = { actor: await actor("agent", "device-agent") };
+    const pairing = await nodes.createPairing(owner.actor, "delete-device");
+    const exchanged = await nodes.exchangePairing(pairing.pairingCode);
+    const { project, mount } = await nodes.registerMount(exchanged!.node.id, {
+      mountKey: "delete-device-mount",
+      projectName: "delete-device-folder",
+      kind: "directory",
+    });
+    await projects.assign(owner.actor, { projectId: project.id, agentId: agent.actor.id, mountId: mount.id });
+
+    await assert.rejects(
+      () => nodes.removeNode(other.actor, exchanged!.node.id),
+      (err: unknown) => err instanceof Error && err.message.includes("no such Toolman node"),
+    );
+    await assert.rejects(
+      () => nodes.removeNode(owner.actor, exchanged!.node.id),
+      (err: unknown) => err instanceof Error && err.message.includes("revoke the device before deleting it"),
+    );
+    await nodes.revoke(owner.actor, exchanged!.node.id);
+    const removed = await nodes.removeNode(owner.actor, exchanged!.node.id);
+    assert.equal(removed.id, exchanged!.node.id);
+    assert.equal((await nodes.list()).some((node) => node.id === exchanged!.node.id), false);
+    assert.equal(await nodes.findMountById(mount.id), null);
+    assert.equal(await projects.assignment(project.id, agent.actor.id), null);
+    assert.ok((await projects.find(project.id))?.archivedAt);
+
+    const replacementPairing = await nodes.createPairing(other.actor, "delete-device");
+    const replacement = await nodes.exchangePairing(replacementPairing.pairingCode);
+    assert.notEqual(replacement?.node.id, exchanged!.node.id);
+  });
+
   test("folder names cannot merge mounts owned by different humans", async () => {
     const owner = { actor: await actor("human", "mount-owner") };
     const other = { actor: await actor("human", "mount-other") };
@@ -151,8 +191,54 @@ describe("projects and Toolman nodes", () => {
         projectName: "shared-name",
         kind: "directory",
       }),
-      (err: unknown) => err instanceof Error && err.message.includes("another member already shared"),
+      (err: unknown) => err instanceof Error && err.message.includes("another project already uses"),
     );
+  });
+
+  test("removing one folder mount preserves the project until its final mount is removed", async () => {
+    const owner = { actor: await actor("human", "folder-remover") };
+    const other = { actor: await actor("human", "folder-remover-other") };
+    const firstAgent = { actor: await actor("agent", "folder-agent-one") };
+    const secondAgent = { actor: await actor("agent", "folder-agent-two") };
+    const firstPairing = await nodes.createPairing(owner.actor, "folder-node-one");
+    const firstNode = await nodes.exchangePairing(firstPairing.pairingCode);
+    const first = await nodes.registerMount(firstNode!.node.id, {
+      mountKey: "folder-mount-one",
+      projectName: "removable-folder",
+      kind: "directory",
+    });
+    const secondPairing = await nodes.createPairing(owner.actor, "folder-node-two");
+    const secondNode = await nodes.exchangePairing(secondPairing.pairingCode);
+    const second = await nodes.registerMount(secondNode!.node.id, {
+      mountKey: "folder-mount-two",
+      projectName: "removable-folder",
+      kind: "directory",
+    });
+    await projects.assign(owner.actor, { projectId: first.project.id, agentId: firstAgent.actor.id, mountId: first.mount.id });
+    await projects.assign(owner.actor, { projectId: first.project.id, agentId: secondAgent.actor.id, mountId: second.mount.id });
+
+    await assert.rejects(
+      () => nodes.removeMount(other.actor, first.project.id, first.mount.id),
+      (err: unknown) => err instanceof Error && err.message.includes("only the folder owner"),
+    );
+    const removedFirst = await nodes.removeMount(owner.actor, first.project.id, first.mount.id);
+    assert.equal(removedFirst.projectArchived, false);
+    assert.equal((await nodes.mountsForProject(first.project.id)).length, 1);
+    assert.equal(await projects.assignment(first.project.id, firstAgent.actor.id), null);
+    assert.ok(await projects.assignment(first.project.id, secondAgent.actor.id));
+
+    const removedLast = await nodes.removeMountFromNode(secondNode!.node.id, second.mount.mountKey);
+    assert.equal(removedLast.projectArchived, true);
+    assert.ok((await projects.find(first.project.id))?.archivedAt);
+    assert.equal((await projects.list()).some((project) => project.id === first.project.id), false);
+
+    const restored = await nodes.registerMount(secondNode!.node.id, {
+      mountKey: "folder-mount-restored",
+      projectName: "removable-folder",
+      kind: "directory",
+    });
+    assert.equal(restored.project.id, first.project.id);
+    assert.equal(restored.project.archivedAt, null);
   });
 
   test("only the folder owner can grant and revoke assignments", async () => {

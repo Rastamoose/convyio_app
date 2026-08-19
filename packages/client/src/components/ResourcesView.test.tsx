@@ -107,6 +107,9 @@ describe("ResourcesView", () => {
   it("assigns the selected agent, revokes access, and manages files", async () => {
     const user = userEvent.setup();
     let assigned = false;
+    let removed = false;
+    let nodeRevoked = false;
+    let nodeRemoved = false;
     const writes: Array<{ path: string; content: string }> = [];
     const deleted: string[] = [];
     const project = {
@@ -139,7 +142,7 @@ describe("ResourcesView", () => {
     ]);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     apiFetch.mockImplementation(async (path: string, init?: RequestInit) => {
-      if (path === "/api/toolman/nodes") return response({ nodes: [{
+      if (path === "/api/toolman/nodes") return response({ nodes: nodeRemoved ? [] : [{
         id: "node-1",
         workspaceId: "workspace-1",
         name: "desk",
@@ -147,10 +150,18 @@ describe("ResourcesView", () => {
         createdByName: "Harris",
         createdAt: 1,
         lastConnectedAt: 1,
-        revokedAt: null,
-        health: "ready",
+        revokedAt: nodeRevoked ? 2 : null,
+        health: nodeRevoked ? "revoked" : "ready",
       }] });
-      if (path === "/api/projects") return response({ projects: [project] });
+      if (path === "/api/toolman/nodes/node-1/revoke" && init?.method === "POST") {
+        nodeRevoked = true;
+        return response({ node: { id: "node-1", revokedAt: 2 } });
+      }
+      if (path === "/api/toolman/nodes/node-1/permanent" && init?.method === "DELETE") {
+        nodeRemoved = true;
+        return response({ node: { id: "node-1" } });
+      }
+      if (path === "/api/projects") return response({ projects: removed ? [] : [project] });
       if (path === "/api/project-access-requests") return response({ requests: [] });
       if (path === "/api/projects/project-1") return response({
         project,
@@ -178,6 +189,10 @@ describe("ResourcesView", () => {
       if (path === "/api/projects/project-1/assignments/beta" && init?.method === "DELETE") {
         assigned = false;
         return response({ ok: true });
+      }
+      if (path === "/api/projects/project-1/mounts/mount-1" && init?.method === "DELETE") {
+        removed = true;
+        return response({ ok: true, projectArchived: true });
       }
       if (path.startsWith("/api/projects/project-1/files?")) return response({ entries: ["a.txt"] });
       if (path.startsWith("/api/projects/project-1/file?") && !init?.method) return response({ content: "old" });
@@ -217,5 +232,15 @@ describe("ResourcesView", () => {
     expect(writes).toContainEqual({ path: "a.txt", content: "edited" });
     await user.click(screen.getByRole("button", { name: "Delete" }));
     expect(deleted).toEqual(["a.txt"]);
+
+    await user.click(screen.getByRole("button", { name: "Remove folder notes from desk" }));
+    expect(await screen.findByText("No folders yet. The setup prompt attaches the folder open in your editor.")).toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: "Delete device desk" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Revoke device desk" }));
+    expect(await screen.findByText("revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke device desk" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete device desk" }));
+    expect(await screen.findByText("No machines paired yet. Share a folder and paste the prompt into your coding agent.")).toBeInTheDocument();
   });
 });

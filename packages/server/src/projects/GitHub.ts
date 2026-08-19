@@ -1,52 +1,63 @@
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, sign } from "node:crypto";
 import type { Actor, GitAccount, GitRemoteRepository } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { Sql } from "../db";
 
-const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const CONNECTION_STATE_TTL_MS = 15 * 60 * 1000;
 const GITHUB_API = "https://api.github.com";
 
 export interface GitHubConfig {
+  appId: string;
+  slug: string;
   clientId: string;
   clientSecret: string;
-  encryptionKey: Buffer;
-  redirectUri: string | null;
+  privateKey: string;
+  callbackUri: string | null;
 }
 
-interface OAuthState {
-  actorId: string;
-  workspaceId: string;
-  redirectUri: string;
-  returnOrigin: string;
-  expiresAt: number;
+interface ConnectionStateRow {
+  actor_id: string;
+  workspace_id: string;
+  callback_uri: string;
+  return_origin: string;
+  expires_at: number;
 }
 
 interface ConnectionRow {
   id: string;
   actor_id: string;
   provider: "github";
+  provider_user_id: string;
+  installation_id: string | null;
   login: string;
   display_name: string;
   avatar_url: string | null;
-  token_ciphertext: string;
-  refresh_token_ciphertext: string | null;
-  token_expires_at: number | null;
   scopes: string[];
   created_at: number;
 }
 
-interface GitHubUser {
+interface GitHubInstallation {
   id: number;
-  login: string;
-  name: string | null;
-  avatar_url: string | null;
+  app_id: number;
+  account: {
+    id: number;
+    login: string;
+    avatar_url: string | null;
+    type: string;
+  };
+  repository_selection: "all" | "selected";
+  permissions: Record<string, string>;
 }
 
-interface OAuthTokenResponse {
+interface GitHubUserTokenResponse {
   access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
   error_description?: string;
+}
+
+interface GitHubInstallationTokenResponse {
+  token?: string;
+  expires_at?: string;
+  permissions?: Record<string, string>;
 }
 
 interface GitHubRepositoryResponse {
@@ -62,9 +73,13 @@ interface GitHubRepositoryResponse {
   owner: { login: string };
 }
 
+interface InstallationToken {
+  token: string;
+  expiresAt: number;
+}
+
 export class GitHub {
-  private states = new Map<string, OAuthState>();
-  private refreshes = new Map<string, Promise<ConnectionRow>>();
+  private installationTokens = new Map<string, Promise<InstallationToken>>();
 
   constructor(
     private sql: Sql,
@@ -79,115 +94,140 @@ export class GitHub {
   async account(actorId: string): Promise<GitAccount | null> {
     const [row] = await this.sql<ConnectionRow[]>`
       SELECT * FROM git_connections
-      WHERE actor_id = ${actorId} AND provider = 'github' AND revoked_at IS NULL
+      WHERE actor_id = ${actorId}
+        AND provider = 'github'
+        AND installation_id IS NOT NULL
+        AND revoked_at IS NULL
     `;
     return row ? toAccount(row) : null;
   }
 
-  authorize(actor: Actor, workspaceId: string, origin: string, returnOrigin = origin): string {
-    this.requireConfig();
+  async authorize(actor: Actor, workspaceId: string, origin: string, returnOrigin = origin): Promise<string> {
+    const config = this.requireConfig();
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can connect GitHub");
-    const state = randomBytes(32).toString("base64url");
-    const callbackOrigin = validatedOrigin(origin);
+    const callbackUri = config.callbackUri ?? new URL("/api/git/github/callback", validatedOrigin(origin)).toString();
     const browserOrigin = validatedOrigin(returnOrigin);
-    const redirectUri = this.config!.redirectUri ?? new URL("/api/git/github/callback", callbackOrigin).toString();
-    this.sweepStates();
-    this.states.set(state, {
-      actorId: actor.id,
-      workspaceId,
-      redirectUri,
-      returnOrigin: browserOrigin,
-      expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
-    });
-    const url = new URL("https://github.com/login/oauth/authorize");
-    url.searchParams.set("client_id", this.config!.clientId);
-    url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("scope", "repo read:user");
+    const state = randomBytes(32).toString("base64url");
+    const now = Date.now();
+    await this.sql`
+      DELETE FROM git_connection_states
+      WHERE expires_at <= ${now} OR (consumed_at IS NOT NULL AND consumed_at <= ${now - 86_400_000})
+    `;
+    await this.sql`
+      INSERT INTO git_connection_states (
+        token_hash, actor_id, workspace_id, callback_uri, return_origin,
+        created_at, expires_at, consumed_at
+      ) VALUES (
+        ${hashState(state)}, ${actor.id}, ${workspaceId}, ${callbackUri},
+        ${browserOrigin}, ${now}, ${now + CONNECTION_STATE_TTL_MS}, NULL
+      )
+    `;
+    const url = new URL(`https://github.com/apps/${config.slug}/installations/new`);
     url.searchParams.set("state", state);
     return url.toString();
   }
 
-  oauthWorkspace(stateToken: string): string | null {
-    this.sweepStates();
-    return this.states.get(stateToken)?.workspaceId ?? null;
+  async pending(stateToken: string): Promise<{ workspaceId: string; returnOrigin: string } | null> {
+    const [row] = await this.sql<ConnectionStateRow[]>`
+      SELECT actor_id, workspace_id, callback_uri, return_origin, expires_at
+      FROM git_connection_states
+      WHERE token_hash = ${hashState(stateToken)}
+        AND consumed_at IS NULL
+        AND expires_at > ${Date.now()}
+    `;
+    return row ? { workspaceId: row.workspace_id, returnOrigin: row.return_origin } : null;
   }
 
-  oauthReturnOrigin(stateToken: string): string | null {
-    this.sweepStates();
-    return this.states.get(stateToken)?.returnOrigin ?? null;
+  async cancel(stateToken: string): Promise<void> {
+    await this.sql`
+      UPDATE git_connection_states SET consumed_at = ${Date.now()}
+      WHERE token_hash = ${hashState(stateToken)} AND consumed_at IS NULL
+    `;
   }
 
-  cancel(stateToken: string): void {
-    this.states.delete(stateToken);
-  }
-
-  async complete(code: string, stateToken: string): Promise<{ workspaceId: string; returnOrigin: string }> {
+  async complete(
+    code: string,
+    installationId: string,
+    stateToken: string,
+  ): Promise<{ workspaceId: string; returnOrigin: string }> {
     const config = this.requireConfig();
-    const state = this.states.get(stateToken);
-    this.states.delete(stateToken);
-    if (!state || state.expiresAt <= Date.now()) {
-      throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired; start again");
-    }
-    const tokenResponse = await this.fetcher("https://github.com/login/oauth/access_token", {
+    const state = await this.consumeState(stateToken);
+    const normalizedInstallationId = installationIdValue(installationId);
+    const userTokenResponse = await this.fetcher("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
         client_id: config.clientId,
         client_secret: config.clientSecret,
         code,
-        redirect_uri: state.redirectUri,
+        redirect_uri: state.callback_uri,
       }),
     });
-    const tokenBody = (await tokenResponse.json()) as OAuthTokenResponse;
-    if (!tokenResponse.ok || !tokenBody.access_token) {
-      throw new ApiError(502, "GITHUB_OAUTH_FAILED", tokenBody.error_description ?? "GitHub refused the connection");
+    const userTokenBody = (await userTokenResponse.json()) as GitHubUserTokenResponse;
+    if (!userTokenResponse.ok || !userTokenBody.access_token) {
+      throw new ApiError(502, "GITHUB_AUTH_FAILED", userTokenBody.error_description ?? "GitHub refused user authorization");
     }
-    const userResponse = await this.githubFetch(tokenBody.access_token, "/user");
-    const user = (await userResponse.json()) as GitHubUser;
-    if (!userResponse.ok || !user.id || !user.login) {
-      throw new ApiError(502, "GITHUB_ACCOUNT_FAILED", "GitHub did not return an account");
+    if (!(await this.userCanAccessInstallation(userTokenBody.access_token, normalizedInstallationId))) {
+      throw new ApiError(403, "GITHUB_INSTALLATION_FORBIDDEN", "that GitHub App installation does not belong to the authorizing user");
     }
-    const scopes = (userResponse.headers.get("x-oauth-scopes") ?? "")
-      .split(",")
-      .map((scope) => scope.trim())
-      .filter(Boolean);
+    const installation = await this.appRequest<GitHubInstallation>(`/app/installations/${normalizedInstallationId}`);
+    if (String(installation.app_id) !== config.appId) {
+      throw new ApiError(403, "GITHUB_INSTALLATION_FORBIDDEN", "that installation belongs to another GitHub App");
+    }
     const now = Date.now();
+    const scopes = [
+      `repositories:${installation.repository_selection}`,
+      ...Object.entries(installation.permissions).map(([name, value]) => `${name}:${value}`),
+    ].sort();
     try {
-      await this.sql`
+      const connected = await this.sql<{ id: string }[]>`
         INSERT INTO git_connections (
-          id, actor_id, provider, provider_user_id, login, display_name, avatar_url,
-          token_ciphertext, refresh_token_ciphertext, token_expires_at, scopes,
-          created_at, updated_at, revoked_at
+          id, actor_id, provider, provider_user_id, installation_id, login,
+          display_name, avatar_url, token_ciphertext, refresh_token_ciphertext,
+          token_expires_at, scopes, created_at, updated_at, revoked_at
         ) VALUES (
-          ${randomUUID()}, ${state.actorId}, 'github', ${String(user.id)}, ${user.login},
-          ${user.name ?? user.login}, ${user.avatar_url}, ${encrypt(tokenBody.access_token, config.encryptionKey)},
-          ${tokenBody.refresh_token ? encrypt(tokenBody.refresh_token, config.encryptionKey) : null},
-          ${tokenBody.expires_in ? now + tokenBody.expires_in * 1000 : null}, ${scopes}, ${now}, ${now}, NULL
+          ${randomUUID()}, ${state.actor_id}, 'github', ${String(installation.account.id)},
+          ${normalizedInstallationId}, ${installation.account.login},
+          ${installation.account.login}, ${installation.account.avatar_url}, '', NULL,
+          NULL, ${scopes}, ${now}, ${now}, NULL
         )
         ON CONFLICT (actor_id, provider) DO UPDATE SET
           provider_user_id = EXCLUDED.provider_user_id,
+          installation_id = EXCLUDED.installation_id,
           login = EXCLUDED.login,
           display_name = EXCLUDED.display_name,
           avatar_url = EXCLUDED.avatar_url,
-          token_ciphertext = EXCLUDED.token_ciphertext,
-          refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
-          token_expires_at = EXCLUDED.token_expires_at,
+          token_ciphertext = '',
+          refresh_token_ciphertext = NULL,
+          token_expires_at = NULL,
           scopes = EXCLUDED.scopes,
           updated_at = EXCLUDED.updated_at,
           revoked_at = NULL
+        WHERE git_connections.installation_id = EXCLUDED.installation_id
+           OR (
+             git_connections.revoked_at IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM git_repositories
+               WHERE connection_id = git_connections.id AND unlinked_at IS NULL
+             )
+           )
+        RETURNING id
       `;
+      if (connected.length === 0) {
+        throw new ApiError(409, "GITHUB_INSTALLATION_CONFLICT", "disconnect the current installation and unlink its repositories before connecting a different account");
+      }
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new ApiError(409, "GITHUB_ALREADY_LINKED", "that GitHub account is connected to another Convyio user");
+        throw new ApiError(409, "GITHUB_ALREADY_LINKED", "that GitHub installation is already connected");
       }
       throw error;
     }
-    return { workspaceId: state.workspaceId, returnOrigin: state.returnOrigin };
+    return { workspaceId: state.workspace_id, returnOrigin: state.return_origin };
   }
 
   async disconnect(actor: Actor): Promise<void> {
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can disconnect GitHub");
-    const rows = await this.sql`
+    const rows = await this.sql<{ id: string }[]>`
       UPDATE git_connections
       SET revoked_at = ${Date.now()}, updated_at = ${Date.now()}, token_ciphertext = '',
           refresh_token_ciphertext = NULL, token_expires_at = NULL, scopes = '{}'
@@ -195,18 +235,19 @@ export class GitHub {
       RETURNING id
     `;
     if (rows.length === 0) throw new ApiError(404, "NOT_FOUND", "GitHub is not connected");
+    for (const row of rows) this.installationTokens.delete(row.id);
   }
 
   async repositories(actorId: string): Promise<GitRemoteRepository[]> {
     const connection = await this.requireConnectionForActor(actorId);
     const repositories: GitRemoteRepository[] = [];
     for (let page = 1; page <= 10; page += 1) {
-      const response = await this.request<GitHubRepositoryResponse[]>(
+      const response = await this.request<{ repositories: GitHubRepositoryResponse[] }>(
         connection,
-        `/user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100&page=${page}`,
+        `/installation/repositories?per_page=100&page=${page}`,
       );
-      repositories.push(...response.map(toRemoteRepository));
-      if (response.length < 100) break;
+      repositories.push(...response.repositories.map(toRemoteRepository));
+      if (response.repositories.length < 100) break;
     }
     return repositories;
   }
@@ -218,27 +259,96 @@ export class GitHub {
   }
 
   async requestForConnection<T>(connectionId: string, path: string, init: RequestInit = {}): Promise<T> {
-    const connection = await this.requireConnection(connectionId);
-    return this.request<T>(connection, path, init);
+    return this.request<T>(await this.requireConnection(connectionId), path, init);
   }
 
   async tokenForConnection(connectionId: string): Promise<string> {
-    const connection = await this.freshConnection(await this.requireConnection(connectionId));
-    return decrypt(connection.token_ciphertext, this.requireConfig().encryptionKey);
+    return (await this.installationToken(await this.requireConnection(connectionId))).token;
+  }
+
+  private async consumeState(stateToken: string): Promise<ConnectionStateRow> {
+    const now = Date.now();
+    const [row] = await this.sql<ConnectionStateRow[]>`
+      UPDATE git_connection_states SET consumed_at = ${now}
+      WHERE token_hash = ${hashState(stateToken)}
+        AND consumed_at IS NULL
+        AND expires_at > ${now}
+      RETURNING actor_id, workspace_id, callback_uri, return_origin, expires_at
+    `;
+    if (!row) throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired or was already used; start again");
+    return row;
+  }
+
+  private async userCanAccessInstallation(userToken: string, installationId: string): Promise<boolean> {
+    for (let page = 1; page <= 10; page += 1) {
+      const response = await this.githubFetch(
+        userToken,
+        `/user/installations?per_page=100&page=${page}`,
+      );
+      if (!response.ok) throw new ApiError(502, "GITHUB_AUTH_FAILED", "GitHub could not verify the installation owner");
+      const body = (await response.json()) as { installations?: { id: number }[] };
+      const installations = body.installations ?? [];
+      if (installations.some((installation) => String(installation.id) === installationId)) return true;
+      if (installations.length < 100) return false;
+    }
+    return false;
   }
 
   private async request<T>(connection: ConnectionRow, path: string, init: RequestInit = {}): Promise<T> {
-    const fresh = await this.freshConnection(connection);
-    const token = decrypt(fresh.token_ciphertext, this.requireConfig().encryptionKey);
+    const token = (await this.installationToken(connection)).token;
     const response = await this.githubFetch(token, path, init);
-    if (response.status === 401 || response.status === 403) {
-      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub access expired or lacks permission; reconnect the account");
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub App access changed; reconnect or update the installation");
     }
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { message?: string };
-      throw new ApiError(response.status === 404 ? 404 : 502, "GITHUB_REQUEST_FAILED", body.message ?? `GitHub returned ${response.status}`);
+      throw new ApiError(502, "GITHUB_REQUEST_FAILED", body.message ?? `GitHub returned ${response.status}`);
     }
     return (await response.json()) as T;
+  }
+
+  private installationToken(connection: ConnectionRow): Promise<InstallationToken> {
+    if (!connection.installation_id) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "install the GitHub App first");
+    const cached = this.installationTokens.get(connection.id);
+    if (cached) return cached;
+    const creating = this.createInstallationToken(connection.installation_id).finally(() => {
+      void creating.then((token) => {
+        const delay = Math.max(0, token.expiresAt - Date.now() - 60_000);
+        const timer = setTimeout(() => this.installationTokens.delete(connection.id), delay);
+        timer.unref?.();
+      }, () => this.installationTokens.delete(connection.id));
+    });
+    this.installationTokens.set(connection.id, creating);
+    return creating;
+  }
+
+  private async createInstallationToken(installationId: string): Promise<InstallationToken> {
+    const response = await this.appFetch(`/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const body = (await response.json()) as GitHubInstallationTokenResponse;
+    if (!response.ok || !body.token || !body.expires_at) {
+      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub App installation is unavailable; reconnect it");
+    }
+    const expiresAt = Date.parse(body.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      throw new ApiError(502, "GITHUB_RESPONSE_INVALID", "GitHub returned an invalid installation token expiry");
+    }
+    return { token: body.token, expiresAt };
+  }
+
+  private async appRequest<T>(path: string): Promise<T> {
+    const response = await this.appFetch(path);
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { message?: string };
+      throw new ApiError(502, "GITHUB_APP_REQUEST_FAILED", body.message ?? `GitHub returned ${response.status}`);
+    }
+    return (await response.json()) as T;
+  }
+
+  private appFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    return this.githubFetch(this.appJwt(), path, init);
   }
 
   private githubFetch(token: string, path: string, init: RequestInit = {}): Promise<Response> {
@@ -256,99 +366,52 @@ export class GitHub {
     });
   }
 
-  private freshConnection(connection: ConnectionRow): Promise<ConnectionRow> {
-    if (!connection.token_expires_at || connection.token_expires_at > Date.now() + 60_000) return Promise.resolve(connection);
-    const active = this.refreshes.get(connection.id);
-    if (active) return active;
-    const refreshing = this.refreshConnection(connection).finally(() => this.refreshes.delete(connection.id));
-    this.refreshes.set(connection.id, refreshing);
-    return refreshing;
-  }
-
-  private async refreshConnection(connection: ConnectionRow): Promise<ConnectionRow> {
-    if (!connection.refresh_token_ciphertext) {
-      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub access expired; reconnect the account");
-    }
+  private appJwt(): string {
     const config = this.requireConfig();
-    const response = await this.fetcher("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        grant_type: "refresh_token",
-        refresh_token: decrypt(connection.refresh_token_ciphertext, config.encryptionKey),
-      }),
-    });
-    const body = (await response.json()) as OAuthTokenResponse;
-    if (!response.ok || !body.access_token) {
-      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", body.error_description ?? "GitHub access expired; reconnect the account");
-    }
-    const now = Date.now();
-    const refreshed = {
-      ...connection,
-      token_ciphertext: encrypt(body.access_token, config.encryptionKey),
-      refresh_token_ciphertext: body.refresh_token
-        ? encrypt(body.refresh_token, config.encryptionKey)
-        : connection.refresh_token_ciphertext,
-      token_expires_at: body.expires_in ? now + body.expires_in * 1000 : null,
-    };
-    const updated = await this.sql`
-      UPDATE git_connections SET
-        token_ciphertext = ${refreshed.token_ciphertext},
-        refresh_token_ciphertext = ${refreshed.refresh_token_ciphertext},
-        token_expires_at = ${refreshed.token_expires_at},
-        updated_at = ${now}
-      WHERE id = ${connection.id} AND revoked_at IS NULL
-      RETURNING id
-    `;
-    if (updated.length === 0) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub was disconnected while refreshing");
-    return refreshed;
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 9 * 60, iss: config.appId })).toString("base64url");
+    const unsigned = `${header}.${payload}`;
+    const signature = sign("RSA-SHA256", Buffer.from(unsigned), config.privateKey).toString("base64url");
+    return `${unsigned}.${signature}`;
   }
 
   private async requireConnectionForActor(actorId: string): Promise<ConnectionRow> {
     const [row] = await this.sql<ConnectionRow[]>`
       SELECT * FROM git_connections
-      WHERE actor_id = ${actorId} AND provider = 'github' AND revoked_at IS NULL
+      WHERE actor_id = ${actorId}
+        AND provider = 'github'
+        AND installation_id IS NOT NULL
+        AND revoked_at IS NULL
     `;
-    if (!row) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "connect GitHub first");
+    if (!row) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "install the GitHub App first");
     return row;
   }
 
   private async requireConnection(connectionId: string): Promise<ConnectionRow> {
     const [row] = await this.sql<ConnectionRow[]>`
-      SELECT * FROM git_connections WHERE id = ${connectionId} AND revoked_at IS NULL
+      SELECT * FROM git_connections
+      WHERE id = ${connectionId}
+        AND installation_id IS NOT NULL
+        AND revoked_at IS NULL
     `;
-    if (!row) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "the repository owner's GitHub account must be reconnected");
+    if (!row) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "the repository owner's GitHub App installation must be reconnected");
     return row;
   }
 
   private requireConfig(): GitHubConfig {
-    if (!this.config) throw new ApiError(501, "GITHUB_UNAVAILABLE", "GitHub integration is not configured");
+    if (!this.config) throw new ApiError(501, "GITHUB_UNAVAILABLE", "GitHub App integration is not configured");
     return this.config;
   }
-
-  private sweepStates(): void {
-    const now = Date.now();
-    for (const [token, state] of this.states) {
-      if (state.expiresAt <= now) this.states.delete(token);
-    }
-  }
 }
 
-function encrypt(value: string, key: Buffer): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return `v1.${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${ciphertext.toString("base64url")}`;
+function hashState(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
-function decrypt(value: string, key: Buffer): string {
-  const [version, iv, tag, ciphertext] = value.split(".");
-  if (version !== "v1" || !iv || !tag || !ciphertext) throw new Error("unsupported Git credential ciphertext");
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
-  return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64url")), decipher.final()]).toString("utf8");
+function installationIdValue(value: string): string {
+  if (!/^\d{1,20}$/.test(value)) throw new ApiError(400, "BAD_INSTALLATION", "GitHub installation id is invalid");
+  return value;
 }
 
 function toAccount(row: ConnectionRow): GitAccount {
@@ -383,11 +446,11 @@ function validatedOrigin(value: string): string {
   try {
     url = new URL(value);
   } catch (error) {
-    if (error instanceof TypeError) throw new ApiError(400, "BAD_ORIGIN", "OAuth origin must be an absolute http(s) origin");
+    if (error instanceof TypeError) throw new ApiError(400, "BAD_ORIGIN", "GitHub origin must be an absolute http(s) origin");
     throw error;
   }
   if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
-    throw new ApiError(400, "BAD_ORIGIN", "OAuth origin must be an absolute http(s) origin");
+    throw new ApiError(400, "BAD_ORIGIN", "GitHub origin must be an absolute http(s) origin");
   }
   return url.origin;
 }

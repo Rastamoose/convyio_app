@@ -169,12 +169,34 @@ export function ResourcesView() {
   };
 
   const revokeNode = async (node: ToolmanNodeSummary) => {
-    if (!window.confirm(`Remove ${node.name}? Its shared folders become unavailable from this device.`)) return;
-    const response = await apiFetch(`/api/toolman/nodes/${node.id}`, { method: "DELETE" });
+    if (!window.confirm(`Revoke ${node.name}? Its credential will stop working, but the device record and folders remain.`)) return;
+    const response = await apiFetch(`/api/toolman/nodes/${node.id}/revoke`, { method: "POST" });
     if (!response?.ok) {
-      setError(response ? await responseError(response, "Could not remove device") : "Not connected");
+      setError(response ? await responseError(response, "Could not revoke device") : "Not connected");
       return;
     }
+    await load();
+  };
+
+  const removeNode = async (node: ToolmanNodeSummary) => {
+    if (!window.confirm(`Permanently delete ${node.name}? Its shared mounts and mount-bound assignments will be removed. Local files stay on the device.`)) return;
+    const response = await apiFetch(`/api/toolman/nodes/${node.id}/permanent`, { method: "DELETE" });
+    if (!response?.ok) {
+      setError(response ? await responseError(response, "Could not delete device") : "Not connected");
+      return;
+    }
+    setError(null);
+    await load();
+  };
+
+  const removeFolder = async (project: Project, mount: ProjectMount, node: ToolmanNodeSummary) => {
+    if (!window.confirm(`Remove ${project.name} from ${node.name}? The files stay on that device.`)) return;
+    const response = await apiFetch(`/api/projects/${project.id}/mounts/${mount.id}`, { method: "DELETE" });
+    if (!response?.ok) {
+      setError(response ? await responseError(response, "Could not remove folder") : "Not connected");
+      return;
+    }
+    setError(null);
     await load();
   };
 
@@ -296,7 +318,9 @@ export function ResourcesView() {
                   onMode={setAccessMode}
                   onAssign={assign}
                   onRevokeAssignment={revokeAssignment}
+                  onRemoveFolder={removeFolder}
                   onRevokeNode={revokeNode}
+                  onRemoveNode={removeNode}
                   apiFetch={apiFetch}
                 />
               ))}
@@ -403,7 +427,9 @@ function DeviceTree({
   onMode,
   onAssign,
   onRevokeAssignment,
+  onRemoveFolder,
   onRevokeNode,
+  onRemoveNode,
 }: {
   node: ToolmanNodeSummary;
   folders: Array<{ project: Project; mount: ProjectMount }>;
@@ -415,7 +441,9 @@ function DeviceTree({
   onMode?: (project: Project, mode: FolderAccessMode) => Promise<void>;
   onAssign?: (project: Project, agentId: string, mountId?: string) => Promise<void>;
   onRevokeAssignment?: (project: Project, agentId: string) => Promise<void>;
+  onRemoveFolder?: (project: Project, mount: ProjectMount, node: ToolmanNodeSummary) => Promise<void>;
   onRevokeNode?: (node: ToolmanNodeSummary) => Promise<void>;
+  onRemoveNode?: (node: ToolmanNodeSummary) => Promise<void>;
 }) {
   const nodeOnline = !node.revokedAt && node.health === "ready";
   return (
@@ -432,10 +460,19 @@ function DeviceTree({
           {canManage && onRevokeNode && !node.revokedAt && (
             <button
               onClick={() => void onRevokeNode(node)}
-              className="cursor-pointer text-xs font-medium text-muted hover:text-dead"
-              aria-label={`Remove device ${node.name}`}
+              className="cursor-pointer text-xs font-medium text-muted hover:text-body"
+              aria-label={`Revoke device ${node.name}`}
             >
-              Remove
+              Revoke
+            </button>
+          )}
+          {canManage && onRemoveNode && Boolean(node.revokedAt) && (
+            <button
+              onClick={() => void onRemoveNode(node)}
+              className="cursor-pointer text-xs font-medium text-muted hover:text-dead"
+              aria-label={`Delete device ${node.name}`}
+            >
+              Delete
             </button>
           )}
         </div>
@@ -454,12 +491,14 @@ function DeviceTree({
               detail={details[project.id]}
               ownerOnline={ownerOnline}
               nodeOnline={nodeOnline}
+              nodeName={node.name}
               agents={agents}
               apiFetch={apiFetch}
               canManage={canManage}
               onMode={onMode}
               onAssign={onAssign}
               onRevokeAssignment={onRevokeAssignment}
+              onRemoveFolder={onRemoveFolder ? (targetProject, targetMount) => onRemoveFolder(targetProject, targetMount, node) : undefined}
             />
           ))}
         </div>
@@ -474,24 +513,28 @@ function FolderRow({
   detail,
   ownerOnline,
   nodeOnline = false,
+  nodeName,
   agents,
   apiFetch,
   canManage,
   onMode,
   onAssign,
   onRevokeAssignment,
+  onRemoveFolder,
 }: {
   project: Project;
   mount?: ProjectMount;
   detail?: ProjectDetail;
   ownerOnline: boolean;
   nodeOnline?: boolean;
+  nodeName?: string;
   agents: Actor[];
   apiFetch: ApiFetch;
   canManage?: boolean;
   onMode?: (project: Project, mode: FolderAccessMode) => Promise<void>;
   onAssign?: (project: Project, agentId: string, mountId?: string) => Promise<void>;
   onRevokeAssignment?: (project: Project, agentId: string) => Promise<void>;
+  onRemoveFolder?: (project: Project, mount: ProjectMount) => Promise<void>;
 }) {
   const [filesOpen, setFilesOpen] = useState(false);
   const assignments = detail?.assignments ?? [];
@@ -573,14 +616,25 @@ function FolderRow({
           )
         )}
         {canManage && mount && (
-          <button
-            onClick={() => setFilesOpen((open) => !open)}
-            disabled={!nodeOnline}
-            className="cursor-pointer text-xs font-semibold text-accent disabled:cursor-not-allowed disabled:text-muted"
-            aria-expanded={filesOpen}
-          >
-            {filesOpen ? "Close files" : "Open files"}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setFilesOpen((open) => !open)}
+              disabled={!nodeOnline}
+              className="cursor-pointer text-xs font-semibold text-accent disabled:cursor-not-allowed disabled:text-muted"
+              aria-expanded={filesOpen}
+            >
+              {filesOpen ? "Close files" : "Open files"}
+            </button>
+            {onRemoveFolder && (
+              <button
+                onClick={() => void onRemoveFolder(project, mount)}
+                className="cursor-pointer text-xs font-medium text-muted hover:text-dead"
+                aria-label={`Remove folder ${project.name}${nodeName ? ` from ${nodeName}` : ""}`}
+              >
+                Remove folder
+              </button>
+            )}
+          </div>
         )}
       </div>
       {filesOpen && mount && (

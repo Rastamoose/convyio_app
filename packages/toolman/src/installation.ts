@@ -122,21 +122,75 @@ export async function listInstallations(env: NodeJS.ProcessEnv = process.env): P
   return loaded;
 }
 
-export async function installationHealth(
+export async function savePairedInstallation(
+  installation: StoredToolman,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const previous = (await listInstallations(env)).find((item) => item.node.id === installation.node.id);
+  return saveInstallation({ ...installation, mounts: previous?.mounts ?? installation.mounts }, env);
+}
+
+export interface InstallationStatus {
+  health: "ready" | "offline" | "revoked" | "unreachable";
+  mounts: Array<{ mountKey: string; projectId: string }> | null;
+}
+
+export async function installationStatus(
   installation: StoredToolman,
   fetcher: typeof fetch = fetch,
-): Promise<"ready" | "offline" | "revoked" | "unreachable"> {
+): Promise<InstallationStatus> {
   try {
     const response = await fetcher(new URL("/api/toolman/installation", installation.serverOrigin), {
       headers: { Authorization: `Bearer ${installation.installationToken}` },
+      signal: AbortSignal.timeout(10_000),
     });
-    if (response.status === 401) return "revoked";
-    if (!response.ok) return "unreachable";
-    const parsed = z.object({ node: z.object({ health: z.enum(["ready", "offline"]) }) }).safeParse(await response.json());
-    return parsed.success ? parsed.data.node.health : "unreachable";
+    if (response.status === 401) return { health: "revoked", mounts: null };
+    if (!response.ok) return { health: "unreachable", mounts: null };
+    const parsed = z.object({
+      node: z.object({ health: z.enum(["ready", "offline"]) }),
+      mounts: z.array(z.object({ mountKey: z.string().min(1), projectId: z.string().min(1) })).optional(),
+    }).safeParse(await response.json());
+    return parsed.success
+      ? { health: parsed.data.node.health, mounts: parsed.data.mounts ?? null }
+      : { health: "unreachable", mounts: null };
   } catch {
-    return "unreachable";
+    return { health: "unreachable", mounts: null };
   }
+}
+
+export async function installationHealth(
+  installation: StoredToolman,
+  fetcher: typeof fetch = fetch,
+): Promise<InstallationStatus["health"]> {
+  return (await installationStatus(installation, fetcher)).health;
+}
+
+export async function prepareInstallationForRun(
+  installation: StoredToolman,
+  fetcher: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StoredToolman> {
+  const status = await installationStatus(installation, fetcher);
+  if (status.health === "revoked") {
+    throw new Error(
+      `Toolman node ${installation.node.name} was revoked. Create a new pairing for the same device name in Resources, then run the pair command again.`,
+    );
+  }
+  return reconcileInstallationMounts(installation, status, env);
+}
+
+export async function reconcileInstallationMounts(
+  installation: StoredToolman,
+  status: InstallationStatus,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StoredToolman> {
+  if (!status.mounts) return installation;
+  const active = new Set(status.mounts.map((mount) => mount.mountKey));
+  const mounts = installation.mounts.filter((mount) => active.has(mount.mountKey));
+  if (mounts.length === installation.mounts.length) return installation;
+  const reconciled = { ...installation, mounts };
+  await saveInstallation(reconciled, env);
+  return reconciled;
 }
 
 export async function clearInstallations(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch): Promise<string[]> {

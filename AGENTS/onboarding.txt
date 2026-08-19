@@ -1,779 +1,682 @@
-CONVYIO VALUE-FIRST ONBOARDING RESEARCH AND EXECUTION PLAN
+CONVYIO DIFFERENTIATED ONBOARDING SPECIFICATION
 
-Status: approved research and implementation direction
+Status: canonical onboarding direction
+Aligned with: AGENTS/PRODUCT_DIRECTION.md
 Prepared: 2026-08-19
 
 PURPOSE
 
-Convyio needs a first-signup onboarding experience that immediately communicates why the product matters, produces a useful result, introduces its unusual human-agent workflow, and then gets out of the user's way.
+Convyio onboarding must prevent the two most likely incorrect mental models:
 
-The experience must not become a passive feature parade. The strongest research consistently finds that forced tutorials interrupt users, are quickly forgotten, and rarely improve task performance. Convyio should instead combine:
+- Slack or Discord with bots;
+- a generic multi-agent orchestration or swarm program.
 
-1. A short, cinematic visual orientation using noodle and spotlighted UI.
-2. A real first task where the user receives useful output from noodle.
-3. A persistent, contextual setup guide that introduces controlled work, projects, agents, and collaboration only when relevant.
+The experience must establish a different system of work:
 
-The product thesis is already captured in packages/server/assets/demo/scripts/copy.json:
+- conversation is the canonical work surface;
+- shared context changes the plan before execution;
+- responsibility and authority become explicit;
+- agent work remains visible;
+- the result returns to the same thread with evidence;
+- other planes are projections or resource controls, not disconnected products.
 
-    The product is the room, not the model.
+A generic noodle response is not differentiated activation. The onboarding succeeds when a selected ICP user understands and begins the shared, governed work loop.
 
-The onboarding must prove that idea rather than explain every control.
 
+1. FIVE-MINUTE STANDARD
 
-1. THE VALUE USERS MUST UNDERSTAND
+Within five minutes, a correctly selected user should be able to explain Convyio in language equivalent to:
 
-By the end of their first session, users should understand that Convyio gives them:
+    Convyio is where our team turns shared context into approved agent work and gets back a result we can review.
 
-- An answer: research, synthesis, drafting, or a recommendation.
-- A plan: ordered work with objectives, ownership, and completion criteria.
-- A controlled change: agent work bounded by human-approved scope and permissions.
-- Proof: visible activity, decisions, outputs, and completion evidence.
-- A shared room: teammates and agents retain the same context instead of working in isolated chat sessions.
+The following explanations indicate failure:
 
-The practical output model should be communicated in outcome language rather than feature language:
+- Slack with a bot.
+- Another coding agent.
+- A multi-agent framework.
+- A swarm dashboard.
+- A chat app with a Board tab.
+- A project-management system with AI.
 
-- Get an answer.
-- Get a plan.
-- Get a change.
-- Get proof.
-- Keep the whole team in context.
+The standard is comprehension and felt differentiation, not universal subjective affection. Product, message, audience and proof should be refined until nearly every correctly selected ICP participant reaches the right mental model quickly.
 
-This is substantially stronger than merely introducing Chat, Board, Projects, and Resources as navigation labels.
 
+2. AUDIENCE
 
-2. RESEARCH FINDINGS
+Primary wedge:
 
-2.1 Tutorials versus contextual help
+    A 2–10 person technical team running several independently owned coding agents against the same product under deadline.
 
-Nielsen Norman Group's research finds that launch-time tutorials and push revelations:
+The first user may arrive alone. Do not require an invite, GitHub connection, local-folder pairing or user-owned agent before first value.
 
-- interrupt users who already want to begin a task;
-- present information before it has useful context;
-- depend on limited working memory;
-- are frequently skipped;
-- often fail to improve later task performance.
+Strong initial jobs:
 
-Guidance is more effective when it appears at the moment a user can apply it. For Convyio, that means a short optional orientation followed by contextual help attached to real work.
+- investigate a bug before anyone changes code;
+- turn a feature idea into a plan the team can trust;
+- untangle a change that keeps returning from review;
+- coordinate a release, hotfix or client delivery across mixed agent tooling.
 
-Source:
-https://www.nngroup.com/articles/onboarding-tutorials/
+The first-run path should infer intent from the work the user chooses instead of adding a persona questionnaire.
 
-2.2 Empty states must show a path to value
 
-An empty or unexplained workspace reduces confidence. Empty states should communicate system status, demonstrate what success looks like, and provide a direct path to a key task.
+3. ONBOARDING ARCHITECTURE
 
-Convyio already avoids a completely blank workspace by creating noodle and three welcome messages. The remaining problem is that these messages explain the product without making the user experience its value.
+The complete system has four layers:
 
-Source:
-https://www.nngroup.com/articles/empty-state-interface-design/
+1. Canonical demo/video: establish the category and prove the full loop.
+2. Real-work activation: apply the first half of the loop to the user's work.
+3. Persistent getting-started guide: continue into projects, local agents and teammates.
+4. Contextual guidance: explain unfamiliar decisions at the moment they occur.
 
-2.3 Progressive disclosure
+The demo and real-work activation are distinct:
 
-Users want both power and simplicity. Progressive disclosure resolves this by showing only the few actions most likely to matter now, then revealing advanced capabilities when requested or contextually relevant.
+- The demo guarantees comprehension without setup or model latency.
+- The real-work path proves that Convyio is useful beyond a scripted example.
 
-For Convyio:
+Both use the same product language and visual artifacts.
 
-- First session: ask noodle something useful.
-- After a reply: introduce plans and controlled work.
-- At the first proposal: explain scope and approval.
-- At the first project visit: explain repositories and outputs.
-- At the first Resources visit: explain selected-folder isolation.
-- At Add Agent: explain local credentials and pairing.
 
-Source:
-https://www.nngroup.com/articles/progressive-disclosure/
+4. FIRST EXPERIENCE: THE CANONICAL DEMO PLAYS FIRST
 
-2.4 Learn by doing
+The first visual onboarding experience is a short, polished demo of the differentiated loop.
 
-Intercom's Product Tours research uses three useful principles:
+It appears over the connected starter workspace after the welcome frame is ready. The user may skip immediately and begin using the product.
 
-- Learn by doing, not passive reading.
-- Orient guidance around the user's aha moment.
-- Measure whether onboarding affects meaningful activation rather than tour completion.
+The demo should be the same canonical story used on the landing page. The app onboarding implementation is its source of truth.
 
-Convyio's first useful action must therefore go through the real composer and the real noodle runner. It must not be a simulated chat animation.
+Opening frame:
 
-Source:
-https://www.intercom.com/blog/building-product-tours/
+    Agent work usually becomes team work at review.
+    That is too late.
 
-2.5 Activation must predict retention
+Visual contrast:
 
-PostHog defines activation as a set of actions correlated with later retention. Completing a tutorial is not inherently activation. A product team should test multiple candidate event groups against retained usage.
+    Private prompt -> work -> review -> missing constraint -> redo
 
-Initial Convyio hypotheses are:
+    Shared request -> constraint -> approved scope -> work -> evidence
 
-- First value: a human addresses an agent and receives a reply.
-- Trust activation: a human accepts a plan or approves/denies scoped work.
-- Work activation: a ticket reaches done with evidence, or a connected project produces a reviewable change.
-- Collaboration activation: a second human or user-owned agent participates.
+The video then enters the real Convyio interface and shows one causal thread.
 
-These are hypotheses to validate against retention, not permanent definitions.
 
-Source:
-https://posthog.com/product-engineers/activation-metrics
+5. CANONICAL BILLING SCENARIO
 
-2.6 Time to activation is not time to value
+The billing bug is the primary demo because it proves why the shared conversation changes the result.
 
-Amplitude distinguishes completing a product action from receiving the benefit of that action. Creating an object or completing setup can be activation without giving the user a reason to return.
+Scenario:
 
-Convyio should measure both:
+1. Maya reports that multi-currency invoice totals disagree.
+2. Tom confirms the UI, PDF and ledger show different numbers.
+3. Noodle is asked to investigate without changing code.
+4. Noodle reads the relevant project and produces an inline PlanCard.
+5. The initial plan would normalize rounding across surfaces.
+6. Tom adds a constraint that exists only in conversation: ledger output must continue matching historical Stripe charges exactly.
+7. The Plan visibly changes before execution.
+8. The viewer performs the human acceptance/approval action.
+9. Convyio routes bounded work to the responsible agent and project.
+10. Progress and any permission decision remain in the origin thread.
+11. A ResultCard returns showing:
+    - invoice and PDF agreement;
+    - ledger behavior deliberately unchanged;
+    - affected files;
+    - checks run;
+    - acceptance evidence;
+    - links to Plan, Ticket and full trace.
 
-- Time from workspace connection to first prompt.
-- Time from first prompt to a useful agent reply.
-- Time from first reply to the first governed work decision.
+Core caption:
 
-Source:
-https://amplitude.com/blog/time-to-value-drives-user-retention
+    The constraint arrived before the code, not in review after it.
 
-2.7 Strong product precedents
+The demo must not auto-approve on behalf of the viewer. The user must make at least one consequential decision.
 
-GitHub's refreshed new-user dashboard uses a small set of interactive, dismissible getting-started tasks and removes secondary distraction during the early learning period.
+If the landing-page version must remain passive, visibly animate the viewer's decision but label the demo as a product walkthrough. The in-app version should make the decision interactive.
 
-Source:
-https://github.blog/changelog/2025-06-12-new-user-dashboard-refresh/
 
-Linear makes its first-time introduction replayable from the command menu, acknowledging that first-use education must remain available later.
+6. DEMO VIDEO STORYBOARD
 
-Source:
-https://linear.app/changelog/2019-05-09-first-time-user-experience
+Suggested narrative spine:
 
-Cursor's official quickstart moves from understanding context to one small useful change and then reviewing the result. This is a strong model for agent onboarding: orient, act, inspect.
+0–6 seconds
 
-Source:
-https://cursor.com/docs/get-started/quickstart
+    Agent work normally becomes team work at review.
+    That is too late.
 
-2.8 Accessibility requirements
+Show the old causal chain and the late constraint/rework moment.
 
-Native modal dialog behavior is preferable during passive showcase steps because the browser supplies:
+6–15 seconds
 
-- initial focus movement;
-- focus containment;
-- inert background content;
-- Escape handling;
-- focus restoration.
+Enter a Convyio thread. Maya and Tom establish the billing problem.
 
-The underlying product must not remain keyboard-focusable while visually obscured by a blur layer. Real product interaction should happen only after the showcase dialog closes.
+15–25 seconds
 
-Source:
-https://www.w3.org/WAI/WCAG21/Techniques/html/H102
+Noodle investigates read-only. Visible state says it is understanding the work, not merely typing. An inline PlanCard appears.
 
-Motion must respect prefers-reduced-motion. Large movement, scaling, panning, or continuous mascot animation is unnecessary. Reduced-motion mode should use immediate state changes or restrained opacity transitions.
+25–35 seconds
 
-Source:
-https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/@media/prefers-reduced-motion
+Tom adds the ledger constraint. Highlight the exact Plan change:
 
+    Changed before execution
+    Ledger output must remain identical to existing Stripe charges.
 
-3. CURRENT CONVYIO FOUNDATION
+35–43 seconds
 
-3.1 Signup and workspace creation
+The viewer accepts the corrected Plan and approves the bounded next Ticket. Show human language:
 
-- packages/server/src/auth/Auth.ts creates the permanent human actor and first workspace.
-- The starter workspace is named `{displayName}'s workspace`.
-- packages/server/src/auth/WorkspaceAccess.ts creates the workspace, owner membership, #general, join notice, and managed noodle state.
-- packages/client/src/App.tsx automatically opens a sole workspace after account resolution.
-- Invite continuation already takes precedence over automatic workspace selection.
+    Owner: noodle
+    Resource: billing project
+    May change: invoice render and PDF export
+    Must preserve: ledger output
+    Done when: totals agree and ledger fixtures remain unchanged
 
-3.2 Noodle
+43–55 seconds
 
-packages/server/src/managedAgents.ts creates a workspace-scoped managed noodle actor and three one-time messages. Noodle is an existing product capability, not a client-side persona.
+Show the shell routing approved work, live agent status and one concise permission checkpoint if it clarifies the product. Avoid long raw traces.
 
-The current messages introduce the workspace and suggest @noodle, but the third message compares noodle negatively to other agents before the user has experienced value. The copy should become a concise fallback for users who skip the visual onboarding and should reinforce the value-first flow.
+55–68 seconds
 
-3.3 Product surfaces
+Show the ResultCard with output and verification.
 
-The client already provides the complete capability map:
+68–75 seconds
 
-- Chat and durable history in MessageList and MessageInput.
-- Visible agent presence and run state in Sidebar.
-- Plans, tickets, owner, scope, criteria, and lifecycle in BoardView.
-- Inline ProposalCard and PermissionCard approval surfaces.
-- GitHub repositories, branches, commits, issues, and pull requests in GitProjectsView.
-- Selected local folder sharing and Toolman access modes in ResourcesView.
-- Local agent creation, pairing, instructions, model, and access in AddAgentModal.
-- Workspace switching, settings, and membership management.
+Close on:
 
-3.4 Existing design system
+    Same agents. Different system of work.
 
-AGENTS/DESIGN.md requires:
+    Convyio keeps the conversation, the decision, the work and the proof in one thread.
 
-- calm canvas, warm signal;
-- one amber accent;
-- flat surfaces and no gradients;
-- glass only for floating surfaces through the elevated utility;
-- semantic color tokens;
-- restrained animation;
-- both light and dark themes designed independently;
-- personality through voice and small moments rather than decorated chrome.
+Duration may change after user testing. Clarity outranks a fixed runtime.
 
-The onboarding must follow this contract rather than introduce a separate marketing-site visual language.
 
-3.5 Missing pieces
+7. DEMO ACCESSIBILITY AND PLAYBACK
 
-- No production first-run state exists.
-- `convyio:opened:*` appears only in client tests.
-- useChatMessages contains a stale comment claiming first-run welcome pacing lives in Workspace, but no pacing exists.
-- No reduced-motion media treatment exists.
-- No product analytics provider or onboarding funnel exists.
-- No onboarding or positioning dependency is installed.
+- No autoplay audio.
+- Provide captions/transcript.
+- Provide pause, replay and skip.
+- Respect prefers-reduced-motion.
+- Reduced-motion users receive a concise poster/storyboard with the same causal sequence.
+- The first frame must explain what will be learned.
+- Do not force the user to wait for playback before entering the product.
+- Focus must move into modal playback and return correctly on close.
+- The demo must work at narrow viewport widths and 200% zoom.
+- The demo must not claim behavior absent from current architecture.
 
 
-4. PROPOSED EXPERIENCE
+8. TRANSITION FROM DEMO TO REAL WORK
 
-The complete experience has three layers.
+After the demo:
 
-
-LAYER 1: NOODLE'S FIRST 90 SECONDS
-
-The visual orientation is automatically offered on the first starter-workspace entry. It is optional, pausable, skippable, and replayable.
-
-Beat 0: The promise
-
-The complete workspace remains visible but is softly dimmed and blurred. A centered elevated card uses the favicon mascot.
-
-Headline:
-    Your workspace already has a teammate.
-
-Body:
-    Convyio is where people and agents share context, turn conversation into accountable work, and keep every result visible.
+    Now use the first half of that loop on something real.
 
 Primary action:
-    Show me — about 90 seconds
 
-Secondary action:
-    Let me explore
+    Bring one piece of work
 
-No feature list is shown yet.
+Secondary actions:
 
-Beat 1: Meet noodle
+    Replay the example
+    Explore on my own
 
-Spotlight noodle's participant row.
+Do not ask the user to create channels, configure a Board, connect GitHub, add an agent or invite a teammate yet.
 
-Headline:
-    I'm noodle. Ask me something real.
 
-Body:
-    I'm already connected. Amber means I'm working, red means I'm waiting on you, and gray means I'm offline.
+9. REAL-WORK STARTERS
 
-This teaches identity, availability, and transparent presence rather than merely identifying the sidebar.
+Offer job-based starters:
 
-Beat 2: Get the first win
+- Investigate a bug before anyone changes code.
+- Turn a feature idea into a scoped plan.
+- Untangle a change that keeps returning from review.
+- Describe something I am working on.
 
-Spotlight the conversation and composer, then leave modal showcase mode so the actual composer becomes usable.
+Each option prefills the real composer with an editable @noodle request.
 
-Offer outcome-based starters:
+Example: investigate before coding
 
-- Shape an idea into a plan.
-- Research a decision.
-- Draft something useful.
-- Show me a safe workflow.
+    @noodle Help me investigate this before anyone changes code: [describe the problem]. Surface the assumptions, constraints and missing context, then propose a plan. Do not modify anything.
 
-Each option prefills an editable real prompt mentioning @noodle. The user edits and submits through the existing MessageInput.
+Example: scope a feature
 
-Suggested templates:
+    @noodle Turn this feature idea into a plan the team can review: [describe the idea]. Separate assumptions from known constraints and ask one important question before proposing work.
 
-Shape an idea into a plan:
-    @noodle Help me turn this rough idea into a clear plan: [describe the idea]. Ask one question if important context is missing.
+Example: recurring review rework
 
-Research a decision:
-    @noodle Help me compare the best options for [decision], surface the tradeoffs, and recommend a practical next step.
+    @noodle Help me understand why this work keeps coming back from review: [describe it]. Identify the constraint we are discovering too late and propose a safer plan.
 
-Draft something useful:
-    @noodle Draft [what is needed] for [audience]. Keep it practical and ask one question if context is missing.
 
-Safe workflow:
-    @noodle Show me how Convyio would take a real request from conversation to a reviewed result. Do not change anything.
+10. WORK BRIEF / PLANCARD
 
-Beat 3: Work remains visible
+The first useful output should be a structured inline PlanCard, not only prose.
 
-While noodle responds, a small non-blocking guide points to noodle's working presence and the live shared timeline.
+The PlanCard should show:
 
-Headline:
-    Agents work in the room, not behind a loading screen.
+- intended outcome;
+- context that matters;
+- assumptions;
+- constraints;
+- open question;
+- proposed approach;
+- acceptance criteria;
+- likely affected resource;
+- proposed owner;
+- changes caused by later information.
 
-Body:
-    You can see who is working, what needs attention, and what came back.
+The card uses the existing canonical Plan record. `Work Brief` may be user-facing language for a concise Plan, not a second data model.
 
-When a reply arrives:
+Inline actions:
 
-Headline:
-    That's your first useful output.
+- Add constraint.
+- Answer question.
+- Edit/refine.
+- Accept.
+- Request changes.
+- Discuss.
+- Open Board view.
 
-Body:
-    It stays here with the conversation that produced it.
+A Plan created in conversation remains in that thread. Board is another view of the same entity.
 
-Use a restrained mascot nod and amber confirmation. Do not use confetti, points, streaks, or gamified rewards.
 
-Beat 4: Conversation becomes controlled work
+11. SOLO MULTIPLAYER MOMENT
 
-Switch to Board and spotlight the workflow.
+Before Plan acceptance, noodle asks:
 
-Headline:
-    A useful answer can become accountable work.
+    What is one thing a reviewer, PM, customer or security owner would not let this work break?
 
-Body:
-    Plans capture the objective. Tickets capture why, expected effect, owner, scope, and what done means.
+The user adds or confirms one meaningful constraint.
 
-If the interaction created a real plan or ticket, spotlight it. Otherwise, show a compact example inside the coach card labeled as an example. Never insert fake durable records into the workspace solely for onboarding.
+The Plan shows the consequence:
 
-Beat 5: Human control and practical outputs
+    Changed before execution
 
-Headline:
-    Nothing changes until a human says yes.
+This gives the solo champion the multiplayer insight without pretending another person is present.
 
-Body:
-    Approve the owner, scope, capabilities, and done criteria. Convyio keeps the request, work, and evidence together.
+Afterward explain:
 
-Show the capability-to-output map:
+    This is where another tool usually discovers the constraint during review. In Convyio, the person who owns it can add it before the work starts.
 
-- Chat: answers, drafts, decisions, and shared context.
-- Board: plans, ownership, scope, approval, and evidence.
-- Projects: repositories, branches, pull requests, issues, and code review.
-- Resources: intentionally shared local folders and tools.
-- Add agent: the user's local agent and subscription, paired without giving Convyio the provider credential.
-- Timeline and item history: decisions, actions, and proof.
+Do not force an invite.
 
-Final line:
-    You are not setting up a chatbot. You are giving your team and its agents one place to think, decide, and ship.
 
+12. CONTROL WITHOUT BUREAUCRACY
 
-LAYER 2: PERSISTENT GETTING-STARTED GUIDE
+Translate internal authority concepts into human questions:
 
-After the visual sequence, onboarding becomes a non-blocking setup panel opened from a quiet Getting started chip or the mascot in the AppBar.
+- Who owns this?
+- Which project or folder does it apply to?
+- What may change?
+- What must remain true?
+- How will we know it is done?
 
-Maximum five milestones:
+Do not initially teach:
 
-1. Get a useful answer from noodle.
-2. Turn a conversation into a plan.
-3. Approve scoped work and inspect its result.
-4. Connect a repository/folder or pair a local agent.
-5. Bring another human or agent into the room.
+- scope_paths;
+- action capability maps;
+- impact-map implementation details;
+- permission-mode architecture;
+- event-envelope terminology.
 
-Each item deep-links to the relevant real surface. The panel is dismissible and replayable. It never permanently blocks workspace use and does not linger indefinitely after being skipped.
+Show that quick read-only asks remain quick. Consequential work gains structure because it changes the world.
 
+The intended feeling is confidence and momentum, not compliance administration.
 
-LAYER 3: CONTEXTUAL ONBOARDING
 
-Later guidance appears only when it can be applied:
+13. EXECUTION AND ORCHESTRATION
 
-- First proposed ticket: explain owner, scope, acceptance criteria, and approval.
-- First permission request: explain that permission mode cannot exceed the board's hard ceiling.
-- First visit to Projects: explain what connecting GitHub practically produces.
-- First visit to Resources: explain selected-folder isolation and owner presence.
-- First Add Agent open: explain local pairing and credential isolation.
-- First teammate invite: explain shared context and durable attribution.
+Show orchestration as a work progression:
 
-These are short, one-time contextual revelations, not another linear tour.
+    Understanding -> Planning -> Waiting for you -> Assigned -> Working -> Verified
 
+When relevant, show:
 
-5. VISUAL DIRECTION
+- the approved owner;
+- the project/resource;
+- current state;
+- the human decision needed;
+- what happens next.
 
-5.1 Spotlight treatment
+Do not show swarm topology, agent graphs or manager/worker jargon.
 
-Use four fixed blur panes around the active target:
+The onboarding must not imply autonomous agent-to-agent delegation. Convyio coordinates responsibility, authority, project access, durable dispatch and return of results.
 
-- top pane;
-- bottom pane;
-- left middle pane;
-- right middle pane.
 
-This leaves the active target crisp while everything else is dimmed and blurred. It is simpler and more reliable than combining SVG subtraction masks with backdrop-filter.
+14. RESULTCARD
 
-Add a target frame using a semantic divider or accent ring. Do not use a colored border with a lower-opacity version of the same color inside.
+The execution loop ends with a coherent ResultCard in the origin thread.
 
-5.2 Guide card
+Required content:
 
-- Use the existing elevated utility.
-- Use rounded-xl or rounded-2xl for the guide panel.
-- Use semantic tokens only.
-- Use amber for the single primary action, current progress, and active target.
-- Keep copy to a headline and one or two short paragraphs.
-- Use the favicon mascot as noodle's guide identity.
-- Keep mark-yellow as the product mark where brand identity is needed.
+- requested outcome;
+- concise result;
+- what changed;
+- what deliberately did not change;
+- files/artifacts/branch/pull request;
+- checks and verification;
+- acceptance-criteria result;
+- human decisions that affected the run;
+- next recommended action;
+- links to Plan, Ticket, trace, logs and project view.
 
-5.3 Motion
+Raw traces and ToolCards remain inspectable evidence. They are not the primary product output.
 
-- Use one short entrance transition.
-- Use a short position transition between nearby targets only when reduced motion is not requested.
-- Give the mascot a single nod/tilt on step changes.
-- Do not use perpetual mascot bouncing or looping ambient motion.
-- Under prefers-reduced-motion, use immediate positioning and minimal opacity changes.
+The onboarding should explicitly point to ResultCard as the practical thing Convyio produces.
 
-5.4 Responsive behavior
 
-Desktop:
-- place the guide card beside the target when space allows;
-- select the side with the most available room;
-- clamp the panel inside the viewport.
+15. MULTIPLAYER EXPANSION
 
-Mobile/narrow viewport:
-- use a bottom sheet;
-- use 100dvh rather than 100vh;
-- include env(safe-area-inset-bottom);
-- keep the primary action above browser chrome;
-- scroll the target into view before measuring;
-- fall back to an unanchored explanation if the target cannot remain visible.
+After the ResultCard:
 
-5.5 Themes
+    This is the moment another person normally enters in review.
+    Bring them into the next one before the work begins.
 
-Verify every step independently in light and dark mode. Theme changes should update semantic tokens without recalculating hardcoded color values.
+Primary contextual action:
 
+    Invite the person who usually catches this
 
-6. TECHNICAL ARCHITECTURE
+Equal secondary action:
 
-6.1 Durable account-scoped state
+    Keep working solo
 
-Use server-authoritative onboarding state rather than localStorage alone.
+The user can continue without inviting anyone.
 
-A browser-only completion flag would:
 
-- replay on another device;
-- fail to identify the starter workspace robustly;
-- risk opening in an accepted invite workspace;
-- be difficult to distinguish from an existing user creating a later workspace;
-- make cross-device resume impossible.
+16. AGENT AND PROJECT EXPANSION
 
-Add an account_onboarding record containing:
+Only after differentiated value:
 
-- actor_id;
-- workspace_id for the starter workspace;
-- version;
-- status: pending, in_progress, paused, completed, or skipped;
-- current_step;
-- selected first-task intent;
-- started_at;
-- first_prompt_at;
-- first_reply_at;
-- finished_at;
-- updated_at.
+- connect a GitHub repository;
+- share a selected local folder;
+- pair an existing local agent;
+- add another independently owned runtime;
+- invite teammates;
+- explore Board, Projects and Resources projections.
 
-Enable RLS with no policies, matching every other application-owned table.
+Message:
 
-Existing humans are migrated as completed for version 1. Newly provisioned humans receive a pending record tied to their starter workspace.
+    Use the agents your team already runs. Their credentials remain with their owners; Convyio carries the shared mission and authority.
 
-GET /api/account returns the onboarding summary. An authenticated account endpoint advances, pauses, completes, or skips it. The server derives actor identity from the Supabase JWT and never accepts actor identity from the body.
+Do not make setup completion the onboarding goal.
 
-The visual onboarding triggers only when:
 
-- the onboarding state is pending or in progress;
-- the active workspace matches onboarding.workspaceId;
-- the workspace welcome frame has connected;
-- the selected workspace still exists and the user remains a member;
-- no invite continuation is active.
+17. VISUAL ONBOARDING LAYER
 
-Invite acceptance may therefore complete before onboarding. The guide appears only when the user enters their actual starter workspace.
+The first product demo is the main visual education. Spotlight guidance afterward should be brief and contextual.
 
-6.2 Ownership seam
-
-App.tsx:
-- owns account boot;
-- receives onboarding state from /api/account;
-- owns account-level persistence and whether the guide is eligible.
-
-Workspace in App.tsx:
-- owns view, channel, sidebar, queue, settings, and Add Agent navigation;
-- passes navigation callbacks into the guide.
-
-OnboardingGuide:
-- reads participants, messages, runs, plans, board items, agents, and connection status from WorkspaceContext;
-- receives navigation callbacks for changing view, opening the sidebar, opening Add Agent, and prefilling the composer.
-
-This preserves the client invariant that workspace data/actions come from context while navigation remains explicit callbacks.
-
-6.3 Components
-
-Recommended new client units:
-
-- components/SpotlightDialog.tsx
-  Owns visual spotlight measurement, blur panes, coach placement, dialog behavior, and target fallback.
-
-- components/OnboardingGuide.tsx
-  Owns the first-run state machine and copy.
-
-- components/GettingStartedPanel.tsx
-  Owns persistent post-tour milestones and deep links.
-
-- hooks/useOnboarding.ts
-  Owns account onboarding hydration, local session state, and persistence calls.
-
-Recommended server unit:
-
-- auth/AccountOnboardingStore.ts
-  Owns creation, lookup, and monotonic lifecycle updates for account onboarding records.
-
-6.4 Stable targets
-
-Use explicit data attributes rather than style selectors:
-
-- data-onboarding-target="noodle"
-- data-onboarding-target="conversation"
-- data-onboarding-target="composer"
-- data-onboarding-target="board-tab"
-- data-onboarding-target="board-workflow"
-- data-onboarding-target="view-switcher"
-- data-onboarding-target="add-agent"
-
-These attributes document intentional onboarding integration and survive Tailwind/class refactors.
-
-6.5 Showcase mode versus action mode
+Use the favicon mascot as noodle's guide identity and mark-yellow as the brand mark.
 
 Showcase mode:
-- render through a React portal;
-- use native dialog.showModal();
-- background is inert;
-- target is visible but not interactive;
-- actions happen in the guide card;
-- focus begins on the guide heading or primary action;
-- Escape pauses the guide rather than permanently skipping it;
-- close restores focus appropriately.
+
+- native modal dialog or equivalently accessible modal behavior;
+- background inert;
+- underlying product visible but not keyboard-interactive;
+- focus contained in the guide;
+- Escape pauses;
+- explicit skip and replay;
+- focus restored on close.
 
 Action mode:
+
 - close the modal;
-- remove blur and inert state;
-- render inline guidance next to the actual composer or relevant control;
-- allow the user to operate the real product;
-- never obscure the currently focused element.
+- remove blur/inert state;
+- render inline guidance near the real product action;
+- do not obscure the focused control.
 
-6.6 Measurement and target lifecycle
+Stable targets use data-onboarding-target attributes rather than styling selectors.
 
-SpotlightDialog should:
+Potential targets:
 
-- resolve the target by data attribute;
-- measure with getBoundingClientRect in useLayoutEffect;
-- account for the app's current html zoom: 0.9 behavior;
-- remeasure on resize;
-- remeasure on scroll, including nested scroll containers;
-- use ResizeObserver for target size changes;
-- wait for view/sidebar transitions to settle before measuring;
-- use a bounded MutationObserver wait when a target mounts asynchronously;
-- fall back to a centered card instead of failing if the target is absent.
+- canonical conversation;
+- inline PlanCard;
+- approval action;
+- live work state;
+- ResultCard;
+- Board origin link;
+- project/resource connection;
+- Add Agent;
+- invite action.
 
-6.7 Failure behavior
+Do not tour all navigation tabs.
+
+
+18. PERSISTENT GETTING-STARTED GUIDE
+
+The guide should track outcomes, not visited features.
+
+Suggested milestones:
+
+1. Turn real context into an accepted Plan.
+2. Add or confirm a meaningful constraint.
+3. Approve bounded work and inspect the ResultCard.
+4. Connect a real repository/folder or pair a user-owned agent.
+5. Invite a teammate or add another independently owned agent.
+
+The first three define the differentiated product loop. The last two deepen fidelity and multiplayer value.
+
+The guide is dismissible, replayable and non-blocking. It is available from a quiet Getting started control or mascot entry point.
+
+
+19. CONTEXTUAL GUIDANCE
+
+First PlanCard:
+
+    This is the shared understanding the work will use.
+
+First added constraint:
+
+    This changed the plan before execution.
+
+First proposed Ticket:
+
+    You are approving who acts, where, what may change and how the result will be checked.
+
+First permission request:
+
+    The agent reached a human checkpoint. This decision stays attached to the work.
+
+First ResultCard:
+
+    This is the reviewable outcome. Open the trace only when you need the full evidence.
+
+First Board visit:
+
+    Board is another view of the work already living in your conversations.
+
+First Projects visit:
+
+    Projects groups the same work and results by repository.
+
+First Resources visit:
+
+    Share only the folder you choose. Its owner controls which agent may use it.
+
+First Add Agent visit:
+
+    Pair the agent runtime you already trust. Provider credentials stay with its owner.
+
+First invite:
+
+    Invite the person whose context should affect the work before execution.
+
+
+20. FIRST-RUN STATE
+
+Use durable account-scoped onboarding state rather than a browser-only completion flag.
+
+State must identify:
+
+- actor;
+- starter workspace;
+- onboarding version;
+- pending, in_progress, paused, completed or skipped status;
+- current stage;
+- selected real-work intent;
+- started, demo-viewed, Plan-produced, Plan-accepted and finished timestamps.
+
+Existing users are not automatically forced through first-signup onboarding. The complete demo and guide remain manually replayable.
+
+Invite continuation takes precedence. First-signup onboarding appears only in its bound starter workspace.
+
+Server state is authoritative; a small browser cache may suppress duplicate tabs and avoid flicker.
+
+
+21. FAILURE AND RECOVERY
 
 Noodle offline:
-- complete the visual tour;
-- show the real prompt as a resumable milestone;
-- do not imply that a reply is currently available.
 
-Noodle removed:
-- skip noodle-specific live activation;
-- offer an owner-only restore path or Add Agent path without forcing it.
+- The deterministic demo still establishes the product.
+- The real-work step remains resumable.
+- Do not fake a live response.
 
 Noodle slow:
-- after a bounded wait, show Continue while noodle works;
-- keep observing the real reply without blocking navigation.
 
-Socket disconnected:
-- do not begin the live action;
-- show normal connection state and allow pause.
+- Let the user continue while noodle works.
+- Keep the result attached to the original request.
+
+No project connected:
+
+- Complete the Plan/constraint/acceptance path.
+- Offer the canonical example for the full execution proof.
+- Defer project setup.
+
+Noodle removed:
+
+- Explain that the built-in guide is unavailable.
+- Offer owner restore or pair-an-agent later.
+- Do not dead-end product access.
 
 Workspace switch:
-- pause and unmount immediately;
-- never carry tour state or a prompt into another workspace.
+
+- Pause and unmount onboarding.
+- Never carry drafts or progress into another workspace.
 
 Target missing:
-- render an unanchored coach card;
-- never loop, crash, or leave a permanent backdrop.
 
-Storage denied:
-- server state remains authoritative;
-- local duplicate-tab suppression may degrade without blocking the guide.
+- Fall back to an unanchored explanation.
+- Never leave a permanent overlay or retry loop.
 
-Multiple tabs:
-- write a small local cache/lock and listen for storage events so another tab closes a duplicate guide;
-- keep the server record authoritative across devices.
+Provider/demo failure:
+
+- Preserve the pre-recorded/locally defined canonical demonstration.
+- Label live and scripted behavior honestly.
 
 
-7. WELCOME COPY DIRECTION
+22. LANDING-PAGE CONNECTION
 
-Retain three one-time managed welcome messages as a fallback for users who skip onboarding, but revise them to lead with value rather than comparison.
+The landing page and app onboarding tell the same story.
 
-Proposed copy:
+Landing page:
 
-1.
-    Hey {ownerName} — I'm noodle, the little face in the tab and your built-in Convyio guide. I'm already connected, so you can start now.
+- establishes the category POV;
+- immediately shows the canonical demo/video;
+- explains the old workflow concretely;
+- shows the differentiated loop;
+- reduces switching anxiety;
+- asks for early access or one real workroom.
 
-2.
-    This is the room where people and agents share context, turn conversation into plans, and keep decisions and results visible.
+App onboarding:
 
-3.
-    Try @noodle with something real. I can research, draft, or turn a rough goal into a plan. When work needs access, you choose the scope and approve it first.
+- replays or resumes that proof inside the real product;
+- lets the user make the human decision;
+- applies the first half of the loop to their real work;
+- continues into the real result.
 
-The visual guide can introduce adding a stronger local agent later, after the user has first experienced value.
-
-
-8. IMPLEMENTATION SEQUENCE
-
-The work crosses client, shared types, server API, database, tests, and architecture documentation. It should land as reviewable vertical tickets.
-
-Ticket 1: First-run lifecycle
-
-- Add account_onboarding migration.
-- Enable deny-all RLS.
-- Backfill existing humans as completed.
-- Add shared onboarding types.
-- Add AccountOnboardingStore.
-- Seed pending state for new starter workspaces.
-- Extend /api/account.
-- Add authenticated lifecycle endpoint.
-- Add transition, identity, invite-precedence, and migration tests.
-
-Ticket 2: Visual guide system
-
-- Add stable onboarding targets.
-- Build SpotlightDialog.
-- Add native dialog focus behavior.
-- Add blur panes and smart panel placement.
-- Add mobile bottom sheet.
-- Add missing-target fallback.
-- Add reduced-motion CSS.
-- Verify both themes.
-
-Ticket 3: Value-first noodle loop
-
-- Build the first-run guide state machine.
-- Add starter prompt selection.
-- Connect selection to the real composer prefill.
-- Observe noodle presence, active run, and reply.
-- Add offline, removal, timeout, and disconnect behavior.
-- Revise the three durable noodle welcome messages.
-
-Ticket 4: Getting-started and contextual help
-
-- Add the persistent Getting Started panel.
-- Derive real milestones from messages, plans, board items, agents, members, and projects.
-- Add deep links into the correct workspace surface.
-- Add pause, resume, replay, and permanent skip.
-- Add one-time contextual guidance for approvals, permissions, Projects, Resources, and Add Agent.
-
-Ticket 5: Validation and rollout
-
-- Add onboarding funnel queries.
-- Validate activation hypotheses against retention when enough data exists.
-- Perform keyboard and screen-reader review.
-- Test narrow viewport, landscape, 200% zoom, and both themes.
-- Run full client/server/shared verification.
-- Update architecture documentation after exact wording approval.
+The landing video must not be independently invented. Record it from the polished real onboarding/product scenario so claims and visuals cannot drift.
 
 
-9. MEASUREMENT PLAN
+23. MEASUREMENT
 
-Do not use tour completion as the north-star activation metric.
+Category-comprehension measure:
 
-Measure:
+    After five minutes, how does the user explain Convyio?
 
-- account created to starter workspace connected;
-- workspace connected to onboarding offered;
-- onboarding offered to started;
-- started to first prompt;
-- first prompt to first agent reply;
-- first reply to first plan or ticket;
-- first governed record to human approval/denial;
-- first approved work to done/evidence;
-- onboarding paused, skipped, completed, and replayed;
-- Day 1, Day 7, and Day 30 retained usage by activation cohort;
-- median and slow-path time to first value.
+Funnel events:
 
-No third-party analytics dependency is required for the first implementation. The onboarding lifecycle record captures state and timestamps, while existing durable message, plan, ticket, membership, and thread records capture real product outcomes.
+- demo started/completed/skipped;
+- onboarding started/paused/skipped/completed;
+- real-work versus example path;
+- PlanCard produced;
+- meaningful constraint added or confirmed;
+- Plan accepted;
+- bounded Ticket approved;
+- ResultCard shown/opened;
+- evidence opened;
+- project/folder connected;
+- local agent paired;
+- teammate invited;
+- second human contributes before execution.
 
-Once enough cohorts exist, compare multiple activation definitions against retained usage. Select a definition that both a meaningful percentage of users can reach and that predicts later use.
+Activation hypotheses:
 
+- Product activation: accepted Plan after a meaningful constraint.
+- Differentiated activation: completed bounded work plus ResultCard/evidence viewed.
+- Collaborative activation: a second human contributes before execution.
+- Expansion activation: a real project or independently owned agent joins.
 
-10. TEST PLAN
-
-10.1 Server and database
-
-- New signup creates exactly one pending onboarding record bound to the starter workspace.
-- Existing migrated users are completed and never auto-trigger.
-- Invite continuation does not alter the starter onboarding workspace.
-- Account response returns onboarding state only for the verified human.
-- Lifecycle transitions are monotonic and idempotent.
-- One actor cannot update another actor's onboarding state.
-- Invalid versions, statuses, or workspace IDs fail cleanly.
-- RLS is enabled with no policies.
-- A user with zero memberships remains a valid account and does not enter a broken guide.
-
-10.2 Client behavior
-
-- Pending starter onboarding starts only after workspace connection.
-- Completed/skipped onboarding never auto-opens.
-- Wrong active workspace does not open the guide.
-- Welcome, next, back, pause, skip, resume, and replay work.
-- Sidebar is opened before measuring noodle when necessary.
-- View changes wait for the target to mount.
-- Missing targets use centered fallback.
-- Workspace switching removes every overlay and listener.
-- Starter prompts prefill the actual composer and remain editable.
-- The real send path is used.
-- Noodle reply advances first-value state.
-- Noodle offline/removal/timeout never dead-ends.
-- Duplicate tabs synchronize completion or pause locally where storage is available.
-
-10.3 Accessibility
-
-- Native dialog receives initial focus.
-- Tab and Shift+Tab stay inside showcase dialog.
-- Escape pauses and removes the backdrop.
-- Focus returns to an appropriate visible control.
-- The guide has an accessible name and current-step description.
-- Progress is announced without repeatedly reading the full dialog.
-- No visual-only instruction such as "click the highlighted area" is used.
-- Inline action mode does not cover the focused composer.
-- Reduced-motion behavior suppresses nonessential movement.
-- Screen reader review is performed with at least VoiceOver or NVDA.
-
-10.4 Visual and responsive
-
-- Light mode and dark mode.
-- 375px-wide viewport.
-- Short viewport and landscape mode.
-- Browser zoom through 200%.
-- Sidebar open and collapsed.
-- Long workspace and channel names.
-- Target near every viewport edge.
-- Theme switch while a step is open.
-- No gradients, second accent, ad-hoc color, or invalid floating surface.
-
-10.5 Verification commands
-
-- npm test -w @workspace/client
-- npm test -w @workspace/server -- --test-name-pattern "onboarding"
-- npm run typecheck
-- npm run build -w @workspace/client
-- npm test when a suitable local Postgres or transaction-pooler environment is available
+Do not use tour completion or first noodle reply as the north-star activation metric.
 
 
-11. ACCEPTANCE CRITERIA
+24. USER RESEARCH
 
-The onboarding is complete only when all of the following are true:
+Recruit the narrow ICP:
 
-- It auto-opens exclusively for newly created starter-workspace accounts.
-- Invite flows and existing users never receive an incorrect first-run tour.
-- Users can pause, skip, go back, and replay it.
-- The first requested action is useful work, not configuration.
-- The flow produces a real noodle reply when noodle is available.
-- Offline, removed, slow, or disconnected noodle states never dead-end the user.
-- Every spotlight target survives sidebar state, view changes, resize, scroll, and missing elements.
-- Showcase beats are keyboard-contained and action beats expose the real product.
-- Focus is restored correctly and no focused element is hidden beneath blur.
-- Reduced-motion users receive fades or immediate transitions rather than scaling or panning.
-- The experience works at narrow widths, 200% zoom, and in both themes.
-- No gradient, second accent, ad-hoc hardcoded color, or non-elevated floating surface is introduced.
-- No fake user data, ticket, project, or mutation is created merely by viewing the tour.
-- The onboarding never bypasses the board, permission, identity, membership, or sandbox boundaries.
-- Client, shared, server, migration, and end-to-end onboarding tests pass.
-- Current architecture documentation remains accurate after implementation.
+- 2–10 person technical teams;
+- multiple agent users;
+- same product/repository;
+- recurring deadlines;
+- recent concrete coordination failure.
+
+Observe first use and ask users to retell what happened.
+
+Look for:
+
+- whether the old-workflow contrast feels true;
+- whether the PlanCard feels useful or bureaucratic;
+- whether the constraint-change moment creates the aha;
+- whether the user understands the approval as meaningful authority;
+- whether ResultCard feels like a practical output;
+- whether they still call it Slack with bots;
+- whether they would start one real workroom without moving their whole team.
+
+Do not ask only whether they like the interface or concept.
 
 
-12. PRINCIPLES TO PRESERVE DURING IMPLEMENTATION
+25. ACCESSIBILITY AND DESIGN
 
-- Value before explanation.
-- Real work before configuration.
-- Outcomes before feature names.
-- Show capability without pretending unavailable functionality exists.
-- Human control is part of the value proposition, not compliance copy.
-- The tour is optional; the product remains usable without it.
-- Contextual help replaces repeated tutorials.
-- Noodle is a real workspace participant, not decorative animation.
-- Every visual treatment follows AGENTS/DESIGN.md.
-- Every new persistence or API path respects existing identity and workspace boundaries.
-- Completion is not activation; retained value is activation.
+Follow AGENTS/DESIGN.md.
+
+- Calm canvas, warm signal.
+- One amber accent.
+- No gradients.
+- Elevated utility for floating surfaces.
+- No same-color tinted-border/tinted-background AI boxes.
+- Both themes designed independently.
+- Visible keyboard focus.
+- Native semantic controls.
+- Reduced motion.
+- No forced timers.
+- No autoplay audio.
+- Captions/transcript for demo video.
+- Narrow viewport and 200% zoom support.
+- Personality through noodle's voice and brief moments, not decorated chrome.
+
+
+26. ACCEPTANCE CRITERIA
+
+The onboarding is complete when:
+
+- a new ICP user sees the category-reset demo first but can skip immediately;
+- the landing page and product tell the same story;
+- the demo shows the full thread from context to evidence;
+- the user makes the consequential human decision in the app version;
+- a real-work path produces an inline PlanCard;
+- the user adds or confirms a meaningful constraint;
+- the Plan visibly changes before execution when information changes;
+- Board is explained and implemented as a projection of canonical work;
+- bounded work exposes owner, resource, allowed change and verification in human language;
+- progress remains in the origin thread;
+- ResultCard presents the coherent practical output;
+- raw traces remain secondary evidence;
+- solo users can complete the core experience;
+- invites and integrations remain optional;
+- current behavior is never described as an autonomous swarm;
+- offline, slow and missing-target states recover cleanly;
+- the experience works with keyboard, reduced motion, narrow screens, zoom and both themes;
+- instrumentation measures comprehension and differentiated activation;
+- observed ICP users accurately explain Convyio after five minutes.

@@ -8,6 +8,7 @@ import { BoardService } from "../src/board/BoardService";
 import { PlanService } from "../src/board/PlanService";
 import { Toolman } from "../src/board/Toolman";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
+import { Channels } from "../src/chat/Channels";
 import { acceptedPlan, createEnv, PROPOSAL, proposeTicket } from "./helpers";
 import { createTestDb } from "./pgSchema";
 
@@ -210,8 +211,10 @@ describe("pressure: HTTP edges", async () => {
 describe("pressure: toolman sandbox", async () => {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
-  const plans = new PlanService(db, threadEvents);
-  const service = new BoardService(db, threadEvents, plans);
+  const channels = new Channels(db);
+  await channels.seed([{ name: "general", isDemo: false }]);
+  const plans = new PlanService(db, threadEvents, channels);
+  const service = new BoardService(db, threadEvents, plans, channels);
   const root = path.join("/tmp", `toolman-pressure-${randomUUID()}`);
   const toolman = new Toolman(service, root);
   await toolman.init();

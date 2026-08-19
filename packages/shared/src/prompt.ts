@@ -28,7 +28,14 @@ export function renderPromptEnvelope(envelope: PromptEnvelope): string {
     .join("\n\n");
   const plans = envelope.plans.length
     ? envelope.plans
-        .map((plan) => `${plan.ref} [${plan.status}] ${plan.title} — ${plan.objective}`)
+        .map((plan) => {
+          const constraints = plan.constraints.length
+            ? ` constraints=${plan.constraints.join("; ")}`
+            : "";
+          const owner = plan.assumedOwnerName ? ` proposed-owner=${plan.assumedOwnerName}` : "";
+          const resource = plan.assumedProjectName ? ` resource=${plan.assumedProjectName}` : "";
+          return `${plan.ref} [${plan.status}] ${plan.title} — ${plan.objective}${owner}${resource}${constraints}`;
+        })
         .join("\n")
     : "(no plans)";
   const tickets = envelope.tickets.length
@@ -36,12 +43,20 @@ export function renderPromptEnvelope(envelope: PromptEnvelope): string {
         .map((item) => {
           const owner = item.ownerName ? ` owner=${item.ownerName}` : "";
           const scope = item.scopePaths ? ` scope=${item.scopePaths.join(",")}` : "";
-          return `${item.ref} [${item.status}] ${item.title}${owner}${scope}`;
+          const criteria = item.acceptanceCriteria.length
+            ? ` done-when=${item.acceptanceCriteria.join("; ")}`
+            : "";
+          return `${item.ref} [${item.status}] ${item.title}${owner}${scope}${criteria}`;
         })
         .join("\n")
     : "(no live tickets)";
   const context = envelope.context.length
-    ? envelope.context.map((entry) => `[${entry.kind}/${entry.scope}] ${entry.body}`).join("\n")
+    ? envelope.context
+        .map((entry) => {
+          const who = entry.createdByName ? ` by ${entry.createdByName}` : "";
+          return `[${entry.kind}/${entry.scope}${who}] ${entry.body}`;
+        })
+        .join("\n")
     : "(no active context entries)";
   const members = envelope.members
     .map((member) => `${member.displayName} (${member.kind})`)

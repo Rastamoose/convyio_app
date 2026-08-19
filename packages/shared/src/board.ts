@@ -91,6 +91,9 @@ export interface BoardItem {
   startedAt: number | null;
   completedAt: number | null;
   deletedAt: number | null;
+  originChannelId?: string | null;
+  originChannelName?: string;
+  originEventId?: string | null;
   /** Denormalized display names for rendering. */
   createdByName?: string;
   approvedByName?: string;

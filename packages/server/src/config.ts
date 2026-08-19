@@ -17,23 +17,27 @@ function required(name: string): string {
 }
 
 function githubConfig() {
+  const appId = process.env.GITHUB_APP_ID;
+  const slug = process.env.GITHUB_APP_SLUG;
   const clientId = process.env.GITHUB_CLIENT_ID;
   const clientSecret = process.env.GITHUB_CLIENT_SECRET;
-  const encryption = process.env.GIT_CREDENTIAL_ENCRYPTION_KEY;
-  const redirectUri = process.env.GITHUB_REDIRECT_URI ?? null;
-  if (!clientId && !clientSecret && !encryption && !redirectUri) return null;
-  if (!clientId || !clientSecret || !encryption) {
-    throw new Error("GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, and GIT_CREDENTIAL_ENCRYPTION_KEY must be set together");
+  const privateKeyInput = process.env.GITHUB_APP_PRIVATE_KEY;
+  const callbackUri = process.env.GITHUB_REDIRECT_URI ?? null;
+  if (!appId && !slug && !clientId && !clientSecret && !privateKeyInput && !callbackUri) return null;
+  if (!appId || !slug || !clientId || !clientSecret || !privateKeyInput) {
+    throw new Error("GITHUB_APP_ID, GITHUB_APP_SLUG, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, and GITHUB_APP_PRIVATE_KEY must be set together");
   }
-  const encryptionKey = /^[a-f\d]{64}$/i.test(encryption)
-    ? Buffer.from(encryption, "hex")
-    : Buffer.from(encryption, "base64url");
-  if (encryptionKey.length !== 32) throw new Error("GIT_CREDENTIAL_ENCRYPTION_KEY must encode exactly 32 bytes");
-  if (redirectUri) {
-    const parsed = new URL(redirectUri);
+  if (!/^\d+$/.test(appId)) throw new Error("GITHUB_APP_ID must be numeric");
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(slug)) throw new Error("GITHUB_APP_SLUG is invalid");
+  const privateKey = privateKeyInput.replaceAll("\\n", "\n");
+  if (!privateKey.includes("-----BEGIN RSA PRIVATE KEY-----") && !privateKey.includes("-----BEGIN PRIVATE KEY-----")) {
+    throw new Error("GITHUB_APP_PRIVATE_KEY must be a PEM private key");
+  }
+  if (callbackUri) {
+    const parsed = new URL(callbackUri);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("GITHUB_REDIRECT_URI must be an absolute http(s) URL");
   }
-  return { clientId, clientSecret, encryptionKey, redirectUri };
+  return { appId, slug, clientId, clientSecret, privateKey, callbackUri };
 }
 
 export const config = {

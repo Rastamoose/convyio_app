@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { clearInstallations, exchangePairing, installationHealth, listInstallations, loadInstallation, saveInstallation } from "./installation";
-import { addProject } from "./projects";
+import {
+  clearInstallations,
+  exchangePairing,
+  installationStatus,
+  listInstallations,
+  loadInstallation,
+  prepareInstallationForRun,
+  reconcileInstallationMounts,
+  savePairedInstallation,
+} from "./installation";
+import { addProject, removeProject } from "./projects";
 
 export async function runCli(
   argv: string[],
@@ -17,24 +26,31 @@ export async function runCli(
       case "pair": {
         const options = parseFlags(args, ["--server", "--code"]);
         const installation = await exchangePairing(required(options, "--server"), required(options, "--code"));
-        await saveInstallation(installation);
+        await savePairedInstallation(installation);
         io.out(`Paired Toolman node ${installation.node.name} with ${installation.workspace.name}.`);
         io.out("Attach a project with: convyio-toolman project add <path>");
         return 0;
       }
       case "project": {
-        if (args[0] !== "add" || !args[1]) {
-          throw new Error("Usage: convyio-toolman project add <path> [--name <name>] [--node <name-or-id>]");
+        const [operation, target, ...rest] = args;
+        if (!target || (operation !== "add" && operation !== "remove")) {
+          throw new Error(projectUsage());
         }
-        const flags = parseFlags(args.slice(2), ["--name", "--node"]);
+        const flags = parseFlags(rest, operation === "add" ? ["--name", "--node"] : ["--node"]);
         const installation = await loadInstallation(flags.get("--node"));
-        const added = await addProject(installation, path.resolve(args[1]), flags.get("--name"));
-        io.out(`Attached ${added.mount.projectName} (${added.mount.kind}).`);
+        if (operation === "add") {
+          const added = await addProject(installation, path.resolve(target), flags.get("--name"));
+          io.out(`Attached ${added.mount.projectName} (${added.mount.kind}).`);
+        } else {
+          const removed = await removeProject(installation, target);
+          io.out(`Removed ${removed.mount.projectName} from ${installation.node.name}.`);
+        }
         return 0;
       }
       case "run": {
         if (args[0]?.startsWith("-")) throw new Error("Usage: convyio-toolman run [name-or-id]");
-        const installation = await loadInstallation(args.length ? args.join(" ") : undefined);
+        const stored = await loadInstallation(args.length ? args.join(" ") : undefined);
+        const installation = await prepareInstallationForRun(stored);
         const { runNode } = await import("./runtime");
         io.out(`Toolman node ${installation.node.name} connecting to ${installation.workspace.name}…`);
         await runNode(installation);
@@ -47,9 +63,10 @@ export async function runCli(
           return 0;
         }
         for (const item of installations) {
-          const health = await installationHealth(item);
-          io.out(`${item.node.name} · ${item.workspace.name} · ${health} · ${item.mounts.length} project(s)`);
-          for (const mount of item.mounts) io.out(`  ${mount.projectName} (${mount.kind})`);
+          const status = await installationStatus(item);
+          const reconciled = await reconcileInstallationMounts(item, status);
+          io.out(`${item.node.name} · ${item.workspace.name} · ${status.health} · ${reconciled.mounts.length} project(s)`);
+          for (const mount of reconciled.mounts) io.out(`  ${mount.projectName} (${mount.kind})`);
         }
         return 0;
       }
@@ -90,11 +107,20 @@ function required(values: Map<string, string>, flag: string): string {
   return value;
 }
 
+function projectUsage(): string {
+  return [
+    "Usage:",
+    "  convyio-toolman project add <path> [--name <name>] [--node <name-or-id>]",
+    "  convyio-toolman project remove <name-or-id-or-path> [--node <name-or-id>]",
+  ].join("\n");
+}
+
 function usage(): string {
   return [
     "Usage:",
     "  convyio-toolman pair --server <https-origin> --code <one-time-code>",
     "  convyio-toolman project add <path> [--name <name>] [--node <name-or-id>]",
+    "  convyio-toolman project remove <name-or-id-or-path> [--node <name-or-id>]",
     "  convyio-toolman run [name-or-id]",
     "  convyio-toolman status",
     "  convyio-toolman unpair",

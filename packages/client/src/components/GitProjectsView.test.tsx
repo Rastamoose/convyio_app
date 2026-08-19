@@ -68,7 +68,7 @@ describe("GitProjectsView", () => {
     render(<GitProjectsView />);
 
     expect(await screen.findByText("Bring your repositories into the workspace")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect GitHub" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install GitHub App" })).toBeInTheDocument();
   });
 
   it("opens a linked repository with Buzz-style source and sync controls", async () => {

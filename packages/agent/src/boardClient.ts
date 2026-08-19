@@ -66,12 +66,7 @@ export class BoardClient {
       this.items.clear();
       for (const item of merged) this.items.set(item.id, item);
       await this.refreshProjectAccess();
-      try {
-        const body = (await this.api("GET", "/api/workspace/prompt-envelope")) as { envelope: PromptEnvelope };
-        this.envelope = body.envelope;
-      } catch {
-        this.envelope = null;
-      }
+      await this.refreshEnvelope();
       return true;
     } catch (err) {
       console.warn("[agent] board refresh failed:", err);
@@ -111,11 +106,25 @@ export class BoardClient {
   // Board lifecycle (HTTP)
   // -------------------------------------------------------------------------
 
+  async refreshEnvelope(): Promise<PromptEnvelope | null> {
+    try {
+      const body = (await this.api("GET", "/api/workspace/prompt-envelope")) as { envelope: PromptEnvelope };
+      this.envelope = body.envelope;
+      return this.envelope;
+    } catch {
+      return this.envelope;
+    }
+  }
+
   async proposePlan(fields: {
     title: string;
     objective: string;
     outline: string[];
     clarifications: string[];
+    constraints?: string[];
+    assumedOwnerId?: string;
+    assumedProjectId?: string;
+    channel?: string;
   }): Promise<BoardPlan> {
     const { plan } = (await this.api("POST", "/api/board/plans", fields)) as { plan: BoardPlan };
     return plan;

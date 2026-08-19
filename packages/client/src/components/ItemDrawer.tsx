@@ -93,12 +93,16 @@ function DeleteButton({ onDelete }: { onDelete: () => void }) {
 
 export function ItemDrawer({
   item,
+  originChannel,
   onClose,
   onDiscuss,
+  onOpenConversation,
 }: {
   item: BoardItem;
+  originChannel?: string;
   onClose: () => void;
   onDiscuss: (item: BoardItem) => void;
+  onOpenConversation?: () => void;
 }) {
   const {
     approveItem,
@@ -379,6 +383,19 @@ export function ItemDrawer({
             <div className="text-sm leading-snug break-words text-body">
               {item.proposalEffect}
             </div>
+          </div>
+        )}
+
+        {originChannel && (
+          <div className="mb-3">
+            <Label>Origin conversation</Label>
+            {onOpenConversation ? (
+              <button onClick={onOpenConversation} className="text-sm font-semibold text-accent hover:underline">
+                #{originChannel}
+              </button>
+            ) : (
+              <div className="text-sm text-body">#{originChannel}</div>
+            )}
           </div>
         )}
 

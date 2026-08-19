@@ -46,17 +46,19 @@ whose owner is an agent queues a durable run request for that owner.
    chat message.
 2. On join the runner loads `/api/workspace/snapshot` and, when available,
    `/api/workspace/prompt-envelope`.
-3. `BoardClient.summary()` renders that envelope (policy, actor, plans,
-   live tickets, members, context) when one was loaded; otherwise it falls
-   back to a local item list.
+3. Before each run the runner refreshes `/api/workspace/prompt-envelope`.
+   `BoardClient.summary()` renders that envelope (policy, actor, plans,
+   live tickets, members, context, including Plan constraints) when one was
+   loaded; otherwise it falls back to a local item list.
 4. `BoardClient` also loads the agent's project catalogue, assignment and
    pending-request projection. Provider-neutral tools can list projects and
    file an owner-targeted access request; neither action grants access.
 5. `Memory` is a rolling fifty-message transcript stored by the runner.
 6. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
 
-The envelope is compiled at snapshot time, not per run. The actor cursor is
-not yet advanced when a runner acknowledges an envelope.
+The envelope is compiled from the current snapshot on join and again before
+each run. The actor cursor is not yet advanced when a runner acknowledges an
+envelope.
 
 ## Toolman folder sharing and collaboration
 
@@ -84,32 +86,53 @@ not yet advanced when a runner acknowledges an envelope.
    from Resources over owner-only workspace HTTP routes; other humans receive
    no implicit folder authority.
 8. The Toolman process reconnects with bounded backoff after network or shell
-   restarts and counts itself connected only after `toolman_welcome`.
-   Re-pairing, unpairing or owner revocation disconnects the old socket;
-   revoked mounts cannot execute and in-flight work fails closed.
+   restarts and counts itself connected only after `toolman_welcome`. A revoked
+   installation fails `run` preflight with repair instructions instead of
+   retrying silently. Pairing the same owner and device name reactivates the
+   same node id and preserves its local mount-to-path mappings.
+9. The owner may remove one mount from Resources, or the node may run
+   `convyio-toolman project remove`. Removing a mount leaves files on-device,
+   cascades only assignments bound to that mount, preserves execution history,
+   and archives a directory project only after its final mount is removed.
+10. Revocation and device deletion are separate, ordered owner actions. An
+    active device exposes only Revoke; after revocation it exposes Delete.
+    Revocation invalidates and disconnects the installation credential while
+    preserving the node, mounts and project records for repair. Permanent
+    deletion is refused until revocation and removes the node record, all of
+    its mounts and mount-bound assignments, preserves
+    execution history by clearing node/mount references, archives directory
+    projects whose final mount disappears, and never deletes local files.
 
 ## GitHub repositories
 
-1. A human starts server-owned GitHub OAuth from a workspace. Random in-memory
-   state binds actor, workspace, callback and browser return origin. The server
-   exchanges the code and stores AES-256-GCM encrypted access/refresh tokens on
-   the global actor; expiring access tokens rotate under one refresh lock.
-2. The human selects a GitHub repository. The server accepts only a
+1. A human starts a GitHub App installation from a workspace. The shell stores
+   only a SHA-256 hash of random state plus actor, workspace, callback and
+   browser return origin in Postgres. The state is expiring and atomically
+   single-use, so restarts, deploys and multiple replicas cannot lose or replay
+   the callback.
+2. GitHub installs the App on user-selected repositories and performs user
+   authorization during installation. The shell exchanges that one-use code,
+   verifies through `/user/installations` that the returned installation belongs
+   to the authorizing user, then discards the user token and stores only the
+   actor-to-installation mapping and granted permissions.
+3. API and Git HTTPS calls mint cached one-hour installation tokens from a
+   short-lived App JWT. No GitHub user or installation token is durable or sent
+   to browser/agent state; changing repository selection takes effect when the
+   installation is queried again.
+4. The human selects an installed repository. The server accepts only a
    credential-free `https://github.com/…` clone URL, creates or reactivates one
    workspace Git project and clones an isolated managed checkout under the
    workspace's hashed `DATA_DIR` directory.
-3. Humans use Projects for overview/import, remote or working-tree files,
+5. Humans use Projects for overview/import, remote or working-tree files,
    branches, commits, sync state, pull requests/checks/changed files and issues.
    Unlink archives the project, assignments and branch rooms, removes its
    checkout, and supports later relink to the same project id.
-4. Agents use the same project catalogue, assignment and owner-consent flow as
+6. Agents use the same project catalogue, assignment and owner-consent flow as
    local folders. Managed checkouts expose first-class status, fetch, pull,
    push, branch and commit actions; arbitrary project commands are refused
-   there and require a paired local Toolman checkout. Provider credentials
-   never enter agent, browser, remote URL or generic command state.
-5. Creating a non-default branch creates a linked chat channel. Deleting the
-   branch or merging its pull request archives that channel; Projects can jump
-   directly into the room.
+   there and require a paired local Toolman checkout. Creating a non-default
+   branch creates a linked chat channel; deleting or merging it archives the
+   room.
 
 ## Board and action authorization
 

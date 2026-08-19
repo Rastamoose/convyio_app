@@ -4,6 +4,7 @@ import type {
   BoardPlan,
   EcosystemImpact,
   ParticipantKind,
+  PlanChange,
   PlanEventEnvelope,
   PlanEventType,
   PlanStatus,
@@ -11,6 +12,7 @@ import type {
 import { IMPACT_SURFACES, emptyImpactMap, isCompleteImpactMap } from "@workspace/shared";
 import type { Sql, WorkspaceDb } from "../db";
 import type { ThreadEventStore } from "../chat/ThreadEventStore";
+import type { Channels } from "../chat/Channels";
 import { ApiError } from "./BoardService";
 
 export interface PlanInput {
@@ -22,6 +24,9 @@ export interface PlanInput {
   decisions?: string[];
   acceptanceCriteria?: string[];
   clarifications?: string[];
+  channel?: string | null;
+  assumedOwnerId?: string | null;
+  assumedProjectId?: string | null;
 }
 
 /**
@@ -34,6 +39,7 @@ export class PlanService {
   constructor(
     private store: WorkspaceDb,
     private threadEvents: ThreadEventStore,
+    private channels?: Channels,
   ) {}
 
   async list(workspaceId: string): Promise<BoardPlan[]> {
@@ -55,6 +61,9 @@ export class PlanService {
 
   async create(actor: Actor, input: PlanInput): Promise<BoardPlan> {
     const fields = normalizePlanInput(input);
+    const origin = await this.resolveOrigin(input.channel);
+    if (fields.assumedOwnerId) await this.requireMember(fields.assumedOwnerId);
+    if (fields.assumedProjectId) await this.requireProject(actor.workspaceId, fields.assumedProjectId);
     const human = actor.kind === "human";
     const now = Date.now();
     const id = randomUUID();
@@ -64,16 +73,18 @@ export class PlanService {
         INSERT INTO board_plans (
           id, workspace_id, ref, title, objective, outline, impact_map, constraints,
           decisions, acceptance_criteria, clarifications, status, created_by,
-          accepted_by, created_at, accepted_at
+          accepted_by, created_at, accepted_at, origin_channel_id, assumed_owner_id,
+          assumed_project_id, change_log
         ) VALUES (
           ${id}, ${actor.workspaceId}, ${ref}, ${fields.title}, ${fields.objective},
           ${sql.json(fields.outline)}, ${sql.json(JSON.parse(JSON.stringify(fields.impactMap)))},
           ${sql.json(fields.constraints)}, ${sql.json(fields.decisions)},
           ${sql.json(fields.acceptanceCriteria)}, ${sql.json(fields.clarifications)},
-          ${"proposed"}, ${actor.id}, NULL, ${now}, NULL
+          ${"proposed"}, ${actor.id}, NULL, ${now}, NULL, ${origin?.id ?? null},
+          ${fields.assumedOwnerId}, ${fields.assumedProjectId}, ${sql.json([])}
         )
       `;
-      return id;
+      return { id, channelId: origin?.id ?? null };
     });
   }
 
@@ -93,7 +104,7 @@ export class PlanService {
         RETURNING id
       `;
       if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "plan was already changed");
-      return updated.id;
+      return { id: updated.id, channelId: plan.originChannelId ?? null };
     });
   }
 
@@ -111,7 +122,7 @@ export class PlanService {
         RETURNING id
       `;
       if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "plan was already changed");
-      return updated.id;
+      return { id: updated.id, channelId: plan.originChannelId ?? null };
     });
   }
 
@@ -128,7 +139,7 @@ export class PlanService {
         RETURNING id
       `;
       if (!updated) throw new ApiError(409, "ALREADY_CHANGED", "plan was already changed");
-      return updated.id;
+      return { id: updated.id, channelId: plan.originChannelId ?? null };
     });
   }
 
@@ -139,13 +150,35 @@ export class PlanService {
     }
     const text = decision.trim();
     if (!text) throw new ApiError(400, "EMPTY_DECISION", "decision is required");
+    const change = changeEntry(actor, Date.now(), "decisions", `Recorded decision: ${text}`);
     return this.mutate(actor, "plan.edited", async (sql) => {
       await sql`
         UPDATE board_plans
-        SET decisions = COALESCE(decisions, '[]'::jsonb) || ${sql.json([text])}::jsonb
+        SET decisions = COALESCE(decisions, '[]'::jsonb) || ${sql.json([text])}::jsonb,
+            change_log = COALESCE(change_log, '[]'::jsonb) || ${sql.json([JSON.parse(JSON.stringify(change))])}::jsonb
         WHERE id = ${plan.id}
       `;
-      return plan.id;
+      return { id: plan.id, channelId: plan.originChannelId ?? null };
+    });
+  }
+
+  async appendConstraint(actor: Actor, idOrRef: string, constraint: string): Promise<BoardPlan> {
+    const plan = await this.mustFind(actor.workspaceId, idOrRef);
+    if (plan.status === "completed" || plan.status === "cancelled") {
+      throw new ApiError(409, "INVALID_TRANSITION", `${plan.ref} is already ${plan.status}`);
+    }
+    const text = constraint.trim();
+    if (!text) throw new ApiError(400, "EMPTY_CONSTRAINT", "constraint is required");
+    if (plan.constraints.includes(text)) return plan;
+    const change = changeEntry(actor, Date.now(), "constraints", `Changed before execution: ${text}`);
+    return this.mutate(actor, "plan.edited", async (sql) => {
+      await sql`
+        UPDATE board_plans
+        SET constraints = COALESCE(constraints, '[]'::jsonb) || ${sql.json([text])}::jsonb,
+            change_log = COALESCE(change_log, '[]'::jsonb) || ${sql.json([JSON.parse(JSON.stringify(change))])}::jsonb
+        WHERE id = ${plan.id}
+      `;
+      return { id: plan.id, channelId: plan.originChannelId ?? null };
     });
   }
 
@@ -155,22 +188,49 @@ export class PlanService {
     return plan;
   }
 
+  private async resolveOrigin(channel?: string | null) {
+    return this.channels?.resolve(channel) ?? null;
+  }
+
+  private async requireMember(actorId: string): Promise<void> {
+    const owner = await this.store.getActor(actorId);
+    if (!owner || !(await this.store.isMember(owner.id))) {
+      throw new ApiError(400, "OWNER_NOT_FOUND", "proposed owner must be a workspace member");
+    }
+  }
+
+  private async requireProject(workspaceId: string, projectId: string): Promise<void> {
+    const [project] = await this.store.sql<{ id: string }[]>`
+      SELECT id FROM projects
+      WHERE id = ${projectId} AND workspace_id = ${workspaceId} AND archived_at IS NULL
+    `;
+    if (!project) throw new ApiError(400, "PROJECT_NOT_FOUND", "proposed resource must be an attached project");
+  }
+
   private async mutate(
     actor: Actor,
     type: PlanEventType,
-    apply: (sql: Sql) => Promise<string>,
+    apply: (sql: Sql) => Promise<{ id: string; channelId: string | null }>,
   ): Promise<BoardPlan> {
     const id = await this.store.transaction(async (sql) => {
-      const planId = await apply(sql);
-      const [{ ref }] = await sql<{ ref: string }[]>`SELECT ref FROM board_plans WHERE id = ${planId}`;
-      await this.threadEvents.append(sql, {
+      const applied = await apply(sql);
+      const [{ ref }] = await sql<{ ref: string }[]>`SELECT ref FROM board_plans WHERE id = ${applied.id}`;
+      const event = await this.threadEvents.append(sql, {
         workspaceId: actor.workspaceId,
+        channelId: applied.channelId,
         actorId: actor.id,
         kind: type,
-        subjectId: planId,
-        payload: { planId, planRef: ref },
+        subjectId: applied.id,
+        payload: { planId: applied.id, planRef: ref },
       });
-      return planId;
+      if (type === "plan.created" || type === "plan.proposed") {
+        await sql`
+          UPDATE board_plans
+          SET origin_event_id = COALESCE(origin_event_id, ${event.id})
+          WHERE id = ${applied.id}
+        `;
+      }
+      return applied.id;
     });
     const plan = (await this.find(actor.workspaceId, id))!;
     this.onEvent?.({
@@ -187,10 +247,15 @@ export class PlanService {
 
 function selectPlan(sql: Sql) {
   return sql`
-    SELECT p.*, c.display_name AS created_by_name, a.display_name AS accepted_by_name
+    SELECT p.*, c.display_name AS created_by_name, a.display_name AS accepted_by_name,
+           o.display_name AS assumed_owner_name, j.name AS assumed_project_name,
+           ch.name AS origin_channel_name
     FROM board_plans p
     JOIN actors c ON c.id = p.created_by
     LEFT JOIN actors a ON a.id = p.accepted_by
+    LEFT JOIN actors o ON o.id = p.assumed_owner_id
+    LEFT JOIN projects j ON j.id = p.assumed_project_id
+    LEFT JOIN channels ch ON ch.id = p.origin_channel_id
   `;
 }
 
@@ -212,8 +277,16 @@ interface PlanRow {
   created_at: number;
   accepted_at: number | null;
   completed_at: number | null;
+  origin_channel_id?: string | null;
+  origin_event_id?: string | null;
+  assumed_owner_id?: string | null;
+  assumed_project_id?: string | null;
+  change_log?: unknown;
   created_by_name: string;
   accepted_by_name: string | null;
+  assumed_owner_name?: string | null;
+  assumed_project_name?: string | null;
+  origin_channel_name?: string | null;
 }
 
 function toPlan(row: PlanRow): BoardPlan {
@@ -235,6 +308,14 @@ function toPlan(row: PlanRow): BoardPlan {
     createdAt: row.created_at,
     acceptedAt: row.accepted_at,
     completedAt: row.completed_at,
+    originChannelId: row.origin_channel_id ?? null,
+    originChannelName: row.origin_channel_name ?? undefined,
+    originEventId: row.origin_event_id ?? null,
+    assumedOwnerId: row.assumed_owner_id ?? null,
+    assumedOwnerName: row.assumed_owner_name ?? undefined,
+    assumedProjectId: row.assumed_project_id ?? null,
+    assumedProjectName: row.assumed_project_name ?? undefined,
+    changeLog: asChangeLog(row.change_log),
     createdByName: row.created_by_name,
     acceptedByName: row.accepted_by_name ?? undefined,
   };
@@ -256,6 +337,8 @@ function normalizePlanInput(input: PlanInput) {
     decisions: (input.decisions ?? []).map((line) => line.trim()).filter(Boolean),
     acceptanceCriteria: (input.acceptanceCriteria ?? []).map((line) => line.trim()).filter(Boolean),
     clarifications: (input.clarifications ?? []).map((line) => line.trim()).filter(Boolean),
+    assumedOwnerId: input.assumedOwnerId?.trim() || null,
+    assumedProjectId: input.assumedProjectId?.trim() || null,
   };
 }
 
@@ -269,8 +352,30 @@ function requireAcceptable(plan: BoardPlan): void {
   }
 }
 
+function changeEntry(actor: Actor, at: number, field: string, summary: string): PlanChange {
+  return { at, actorId: actor.id, actorName: actor.displayName, field, summary };
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function asChangeLog(value: unknown): PlanChange[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const raw = entry as Record<string, unknown>;
+    if (typeof raw.at !== "number" || typeof raw.actorId !== "string" || typeof raw.field !== "string" || typeof raw.summary !== "string") {
+      return [];
+    }
+    return [{
+      at: raw.at,
+      actorId: raw.actorId,
+      actorName: typeof raw.actorName === "string" ? raw.actorName : undefined,
+      field: raw.field,
+      summary: raw.summary,
+    }];
+  });
 }
 
 function asImpact(value: unknown): EcosystemImpact {

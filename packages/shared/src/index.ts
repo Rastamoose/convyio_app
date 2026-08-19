@@ -6,6 +6,7 @@ export * from "./agent";
 export * from "./thread";
 export * from "./agentWork";
 export * from "./context";
+export * from "./workLifecycle";
 export * from "./prompt";
 export * from "./project";
 export * from "./git";

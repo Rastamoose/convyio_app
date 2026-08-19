@@ -25,6 +25,7 @@ export class ContextStore {
     scope: ContextScope;
     subjectId?: string | null;
     body: string;
+    channelId?: string | null;
   }): Promise<ContextEntry> {
     const body = input.body.trim();
     if (!body) throw new Error("context entry body is required");
@@ -48,6 +49,7 @@ export class ContextStore {
       `;
       await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
+        channelId: input.channelId ?? null,
         actorId: input.actorId,
         kind: "context.created",
         subjectId: id,

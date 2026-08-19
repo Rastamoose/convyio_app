@@ -39,6 +39,13 @@ describe("plan lifecycle", async () => {
     const snapshot = await env.api("GET", "/api/workspace/snapshot", human.token);
     assert.equal(snapshot.status, 200);
     assert.ok(snapshot.body.plans.some((plan: { id: string }) => plan.id === created.body.plan.id));
+    assert.ok(created.body.plan.originChannelId);
+    const events = await env.threadEvents.list({
+      workspaceId: env.db.workspaceId,
+      channelId: created.body.plan.originChannelId,
+      limit: 20,
+    });
+    assert.ok(events.some((event) => event.kind === "plan.created" || event.kind === "plan.proposed"));
   });
 
   test("acceptance requires clarification and a complete impact map", async () => {
@@ -67,5 +74,23 @@ describe("plan lifecycle", async () => {
     });
     assert.equal(appended.status, 200);
     assert.ok(appended.body.plan.decisions.includes("Tickets still need their own approval"));
+  });
+
+  test("adding a constraint changes the same plan and writes attributed context", async () => {
+    const created = await env.api("POST", "/api/board/plans", agent.token, {
+      title: "Billing",
+      objective: "Align invoice surfaces",
+      outline: ["Inspect", "Change invoice only"],
+      clarifications: ["Asked whether the ledger may change"],
+      impactMap: acceptableImpact(),
+    });
+    const constrained = await env.api("POST", `/api/board/plans/${created.body.plan.id}/constraints`, human.token, {
+      constraint: "Ledger output must remain identical to existing Stripe charges",
+    });
+    assert.equal(constrained.status, 200);
+    assert.ok(constrained.body.plan.constraints.includes("Ledger output must remain identical to existing Stripe charges"));
+    assert.ok((constrained.body.plan.changeLog ?? []).some((change: { field: string }) => change.field === "constraints"));
+    const envelope = await env.api("GET", "/api/workspace/prompt-envelope", agent.token);
+    assert.match(JSON.stringify(envelope.body.envelope), /Ledger output must remain identical/);
   });
 });

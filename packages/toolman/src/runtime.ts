@@ -11,7 +11,7 @@ import {
   writeTextFile,
 } from "./fsSafe";
 import { runCommand, type RunningCommand } from "./command";
-import type { StoredToolman } from "./installation";
+import { installationHealth, type StoredToolman } from "./installation";
 
 interface ExecuteFrame {
   type: "toolman_execute";
@@ -37,6 +37,11 @@ export async function runNode(installation: StoredToolman, signal?: AbortSignal)
   while (!signal?.aborted) {
     const connected = await runSession(socketUrl, installation, signal);
     if (signal?.aborted) return;
+    if (!connected && await installationHealth(installation) === "revoked") {
+      throw new Error(
+        `Toolman node ${installation.node.name} was revoked. Create a new pairing for the same device name in Resources, then run the pair command again.`,
+      );
+    }
     const delayMs = connected ? INITIAL_RETRY_MS : retryMs;
     retryMs = connected ? INITIAL_RETRY_MS : Math.min(retryMs * 2, MAX_RETRY_MS);
     await waitForRetry(delayMs, signal);

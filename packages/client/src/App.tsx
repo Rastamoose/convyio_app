@@ -712,9 +712,28 @@ function Workspace({
     );
   };
 
-  const discussItem = (item: BoardItem) => {
+  const discussItem = (item: { ref: string; title: string }) => {
     workspace.sendMessage(`discuss ${item.ref} — "${item.title}"`, channel);
     setView("chat");
+  };
+
+  const openBoard = (target: { kind: "plan" | "item"; id: string; channel?: string | null }) => {
+    if (target.channel) setChannel(target.channel);
+    setView("board");
+    setOpenItemId(target.kind === "item" ? target.id : null);
+  };
+
+  const openConversation = (target: { channel?: string | null; itemId?: string | null; planId?: string | null }) => {
+    if (target.channel) setChannel(target.channel);
+    setView("chat");
+    window.setTimeout(() => {
+      const id = target.itemId
+        ? document.getElementById(`proposal-${target.itemId}`) ?? document.getElementById(`result-${target.itemId}`)
+        : target.planId
+          ? document.getElementById(`plan-${target.planId}`)
+          : null;
+      id?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
   };
 
   const jumpToTrace = (runId: string) => {
@@ -814,6 +833,7 @@ function Workspace({
               onDiscuss={discussItem}
               onPrefill={prefillText}
               onAddAgent={() => setAddAgentOpen(true)}
+              onOpenBoard={openBoard}
             />
             <MessageInput
               channel={channel}
@@ -831,6 +851,7 @@ function Workspace({
             openItemId={openItemId}
             onOpenItem={setOpenItemId}
             onDiscuss={discussItem}
+            onOpenConversation={openConversation}
             onJumpToTrace={jumpToTrace}
           />
         )}

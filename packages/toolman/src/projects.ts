@@ -49,3 +49,37 @@ export async function addProject(
   await saveInstallation(next, env);
   return { installation: next, mount };
 }
+
+export async function removeProject(
+  installation: StoredToolman,
+  reference: string,
+  fetcher: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ installation: StoredToolman; mount: LocalMount }> {
+  const lowered = reference.toLowerCase();
+  const resolvedPath = path.resolve(reference);
+  const matches = installation.mounts.filter((mount) =>
+    mount.projectId === reference ||
+    mount.mountKey === reference ||
+    mount.projectName.toLowerCase() === lowered ||
+    mount.absolutePath === resolvedPath,
+  );
+  if (matches.length === 0) {
+    const available = installation.mounts.map((mount) => `  ${mount.projectName} · ${mount.projectId}`).join("\n");
+    throw new Error(`No attached folder matches ${JSON.stringify(reference)}.${available ? `\n${available}` : ""}`);
+  }
+  if (matches.length > 1) throw new Error(`More than one attached folder matches ${JSON.stringify(reference)}. Use its project id.`);
+  const mount = matches[0]!;
+  const response = await fetcher(
+    new URL(`/api/toolman/mounts/${encodeURIComponent(mount.mountKey)}`, installation.serverOrigin),
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${installation.installationToken}` },
+    },
+  );
+  if (response.status === 401) throw new Error("Toolman installation was revoked. Pair this device again before removing folders.");
+  if (!response.ok && response.status !== 404) throw new Error(`Folder removal returned HTTP ${response.status}.`);
+  const next = { ...installation, mounts: installation.mounts.filter((item) => item.mountKey !== mount.mountKey) };
+  await saveInstallation(next, env);
+  return { installation: next, mount };
+}

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { BoardItem, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
+import type { BoardItem, BoardPlan, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import { MessageList } from "./MessageList";
 
@@ -13,6 +13,7 @@ let messages: LocalMessage[] = [];
 let participants: Participant[] = [];
 let self: Participant | null = null;
 let board: BoardItem[] = [];
+let plans: BoardPlan[] = [];
 let pendingInteractions: InteractionRequest[] = [];
 
 const pinMessage = vi.fn();
@@ -31,7 +32,13 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     activeRuns: [],
     runDurations: new Map(),
     board,
+    plans,
+    context: [],
     pendingInteractions,
+    executions: [],
+    acceptPlan: vi.fn(),
+    addPlanConstraint: vi.fn(),
+    createBoardItem: vi.fn(),
     resolveInteraction: vi.fn(),
     // ProposalCard (rendered for proposed items) fetches the owner list.
     fetchActors: vi.fn().mockResolvedValue([]),
@@ -147,6 +154,7 @@ function Harness({
       onEditingIdChange={setEditingId}
       onDiscuss={vi.fn()}
       onPrefill={vi.fn()}
+      onOpenBoard={vi.fn()}
     />
   );
 }
@@ -156,6 +164,7 @@ describe("MessageList", () => {
     vi.clearAllMocks();
     messages = [];
     board = [];
+    plans = [];
     pendingInteractions = [];
     participants = [human("self-1", "me")];
     self = participants[0];

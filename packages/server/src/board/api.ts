@@ -12,6 +12,8 @@ import type {
   WorkspaceInviteMaxAgeSeconds,
   WorkspaceInviteMaxUses,
   WorkspaceSnapshot,
+  ContextKind,
+  ContextScope,
 } from "@workspace/shared";
 import {
   DEFAULT_WORKSPACE_INVITE_OPTIONS,
@@ -45,6 +47,7 @@ import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
+import type { ContextStore } from "../context/ContextStore";
 import type { GitHub } from "../projects/GitHub";
 import type { GitRepositories } from "../projects/GitRepositories";
 import type { ProjectStore } from "../projects/ProjectStore";
@@ -65,6 +68,7 @@ const createBodySchema = z.object({
   planId: z.string().min(1).max(128).optional(),
   projectId: z.string().min(1).max(128).nullable().optional(),
   owner: z.string().min(1).max(128).optional(),
+  channel: z.string().min(1).max(64).optional(),
   acceptanceCriteria: z.array(z.string().min(1).max(500)).max(40).optional(),
   impactMap: z
     .object({
@@ -214,6 +218,7 @@ export interface ApiServices {
   snapshot?: WorkspaceSnapshotBuilder | null;
   plans?: PlanService | null;
   envelope?: PromptEnvelopeBuilder | null;
+  context?: ContextStore | null;
   github?: GitHub | null;
   gitRepositories?: GitRepositories | null;
   projects?: ProjectStore | null;
@@ -246,6 +251,7 @@ export function createApiHandler(services: ApiServices) {
     snapshot = null,
     plans = null,
     envelope = null,
+    context = null,
     github = null,
     gitRepositories = null,
     projects = null,
@@ -327,20 +333,20 @@ export function createApiHandler(services: ApiServices) {
       ) {
         if (!github) throw new ApiError(501, "GITHUB_UNAVAILABLE", "GitHub integration is not configured");
         const code = url.searchParams.get("code");
+        const installationId = url.searchParams.get("installation_id");
         const state = url.searchParams.get("state");
-        if (!state) throw new ApiError(400, "GITHUB_OAUTH_FAILED", "GitHub did not return OAuth state");
-        const workspaceId = github.oauthWorkspace(state);
-        const returnOrigin = github.oauthReturnOrigin(state);
-        if (!workspaceId || !returnOrigin) throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired; start again");
-        if (!code) {
-          github.cancel(state);
+        if (!state) throw new ApiError(400, "GITHUB_AUTH_FAILED", "GitHub did not return installation state");
+        const pending = await github.pending(state);
+        if (!pending) throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired or was already used; start again");
+        if (!code || !installationId) {
+          await github.cancel(state);
           res.writeHead(302, {
-            Location: new URL(`/w/${encodeURIComponent(workspaceId)}?git=error`, returnOrigin).toString(),
+            Location: new URL(`/w/${encodeURIComponent(pending.workspaceId)}?git=error`, pending.returnOrigin).toString(),
             "Cache-Control": "no-store",
           }).end();
         } else {
           try {
-            const completed = await github.complete(code, state);
+            const completed = await github.complete(code, installationId, state);
             res.writeHead(302, {
               Location: new URL(`/w/${encodeURIComponent(completed.workspaceId)}?git=connected`, completed.returnOrigin).toString(),
               "Cache-Control": "no-store",
@@ -348,7 +354,7 @@ export function createApiHandler(services: ApiServices) {
           } catch (error) {
             if (!(error instanceof ApiError)) throw error;
             res.writeHead(302, {
-              Location: new URL(`/w/${encodeURIComponent(workspaceId)}?git=error`, returnOrigin).toString(),
+              Location: new URL(`/w/${encodeURIComponent(pending.workspaceId)}?git=error`, pending.returnOrigin).toString(),
               "Cache-Control": "no-store",
             }).end();
           }
@@ -464,6 +470,10 @@ export function createApiHandler(services: ApiServices) {
             ...resolved.node,
             health: gateway?.isOnline(resolved.node.id) ? "ready" : "offline",
           },
+          mounts: (await nodes!.mountsForNode(resolved.node.id)).map((mount) => ({
+            mountKey: mount.mountKey,
+            projectId: mount.projectId,
+          })),
         });
       } else if (
         parts[1] === "toolman" &&
@@ -500,6 +510,21 @@ export function createApiHandler(services: ApiServices) {
         if (!resolved) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         const body = toolmanMountBodySchema.parse(await readBody(req));
         json(res, 200, await nodes.registerMount(resolved.node.id, body));
+      } else if (
+        parts[1] === "toolman" &&
+        parts[2] === "mounts" &&
+        parts.length === 4 &&
+        method === "DELETE"
+      ) {
+        const token = bearerToken(req);
+        if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForToolmanInstallation(token)
+          : null;
+        const nodes = runtime?.toolmanNodes ?? toolmanNodes;
+        const resolved = nodes ? await nodes.resolveInstallation(token) : null;
+        if (!nodes || !resolved) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        json(res, 200, await nodes.removeMountFromNode(resolved.node.id, decodedPathPart(parts[3])));
       } else {
         const authenticated = await authenticate(req, db, sessions, workspaceRegistry);
         const scoped = authenticated.runtime
@@ -520,6 +545,7 @@ export function createApiHandler(services: ApiServices) {
               snapshot,
               plans,
               envelope,
+              context,
               github,
               gitRepositories,
               projects,
@@ -561,6 +587,7 @@ interface RouteServices {
   snapshot: WorkspaceSnapshotBuilder | null;
   plans: PlanService | null;
   envelope: PromptEnvelopeBuilder | null;
+  context: ContextStore | null;
   github: GitHub | null;
   gitRepositories: GitRepositories | null;
   projects: ProjectStore | null;
@@ -595,6 +622,7 @@ async function route(
     snapshot,
     plans,
     envelope,
+    context,
     github,
     gitRepositories,
     projects,
@@ -817,8 +845,18 @@ async function route(
     decisions: z.array(z.string().min(1).max(500)).max(40).optional(),
     acceptanceCriteria: z.array(z.string().min(1).max(500)).max(40).optional(),
     clarifications: z.array(z.string().min(1).max(1000)).max(20).optional(),
+    channel: z.string().min(1).max(64).optional(),
+    assumedOwnerId: z.string().min(1).max(128).optional(),
+    assumedProjectId: z.string().min(1).max(128).optional(),
   });
   const planDecisionSchema = z.object({ decision: z.string().min(1).max(1000) });
+  const planConstraintSchema = z.object({ constraint: z.string().min(1).max(500) });
+  const contextBodySchema = z.object({
+    kind: z.enum(["decision", "constraint", "fact", "blocker", "handoff", "summary"]),
+    scope: z.enum(["workspace", "plan", "ticket", "channel"]),
+    subjectId: z.string().min(1).max(128).optional(),
+    body: z.string().min(1).max(2000),
+  });
 
   if (parts[1] === "board" && parts[2] === "plans") {
     if (!plans) throw new ApiError(501, "NOT_IMPLEMENTED", "plans are not available");
@@ -848,11 +886,44 @@ async function route(
           const body = planDecisionSchema.parse(await readBody(req));
           return json(res, 200, { plan: await plans.appendDecision(actor, id, body.decision) });
         }
+        case "constraints": {
+          const body = planConstraintSchema.parse(await readBody(req));
+          const plan = await plans.appendConstraint(actor, id, body.constraint);
+          if (context) {
+            await context.create({
+              actorId: actor.id,
+              kind: "constraint",
+              scope: "plan",
+              subjectId: plan.id,
+              body: body.constraint,
+              channelId: plan.originChannelId ?? null,
+            });
+          }
+          return json(res, 200, { plan });
+        }
         default:
           throw new ApiError(404, "NOT_FOUND", "no such route");
       }
     }
     throw new ApiError(404, "NOT_FOUND", "no such route");
+  }
+
+  if (parts[1] === "context" && parts.length === 2) {
+    if (!context) throw new ApiError(501, "NOT_IMPLEMENTED", "context is not available");
+    if (method === "GET") return json(res, 200, { context: await context.listActive() });
+    if (method === "POST") {
+      const body = contextBodySchema.parse(await readBody(req));
+      return json(res, 201, {
+        entry: await context.create({
+          actorId: actor.id,
+          kind: body.kind as ContextKind,
+          scope: body.scope as ContextScope,
+          subjectId: body.subjectId,
+          body: body.body,
+        }),
+      });
+    }
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
   }
 
   // GET /api/workspace/snapshot — cursor-bearing board + context projection.
@@ -917,7 +988,7 @@ async function route(
       return json(res, 200, { ok: true });
     }
     if (parts[2] === "github" && parts[3] === "authorize" && parts.length === 4 && method === "POST") {
-      return json(res, 200, { url: github.authorize(actor, actor.workspaceId, requestOrigin(req), browserReturnOrigin(req)) });
+      return json(res, 200, { url: await github.authorize(actor, actor.workspaceId, requestOrigin(req), browserReturnOrigin(req)) });
     }
     if (parts[2] === "available-repositories" && parts.length === 3 && method === "GET") {
       return json(res, 200, { repositories: await github.repositories(actor.id) });
@@ -1082,6 +1153,10 @@ async function route(
       );
       return json(res, 200, { ok: true, output });
     }
+    if (parts.length === 5 && parts[3] === "mounts" && method === "DELETE") {
+      if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
+      return json(res, 200, await toolmanNodes.removeMount(actor, parts[2], parts[4]));
+    }
     if (parts.length === 3 && method === "DELETE") {
       return json(res, 200, { project: await projects.archive(actor, parts[2]) });
     }
@@ -1163,6 +1238,16 @@ async function route(
     if (parts[2] === "pairings" && parts.length === 3 && method === "POST") {
       const body = toolmanPairingBodySchema.parse(await readBody(req));
       return json(res, 201, await toolmanNodes.createPairing(actor, body.name));
+    }
+    if (parts[2] === "nodes" && parts.length === 5 && parts[4] === "revoke" && method === "POST") {
+      const node = await toolmanNodes.revoke(actor, parts[3]);
+      toolmanGateway?.disconnect(node.id);
+      return json(res, 200, { node });
+    }
+    if (parts[2] === "nodes" && parts.length === 5 && parts[4] === "permanent" && method === "DELETE") {
+      const node = await toolmanNodes.removeNode(actor, parts[3]);
+      toolmanGateway?.disconnect(node.id);
+      return json(res, 200, { node });
     }
     if (parts[2] === "nodes" && parts.length === 4 && method === "DELETE") {
       const node = await toolmanNodes.revoke(actor, parts[3]);
@@ -1382,6 +1467,7 @@ function runtimeRouteServices(
     snapshot: runtime.snapshot,
     plans: runtime.plans,
     envelope: runtime.envelope,
+    context: runtime.context,
     github,
     gitRepositories: runtime.gitRepositories,
     projects: runtime.projects,

@@ -181,7 +181,7 @@ export class Hub {
     if (!item.owner) return;
     const owner = this.roster.list().find((participant) => participant.id === item.owner);
     if (!owner || owner.kind !== "agent") return;
-    const channel = (await this.channels.get("general")) ?? (await this.channels.listInfo())[0];
+    const channel = await this.channels.resolve(item.originChannelId);
     if (!channel) return;
     const queued = await this.agentWork.queueApprovedTicket({
       actor: { id: envelope.actor.id, displayName: envelope.actor.display_name },

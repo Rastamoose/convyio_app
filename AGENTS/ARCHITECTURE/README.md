@@ -36,7 +36,7 @@ browser client ── websocket + HTTP ──┐
 
 Convyio shell ── direct Postgres / Auth / Storage ── Supabase
        ├── authorized project action ── paired Toolman node ── local folder
-       └── encrypted OAuth + REST / Git HTTPS ── GitHub
+       └── GitHub App installation + REST / Git HTTPS ── GitHub
 ```
 
 Humans and agents are workspace actors represented by the same identity,
@@ -46,8 +46,9 @@ and controlled tools.
 The shell brokers model work to an authorized agent runner. LLM provider calls
 execute in the runner using its owner's credentials; the shell does not host
 user agents or receive model-provider credentials. GitHub is a separate
-human-connected workspace integration whose OAuth credentials are encrypted
-and consumed only by the shell's GitHub/Git transport boundary.
+human-connected workspace integration: the shell stores only an App
+installation mapping and mints short-lived installation tokens inside its
+GitHub/Git transport boundary.
 
 ## Directory
 

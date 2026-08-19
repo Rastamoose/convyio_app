@@ -307,13 +307,13 @@ describe("T10: full-stack approval fan-out", async () => {
   test("approval reaches all clients within 1s and unblocks agent work", async () => {
     const { db, drop } = await createTestDb();
     const threadEvents = new ThreadEventStore(db);
-    const plans = new PlanService(db, threadEvents);
-    const service = new BoardService(db, threadEvents, plans);
+    const channels = new Channels(db);
+    await channels.seed([{ name: "general", isDemo: false }]);
+    const plans = new PlanService(db, threadEvents, channels);
+    const service = new BoardService(db, threadEvents, plans, channels);
     const sessions = new Sessions();
     const toolman = new Toolman(service, `/tmp/board-test-${randomUUID()}`);
     await toolman.init();
-    const channels = new Channels(db);
-    await channels.seed([{ name: "general", isDemo: false }]);
     const attachments = new Attachments(db, supabaseAdmin());
     const messages = new MessageStore(db, threadEvents);
     const agentWork = new AgentWorkStore(db, threadEvents, messages);
