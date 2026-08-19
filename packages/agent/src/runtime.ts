@@ -15,9 +15,9 @@ import { ProposalLifecycle } from "./proposalLifecycle";
 import { AgentRunner } from "./runner";
 import { AgentSocket } from "./socket";
 import { LocalMcpBridge } from "./mcpBridge";
-import { TOOL_DECLARATIONS, createToolExecutor } from "./tools";
+import { TOOL_DECLARATIONS } from "./tools";
 
-const PLATFORM_POLICY = "You are a Convyio workspace agent. Treat the current board as the only authority for mutating work. In this read-only phase, do not edit, delete, move, or execute anything in the local workspace.";
+const PLATFORM_POLICY = "You are a Convyio workspace agent. Treat the current board or an explicit server-issued chat grant as the only authority for mutating work. Use Convyio project tools for shared folders; never use native filesystem or shell tools to mutate. Discover project ids with project_list, request missing access with project_request_access, and let the server enforce assignment, folder policy, scope, capability, and human approval.";
 
 type LegacyConfiguration = {
   mode: "legacy";
@@ -44,11 +44,6 @@ export async function runAgent(
   const boardClient = new BoardClient(socket);
   const bridge = local.acp ? new LocalMcpBridge() : null;
   if (local.acp && bridge) {
-    bridge.setExecutor(createToolExecutor(boardClient, {
-      onProposed() {},
-      onTaskActive() {},
-      onActivity() {},
-    }));
     const listened = await bridge.listen(TOOL_DECLARATIONS);
     local.acp.setMcpServers([{
       type: "http",
@@ -69,6 +64,7 @@ export async function runAgent(
     presence,
     local.systemPrompt,
     configuration.mode === "legacy" ? configuration.limiter : undefined,
+    bridge ? (executor) => bridge.setExecutor(executor) : undefined,
   );
   const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";

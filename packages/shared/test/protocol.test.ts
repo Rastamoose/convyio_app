@@ -71,6 +71,21 @@ describe("client event validation", () => {
         action: { kind: "project_edit_file", projectId: "proj-1", path: "a.ts" },
       }),
     );
+    assert.equal(
+      clientEventSchema.parse({
+        type: "action_request",
+        requestId: "git-1",
+        action: { kind: "project_git_branch", projectId: "proj-1", name: "feature/auth" },
+      }).type,
+      "action_request",
+    );
+    assert.throws(() =>
+      clientEventSchema.parse({
+        type: "action_request",
+        requestId: "git-2",
+        action: { kind: "project_git_push" },
+      }),
+    );
   });
 
   test("run_end defaults reason to completed", () => {

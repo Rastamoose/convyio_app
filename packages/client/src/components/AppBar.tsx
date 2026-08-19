@@ -3,7 +3,7 @@ import type { WorkspaceSummary } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { ThemeToggle } from "./ThemeToggle";
 
-export type WorkspaceView = "chat" | "board" | "resources";
+export type WorkspaceView = "chat" | "board" | "projects" | "resources";
 
 /**
  * The app-level strip on the canvas above the content panel: brand on the
@@ -140,6 +140,7 @@ export function AppBar({
       >
         {tab("chat", "Chat")}
         {tab("board", "Board")}
+        {tab("projects", "Projects")}
         {tab("resources", "Resources")}
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">

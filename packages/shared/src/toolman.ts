@@ -26,12 +26,19 @@ export type ToolmanActionKind =
   | "project_edit_file"
   | "project_delete_file"
   | "project_move_file"
-  | "project_run_command";
+  | "project_run_command"
+  | "project_git_status"
+  | "project_git_fetch"
+  | "project_git_pull"
+  | "project_git_push"
+  | "project_git_branch"
+  | "project_git_commit";
 
 export const TOOLMAN_READ_ACTIONS: readonly ToolmanActionKind[] = [
   "project_read_file",
   "project_list_files",
   "project_search_files",
+  "project_git_status",
 ];
 
 export const TOOLMAN_ACTION_CAPABILITY: Readonly<Partial<Record<ToolmanActionKind, WorkCapability>>> = {
@@ -40,6 +47,11 @@ export const TOOLMAN_ACTION_CAPABILITY: Readonly<Partial<Record<ToolmanActionKin
   project_delete_file: "file_write",
   project_move_file: "file_write",
   project_run_command: "shell_repo",
+  project_git_fetch: "shell_repo",
+  project_git_pull: "shell_repo",
+  project_git_push: "shell_repo",
+  project_git_branch: "shell_repo",
+  project_git_commit: "shell_repo",
 };
 
 export type ProjectAction =
@@ -50,7 +62,13 @@ export type ProjectAction =
   | { kind: "project_edit_file"; projectId: string; path: string; oldString: string; newString: string }
   | { kind: "project_delete_file"; projectId: string; path: string }
   | { kind: "project_move_file"; projectId: string; from: string; to: string }
-  | { kind: "project_run_command"; projectId: string; command: string };
+  | { kind: "project_run_command"; projectId: string; command: string }
+  | { kind: "project_git_status"; projectId: string }
+  | { kind: "project_git_fetch"; projectId: string }
+  | { kind: "project_git_pull"; projectId: string }
+  | { kind: "project_git_push"; projectId: string }
+  | { kind: "project_git_branch"; projectId: string; name: string; startPoint?: string }
+  | { kind: "project_git_commit"; projectId: string; message: string };
 
 export interface ToolmanNodeSummary {
   id: string;
@@ -101,8 +119,8 @@ export interface ToolExecution {
   runId: string | null;
   agentId: string;
   projectId: string;
-  mountId: string;
-  nodeId: string;
+  mountId: string | null;
+  nodeId: string | null;
   boardItemRef: string | null;
   action: ToolmanActionKind;
   status: ToolExecutionStatus;

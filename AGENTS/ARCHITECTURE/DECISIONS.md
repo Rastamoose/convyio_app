@@ -140,3 +140,26 @@ why. Current behavior is documented in the current-state pages.
 - 2026-08-16 — Convyio became multi-workspace in one shell process. Global Supabase identity is separated from owner/member workspace membership; account APIs run on the Supabase JWT, while chat/board/project APIs run on short-lived workspace-bound tokens. Active workspaces receive isolated `WorkspaceRuntime` instances sharing one Postgres pool. Consequence: every workspace-owned table, websocket, local-storage key, storage object and Toolman path must carry workspace identity; zero-workspace accounts and removal from one workspace are normal states.
 - 2026-08-18 — Every workspace starts with a workspace-scoped managed noodle actor and one-time welcome history. A separate `@workspace/agent` service authenticates with `AGENT_TOKEN`, discovers enabled memberships through the hosted manifest, and runs Gemini with one connection and isolated state per workspace; the shell does not execute the provider. Removing noodle's membership removes the workspace from the manifest and prevents token rejoin; owner restore reuses the actor without replaying history. Consequence: a new workspace has a built-in guide, while runner downtime appears as ordinary offline presence.
 - 2026-08-18 — The first username claim creates `{username}'s workspace`; invite continuation still wins over automatic workspace selection, and zero memberships remains valid after later leaving. Membership creation writes a deterministic system join notice shared by humans and agents. Consequence: first run is populated without making reconnects or restores look like new joins.
+- 2026-08-19 — A local folder is an owner-controlled workspace project; its
+  Toolman node is transport, not authority. Only the folder creator manages
+  devices, assignments, requests, policy and direct human file operations.
+  `ask` is one online-owner prompt per agent conversation, `always` is durable
+  folder consent while the node is available, and `deny` refuses. Consequence:
+  unattended assigned work is possible without making device pairing or folder
+  policy override ticket/chat authority, conversation mode or path/capability
+  checks.
+- 2026-08-19 — User-created agents discover project ids and request access
+  through provider-neutral tools; Claude and ACP bind those tools to the
+  current run's conversation-scoped executor while native provider mutation
+  tools remain disabled. Consequence: local-folder support does not depend on
+  Claude's cwd and permission decisions retain the correct conversation.
+- 2026-08-19 — Git integration uses actor-connected GitHub repositories rather
+  than introducing a native Git host. Global AES-256-GCM-encrypted OAuth
+  credentials supply workspace-linked managed checkouts; agent actions still
+  pass project assignment, owner consent and Toolman authorization, while
+  arbitrary project commands remain local-Toolman-only. Branches create linked
+  conversation rooms that archive on delete or merge. Consequence: forge
+  collaboration runs while a user's device is offline without exposing
+  provider credentials or granting the shell general command execution, but
+  GitHub remains the remote system of record and the encryption key must remain
+  stable.

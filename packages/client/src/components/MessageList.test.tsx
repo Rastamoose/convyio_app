@@ -185,6 +185,22 @@ describe("MessageList", () => {
     expect(screen.queryByRole("button", { name: /new message/ })).not.toBeInTheDocument();
   });
 
+  it("auto-scrolls to the bottom when you publish a message even if scrolled up", () => {
+    messages = [msg({ id: "m1" })];
+    const { rerender } = render(<Harness />);
+    const el = screen.getByTestId("message-scroll");
+
+    mockGeometry(el, { scrollTop: 200, scrollHeight: 1000, clientHeight: 500 });
+    fireEvent.scroll(el);
+
+    messages = [...messages, msg({ id: "m2", authorId: "self-1", content: "mine" })];
+    mockGeometry(el, { scrollTop: 200, scrollHeight: 1100, clientHeight: 500 });
+    rerender(<Harness />);
+
+    expect(el.scrollTop).toBe(1100);
+    expect(screen.queryByRole("button", { name: /new message/ })).not.toBeInTheDocument();
+  });
+
   it("auto-scrolls to the bottom when a new message arrives while already there", () => {
     messages = [msg({ id: "m1" })];
     const { rerender } = render(<Harness />);

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import {
+  installationHealth,
   loadInstallation,
   saveInstallation,
   type StoredToolman,
@@ -27,6 +28,17 @@ test("multiple workspace nodes require and honor an explicit name, workspace, or
   assert.equal((await loadInstallation("laptop", env)).node.id, "node-b");
   assert.equal((await loadInstallation("workspace-a", env)).node.id, "node-a");
   await assert.rejects(loadInstallation("missing", env), /No paired Toolman node matches/);
+});
+
+test("installation health distinguishes a running node from stored credentials", async () => {
+  const item = installation("node-health", "desk", "workspace");
+  const fetcher = (async (_input, init) => {
+    assert.equal((init?.headers as { Authorization: string }).Authorization, "Bearer node-health-token");
+    return new Response(JSON.stringify({ node: { health: "ready" } }), { status: 200 });
+  }) as typeof fetch;
+  assert.equal(await installationHealth(item, fetcher), "ready");
+  assert.equal(await installationHealth(item, (async () => new Response(null, { status: 401 })) as typeof fetch), "revoked");
+  assert.equal(await installationHealth(item, (async () => { throw new Error("offline"); }) as typeof fetch), "unreachable");
 });
 
 function installation(nodeId: string, nodeName: string, workspaceName: string): StoredToolman {

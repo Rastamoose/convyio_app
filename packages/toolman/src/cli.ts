@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { clearInstallations, exchangePairing, listInstallations, loadInstallation, saveInstallation } from "./installation";
+import { clearInstallations, exchangePairing, installationHealth, listInstallations, loadInstallation, saveInstallation } from "./installation";
 import { addProject } from "./projects";
 
 export async function runCli(
@@ -47,7 +47,8 @@ export async function runCli(
           return 0;
         }
         for (const item of installations) {
-          io.out(`${item.node.name} · ${item.workspace.name} · ${item.mounts.length} project(s)`);
+          const health = await installationHealth(item);
+          io.out(`${item.node.name} · ${item.workspace.name} · ${health} · ${item.mounts.length} project(s)`);
           for (const mount of item.mounts) io.out(`  ${mount.projectName} (${mount.kind})`);
         }
         return 0;

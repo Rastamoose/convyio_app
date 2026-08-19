@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const SENSITIVE_NAMES = new Set([
+  ".git",
   ".env",
   ".env.local",
   ".env.production",
@@ -13,7 +14,8 @@ const SENSITIVE_NAMES = new Set([
   "credentials.json",
 ]);
 
-const SENSITIVE_BASENAME = /^(id_rsa|id_ed25519|id_ecdsa|.*\.(pem|key|p12|pfx))$/i;
+const SENSITIVE_BASENAME = /^(\.env(?:\..*)?|id_rsa|id_ed25519|id_ecdsa|.*\.(pem|key|p12|pfx))$/i;
+const SEARCH_EXCLUDED_DIRECTORIES = new Set([".git", "node_modules"]);
 
 export const MAX_FILE_BYTES = 1_048_576;
 
@@ -25,16 +27,17 @@ export class PathDeniedError extends Error {
 }
 
 export async function resolveInside(root: string, relative: string): Promise<string> {
-  if (!relative || relative.startsWith("/") || relative.includes("\0")) {
+  if (!relative || path.isAbsolute(relative) || relative.includes("\0")) {
     throw new PathDeniedError("path must be relative to the checkout");
   }
+  const rawParts = relative.split(path.sep);
+  if (rawParts.some((part) => part === "..")) throw new PathDeniedError("path traversal is not allowed");
   const rootReal = await fs.realpath(root);
   let current = rootReal;
   const parts = path.normalize(relative).split(path.sep).filter((part) => part && part !== ".");
-  if (parts.some((part) => part === "..")) throw new PathDeniedError("path traversal is not allowed");
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]!;
-    if (SENSITIVE_NAMES.has(part) || SENSITIVE_BASENAME.test(part)) {
+    if (isSensitiveName(part)) {
       throw new PathDeniedError(`${part} is a sensitive file`);
     }
     const next = path.join(current, part);
@@ -113,9 +116,50 @@ export async function listFiles(root: string, relative = "."): Promise<string[]>
   const target = relative === "." ? await fs.realpath(root) : await resolveInside(root, relative);
   const entries = await fs.readdir(target, { withFileTypes: true });
   return entries
-    .filter((entry) => !entry.isSymbolicLink())
+    .filter((entry) => !entry.isSymbolicLink() && !isSensitiveName(entry.name))
     .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
     .sort();
+}
+
+export async function searchTextFiles(root: string, query: string, relative = "."): Promise<string[]> {
+  const rootReal = await fs.realpath(root);
+  const target = await resolveInside(rootReal, relative);
+  const files: string[] = [];
+  await collectSearchFiles(target, files);
+  const matches: string[] = [];
+  for (const file of files.sort()) {
+    const fileRelative = path.relative(rootReal, file);
+    const contents = await readTextFile(rootReal, fileRelative);
+    const lines = contents.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+      if (!lines[index]!.includes(query)) continue;
+      matches.push(`${fileRelative}:${index + 1}:${lines[index]}`);
+      if (matches.length === 100) return matches;
+    }
+  }
+  return matches;
+}
+
+async function collectSearchFiles(target: string, files: string[]): Promise<void> {
+  const stat = await fs.lstat(target);
+  if (stat.isSymbolicLink()) throw new PathDeniedError("symlink traversal is not allowed");
+  if (stat.isFile()) {
+    files.push(target);
+    return;
+  }
+  if (!stat.isDirectory()) return;
+  const entries = await fs.readdir(target, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || isSensitiveName(entry.name)) continue;
+    if (entry.isDirectory() && SEARCH_EXCLUDED_DIRECTORIES.has(entry.name)) continue;
+    const child = path.join(target, entry.name);
+    if (entry.isDirectory()) await collectSearchFiles(child, files);
+    else if (entry.isFile()) files.push(child);
+  }
+}
+
+function isSensitiveName(name: string): boolean {
+  return SENSITIVE_NAMES.has(name.toLowerCase()) || SENSITIVE_BASENAME.test(name);
 }
 
 function isNotFound(error: unknown): boolean {

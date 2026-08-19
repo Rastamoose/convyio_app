@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChatMessage, InteractionRequest, ToolExecution, TraceChunk } from "@workspace/shared";
 import { formatElapsed } from "../lib/format";
+import { renderMessageContent } from "../lib/markdown";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { PermissionCard } from "./PermissionCard";
@@ -125,9 +126,13 @@ export function TraceMessageLive({
 export function TraceMessageFinished({
   message,
   durationMs,
+  mentionRegex,
+  onRefClick,
 }: {
   message: ChatMessage;
   durationMs?: number;
+  mentionRegex: RegExp | null;
+  onRefClick?: (ref: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const elapsed = useMemo(
@@ -139,7 +144,7 @@ export function TraceMessageFinished({
   return (
     <div className="min-w-0">
       <div className="leading-[1.375rem] break-words whitespace-pre-wrap">
-        {message.content}
+        {renderMessageContent(message.content, mentionRegex, onRefClick)}
       </div>
       {message.trace && message.trace.length > 0 && (
         <div className="mt-1">

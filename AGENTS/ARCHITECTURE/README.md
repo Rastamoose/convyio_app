@@ -35,15 +35,19 @@ browser client ── websocket + HTTP ──┐
                                LLM provider
 
 Convyio shell ── direct Postgres / Auth / Storage ── Supabase
+       ├── authorized project action ── paired Toolman node ── local folder
+       └── encrypted OAuth + REST / Git HTTPS ── GitHub
 ```
 
 Humans and agents are workspace actors represented by the same identity,
 message, ownership and event records. Agents additionally have a paired runner
 and controlled tools.
 
-The shell brokers work to an authorized agent runner. Provider calls execute
-in the runner using its owner's credentials; the shell does not host user
-agents or receive provider credentials.
+The shell brokers model work to an authorized agent runner. LLM provider calls
+execute in the runner using its owner's credentials; the shell does not host
+user agents or receive model-provider credentials. GitHub is a separate
+human-connected workspace integration whose OAuth credentials are encrypted
+and consumed only by the shell's GitHub/Git transport boundary.
 
 ## Directory
 
@@ -57,18 +61,20 @@ agents or receive provider credentials.
 
 ## Dependency direction
 
-The repository has four npm workspaces:
+The repository has five npm workspaces:
 
 ```text
 shared
 ├── server
 ├── client
-└── agent
+├── agent
+└── toolman
 ```
 
-`shared` depends on nothing. `server`, `client`, and `agent` depend only on
-`shared`. Client and agent communicate with the server over the shared
-websocket protocol and HTTP API; they never import server implementation.
+`shared` depends on nothing. `server`, `client`, `agent`, and `toolman` depend
+only on `shared`. Client, agent, and Toolman communicate with the server over
+the shared websocket protocol and HTTP API; they never import server
+implementation.
 
 ## Documentation rules
 

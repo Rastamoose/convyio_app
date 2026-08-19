@@ -29,8 +29,9 @@ Fill this in per project before doing anything else. If a line below is still a
 placeholder, discover the real value first and replace it.
 
 ```
-Build:        npm run build -w @workspace/client   (server/agent/shared run from source via tsx)
-Test:         npm test   (root: shared, server, agent, client in sequence)
+Build:        npm run build -w @workspace/client; npm run build -w @workspace/toolman
+              (server/agent/shared run from source via tsx)
+Test:         npm test   (root: shared, server, agent, toolman, client in sequence)
 Test one:     npm test -w @workspace/server -- --test-name-pattern "<name>"   (vitest -t "<name>" for client)
 Lint / types: npm run typecheck   (root; or npx tsc --noEmit -p packages/<name>)
 Run:          npm run dev   (server ws+http :3001, client :5173, agent; needs GEMINI_API_KEY in .env)

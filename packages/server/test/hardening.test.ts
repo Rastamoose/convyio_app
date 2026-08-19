@@ -13,6 +13,7 @@ import { Sessions } from "../src/board/sessions";
 import { Toolman, authorizeMutation } from "../src/board/Toolman";
 import { scopeAllows, validateScopePaths } from "../src/board/scope";
 import { loadDemoScripts } from "../src/demo/script";
+import { ProjectStore } from "../src/projects/ProjectStore";
 import { acceptedPlan, createEnv, PROPOSAL } from "./helpers";
 
 describe("scope authorization", async () => {
@@ -146,6 +147,39 @@ describe("scope authorization", async () => {
     assert.equal(shellAllowed.allow, true);
   });
 
+  test("Git mutations require the owned project-bound ticket and shell capability", async () => {
+    const projects = new ProjectStore(env.db, env.threadEvents);
+    const project = await projects.create(human.actor, { name: `git-auth-${randomUUID()}`, kind: "git" });
+    const { body } = await env.api("POST", "/api/board/items", agent.token, {
+      ...PROPOSAL,
+      title: "push Git changes",
+      why: "publish approved work",
+      effect: "the branch is available for review",
+      scopePaths: ["src/"],
+      capabilities: ["file_write", "shell_repo"],
+      projectId: project.id,
+      planId: await acceptedPlan(env, human.token, `git-${project.id}`),
+      owner: agent.actor.id,
+    });
+    await env.api("POST", `/api/board/items/${body.item.id}/approve`, human.token, { owner: agent.actor.id });
+
+    const allowed = await authorizeMutation(
+      agent.actor,
+      body.item.ref,
+      { name: "project_git_push", projectId: project.id },
+      env.service,
+    );
+    assert.equal(allowed.allow, true);
+    const wrongProject = await authorizeMutation(
+      agent.actor,
+      body.item.ref,
+      { name: "project_git_push", projectId: "another-project" },
+      env.service,
+    );
+    assert.equal(wrongProject.allow, false);
+    assert.equal(!wrongProject.allow && wrongProject.code, "PROJECT_MISMATCH");
+  });
+
   test("granting shell does not grant file writes outside scope", async () => {
     const item = await approvedProposal(["billing/"], ["file_write", "shell_repo"]);
     const outside = await authorizeMutation(
@@ -243,7 +277,7 @@ describe("sessions", () => {
   test("expired tokens stop resolving", async () => {
     const sessions = new Sessions(20);
     const token = sessions.issue("actor-1");
-    assert.equal(sessions.resolve(token), "actor-1");
+    assert.equal(sessions.resolve(token)?.actorId, "actor-1");
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(sessions.resolve(token), null);
   });
@@ -256,7 +290,7 @@ describe("sessions", () => {
     sessions.revokeFor("actor-1");
     assert.equal(sessions.resolve(a1), null);
     assert.equal(sessions.resolve(a2), null);
-    assert.equal(sessions.resolve(b), "actor-2");
+    assert.equal(sessions.resolve(b)?.actorId, "actor-2");
   });
 });
 

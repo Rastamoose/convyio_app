@@ -11,17 +11,21 @@ derives `welcome.apiUrl` per connection from the `Host` /
 | Variable                    | Used by | Default                    | Meaning                                                                 |
 | ---------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------ |
 | `PORT`                      | server  | `3001`                     | HTTP + websocket port.                                                  |
-| `DATA_DIR`                  | server, agent | `./data` (`/data` in image)| Parent for server-local Toolman sandboxes and hosted-agent state under isolated workspace directories; the database and uploads live in Supabase. |
+| `DATA_DIR`                  | server, agent | `./data` (`/data` in image)| Parent for workspace sandboxes, managed Git checkouts and hosted-agent state; the database and uploads live in Supabase. |
 | `SUPABASE_URL`              | server  | — (required)                | Supabase project URL.                                                    |
 | `SUPABASE_SECRET_KEY`       | server  | — (required)                | Secret (service-role) key: verifies user JWTs and reads/writes Storage server-side. Never expose to the client. |
 | `SUPABASE_DB_URL`           | server  | — (required)                | Postgres connection string (Supabase project settings → Database).      |
+| `GITHUB_CLIENT_ID`          | server  | —                           | GitHub OAuth App client id; set with the client secret and credential-encryption key to enable Projects. |
+| `GITHUB_CLIENT_SECRET`      | server  | —                           | GitHub OAuth App client secret; server-only.                             |
+| `GIT_CREDENTIAL_ENCRYPTION_KEY` | server | —                        | Exactly 32 bytes encoded as 64 hex characters or base64url; encrypts GitHub tokens at rest. |
+| `GITHUB_REDIRECT_URI`       | server  | request-derived             | Optional fixed GitHub callback URL; otherwise the server derives `/api/git/github/callback` from the request origin. |
 | `VITE_SUPABASE_URL`         | client  | — (required)                | Same project URL, exposed to the browser bundle.                        |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | client  | — (required)            | Supabase publishable (public) key — safe to expose, used for browser sign-in. |
 | `GEMINI_API_KEY`            | agent   | —                          | Enables the agent when `AGENT_PROVIDER=gemini` (the default); unset = no agent starts under that provider. Not needed for `AGENT_PROVIDER=claude`. |
 | `AGENT_NAME`                | agent   | `noodle`                   | The agent's display name.                                               |
 | `AGENT_MODEL`               | agent   | `gemini-2.5-flash`         | Model id — Gemini model for the gemini provider, `claude-sonnet-5` default for the claude provider. |
 | `AGENT_PROVIDER`            | agent   | `gemini`                   | `gemini` or `claude`. `claude` needs no API key but does need a `claude login` session — see below. |
-| `CLAUDE_WORKDIR`            | agent   | `./data/workspace`         | cwd for Claude Code's native file/bash tools when `AGENT_PROVIDER=claude`. |
+| `CLAUDE_WORKDIR`            | agent   | `./data/workspace`         | cwd for Claude's restricted native read/search tools; mutations use server-authorized Toolman project tools. |
 | `GOOGLE_AUTH_ENABLED`       | server  | — (sign-in unavailable)    | Set to `1` = Google Sign-In offered to humans. The OAuth client itself is configured in the Supabase dashboard, not here — see "Google Sign-In" below. |
 | `EMAIL_AUTH`                | server  | — (sign-in unavailable)    | Set to `1` = email/password sign-in offered. Neither this nor `GOOGLE_AUTH_ENABLED` set = the server refuses every join and the client shows a "contact support" dead end (`hello@convyio.com`) instead of a login screen. |
 | `AGENT_TOKEN`               | both    | —                          | Shared secret used by the shell and hosted noodle service. The values must match exactly; the shell authenticates the manifest and workspace joins. |
@@ -48,7 +52,7 @@ Health: `curl http://localhost:3001/api/health` → `{"ok":true}`.
 
 ## Quick start — bare metal
 
-Node 20+ (no SQLite version constraint anymore — the database is Supabase Postgres).
+Node 22+ (the server database is Supabase Postgres).
 
 ```sh
 npm ci
@@ -85,6 +89,73 @@ Claude's native tools are restricted to read-only operations. Mutations route
 through the server's Toolman path and retain the same board authorization
 boundary; see `ARCHITECTURE/CURRENT_INVARIANTS.md`.
 
+## Toolman local-folder node
+
+`convyio-toolman` is built from this repository; it is not published to npm.
+Build and link it once on the machine that owns the folder:
+
+```sh
+npm install
+npm run build -w @workspace/toolman
+npm link -w @workspace/toolman
+```
+
+In the workspace Resources view, choose **Share this folder**, name the device,
+and copy the one-time pairing code. Then, from the folder to share:
+
+```sh
+convyio-toolman pair --server https://app.convyio.com --code <one-time-code>
+convyio-toolman project add . --name <workspace-project-name>
+convyio-toolman run
+```
+
+The installation token and local path mapping are private mode files under
+`$XDG_CONFIG_HOME/convyio/toolman` (default `~/.config/convyio/toolman`). The
+server receives only opaque node, project and mount ids. If several nodes are
+paired, pass a node name or id to `project add --node` and `run`.
+
+`run` stays in the foreground and must remain running, but reconnects after
+server/network interruption with bounded backoff. Use a process supervisor for
+an unattended device. `convyio-toolman status` asks the shell whether each
+stored installation is `ready`, `offline`, `revoked`, or `unreachable`; stored
+credentials alone do not mean the node is live. `unpair` revokes the presented
+installation and removes its local credential.
+
+The project owner then selects agents and `ask` / `always` / `deny` in
+Resources. `always` permits unattended folder consent while Toolman is live,
+but conversation permission mode and ticket/chat-grant authorization still
+apply. Only the owner can manage assignments or use the Resources file editor.
+
+## GitHub repositories
+
+1. Create a GitHub OAuth App whose callback is the exact public shell origin
+   plus `/api/git/github/callback` (production:
+   `https://app.convyio.com/api/git/github/callback`). For local development,
+   use a separate app/callback at
+   `http://localhost:3001/api/git/github/callback`; OAuth returns to the
+   accepted browser origin, so a Vite client on 5173/5174 resumes there.
+2. Configure all credential variables together:
+
+   ```sh
+   GITHUB_CLIENT_ID=...
+   GITHUB_CLIENT_SECRET=...
+   GIT_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+   # Optional when request-derived callback URLs are unsuitable:
+   GITHUB_REDIRECT_URI=https://app.convyio.com/api/git/github/callback
+   ```
+
+   Partial configuration makes server boot fail. Keep the encryption key
+   stable: changing it makes stored tokens unreadable and users must reconnect.
+3. The server requests `repo read:user`. Access and refresh tokens are
+   AES-256-GCM encrypted server-side, rotate when expiring, are erased on
+   disconnect and are never sent to clients or agents.
+4. The runtime host needs `git`. The Dockerfile installs it; install a current
+   Git CLI separately for bare-metal deployment.
+5. Apply `supabase/migrations/20260818150000_git_integration.sql` (normally via
+   `npx supabase db push`) before deploying this code. Managed checkouts live
+   below `DATA_DIR/workspaces/<sha256(workspace-id)>/repositories/`; preserve
+   that volume across restarts.
+
 ## Reverse proxy + TLS
 
 The websocket and the API share the port, so one proxy block covers both.
@@ -115,7 +186,7 @@ location / {
 ## Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com) (the free tier is enough for this app's scale).
-2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or run every file in `supabase/migrations/` in filename order with `psql "$SUPABASE_DB_URL" -f <file>` — later migrations add `agent_invites`, enable deny-all RLS, and split out `workspaces`/`workspace_members`, so the init file alone is not enough), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
+2. Apply the schema: `npx supabase link --project-ref <your-project-ref> && npx supabase db push` (or run every file in `supabase/migrations/` in filename order with `psql "$SUPABASE_DB_URL" -f <file>` — later migrations add agent/project/Git records, enable deny-all RLS, and split out `workspaces`/`workspace_members`, so the init file alone is not enough), then create the private `attachments` Storage bucket — see `supabase/migrations/` and Task 1 of the migration plan for the exact commands.
 3. Copy the project's URL and keys (Project Settings → API) into `.env`: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `VITE_SUPABASE_URL` (same as `SUPABASE_URL`), `VITE_SUPABASE_PUBLISHABLE_KEY` (same as `SUPABASE_PUBLISHABLE_KEY`); copy the Postgres connection string (Project Settings → Database → Connection string → URI) into `SUPABASE_DB_URL`.
 4. In Authentication → Providers, enable Email (for `EMAIL_AUTH=1`) and/or Google (for `GOOGLE_AUTH_ENABLED=1` — see "Google Sign-In" below for the OAuth client setup Google itself requires). Add `https://app.convyio.com/**` to Supabase Authentication → URL Configuration → Redirect URLs so `/invite/:token` survives Google OAuth, email confirmation and password recovery redirects.
 5. **After pulling changes, re-apply migrations** (`npx supabase db push`). New migrations land with the code that needs them, so a database left behind is the usual cause of a local environment that worked yesterday and does not today. The server checks this at boot and refuses to start with the exact list of what is missing rather than failing later, feature by feature.
@@ -148,13 +219,16 @@ cloudflared tunnel --url http://localhost:3001
 
 Prints a `https://….trycloudflare.com` URL, no account needed. To test
 Google login through it, add that printed https origin to the OAuth client's
-authorized JavaScript origins.
+authorized JavaScript origins. To test GitHub, set the GitHub OAuth App callback
+and `GITHUB_REDIRECT_URI` to `<printed-origin>/api/git/github/callback`.
 
 ## Data
 
 - The database, auth, and uploaded files all live in Supabase — back up
   through Supabase's own dashboard/CLI (`supabase db dump`), not this
-  container. `DATA_DIR` holds isolated server-local Toolman sandboxes under `workspaces/<sha256(workspace-id)>/`.
+  container. `DATA_DIR` holds isolated server-local Toolman sandboxes and
+  managed Git checkouts under `workspaces/<sha256(workspace-id)>/`; local-folder
+  mounts remain on their paired Toolman devices.
 - Uploads are unauthenticated capability URLs (the unguessable UUID is the
   secret, the Discord-CDN model — recorded in `ARCHITECTURE/DECISIONS.md`):
   the server proxies them from a private Supabase Storage bucket using the

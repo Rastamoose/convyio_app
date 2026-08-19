@@ -28,6 +28,7 @@ RUN VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
 # behind in the build stage.
 FROM node:24-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production DATA_DIR=/data
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/shared ./packages/shared

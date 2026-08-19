@@ -8,10 +8,10 @@
  * with the real textarea text, so it must never gain markdown handling.
  *
  * `renderMessageContent` is the richer renderer for sent messages: code
- * blocks/spans, blockquotes, bold/underline/italic/strike, autolinked URLs,
- * then mentions/task-refs on whatever plain text is left. It never uses
- * dangerouslySetInnerHTML, so escaping is automatic — a "<script>" in a
- * message is just text.
+ * blocks/spans, headings, lists, blockquotes, bold/underline/italic/strike,
+ * autolinked URLs, then mentions/task-refs on whatever plain text is left.
+ * It never uses dangerouslySetInnerHTML, so escaping is automatic — a
+ * "<script>" in a message is just text.
  */
 import { Fragment } from "react";
 
@@ -237,9 +237,22 @@ function formatInline(
   return nodes;
 }
 
-// A line starting with "> " renders as a bordered blockquote line; anything
-// else gets inline formatting. Lines stay joined by literal "\n"s so the
-// caller's whitespace-pre-wrap wrapper keeps line breaks.
+const HEADING_CLASS = [
+  "text-xl font-bold",
+  "text-lg font-bold",
+  "text-base font-semibold",
+  "text-sm font-semibold",
+  "text-sm font-semibold text-muted",
+  "text-xs font-semibold tracking-wide text-muted uppercase",
+];
+
+const BULLET_RE = /^([-*+]) (.*)$/;
+const ORDERED_RE = /^(\d+)[.)] (.*)$/;
+const HEADING_RE = /^(#{1,6}) (.+)$/;
+
+// Headings, lists and quotes are block forms; everything else is inline.
+// Consecutive list items share a list so markers line up. Lines stay joined
+// by literal "\n"s so the caller's whitespace-pre-wrap wrapper keeps breaks.
 function renderPlainSegment(
   text: string,
   mentionRegex: RegExp | null,
@@ -248,8 +261,21 @@ function renderPlainSegment(
 ): React.ReactNode[] {
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
-  lines.forEach((line, i) => {
+  let i = 0;
+  while (i < lines.length) {
     if (i > 0) nodes.push("\n");
+    const line = lines[i];
+    const heading = HEADING_RE.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      nodes.push(
+        <div key={`${keyPrefix}-h${i}`} className={HEADING_CLASS[level - 1]}>
+          {formatInline(heading[2], mentionRegex, onRefClick, `${keyPrefix}-h${i}`)}
+        </div>,
+      );
+      i++;
+      continue;
+    }
     const quote = /^> ?(.*)$/.exec(line);
     if (quote) {
       nodes.push(
@@ -257,10 +283,35 @@ function renderPlainSegment(
           {formatInline(quote[1], mentionRegex, onRefClick, `${keyPrefix}-q${i}`)}
         </div>,
       );
-    } else {
-      nodes.push(...formatInline(line, mentionRegex, onRefClick, `${keyPrefix}-l${i}`));
+      i++;
+      continue;
     }
-  });
+    const bullet = BULLET_RE.exec(line);
+    const ordered = ORDERED_RE.exec(line);
+    if (bullet || ordered) {
+      const kind = bullet ? "ul" : "ol";
+      const start = i;
+      const items: React.ReactNode[] = [];
+      while (i < lines.length) {
+        const item = kind === "ul" ? BULLET_RE.exec(lines[i]) : ORDERED_RE.exec(lines[i]);
+        if (!item) break;
+        if (i > start) items.push("\n");
+        items.push(
+          <div key={`${keyPrefix}-${kind}${i}`} className="flex gap-2">
+            <span className="w-4 shrink-0 text-right text-muted">{kind === "ul" ? "•" : `${item[1]}.`}</span>
+            <span className="min-w-0 flex-1">
+              {formatInline(item[2], mentionRegex, onRefClick, `${keyPrefix}-${kind}${i}`)}
+            </span>
+          </div>,
+        );
+        i++;
+      }
+      nodes.push(<div key={`${keyPrefix}-${kind}${start}`}>{items}</div>);
+      continue;
+    }
+    nodes.push(...formatInline(line, mentionRegex, onRefClick, `${keyPrefix}-l${i}`));
+    i++;
+  }
   return nodes;
 }
 

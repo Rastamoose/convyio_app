@@ -671,9 +671,17 @@ export function MessageList({
     return entries.sort((a, b) => timelineTs(a) - timelineTs(b));
   }, [messages, boardLines, activeRuns, proposedItems, orphanInteractions]);
 
-  // Scroll model: stick to the bottom only while already there; otherwise
-  // leave the view alone and surface a "N new messages" pill. Prepending
-  // older history restores the exact pre-load offset instead of jumping.
+  const pinToBottom = (el: HTMLDivElement) => {
+    el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setNewSinceScroll(0);
+    markRead(channel);
+  };
+
+  // Scroll model: stick to the bottom while already there, and always follow
+  // a message you just published. Otherwise leave the view alone and
+  // surface a "N new messages" pill. Prepending older history restores the
+  // exact pre-load offset instead of jumping.
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -681,10 +689,7 @@ export function MessageList({
     if (prevChannelRef.current !== channel) {
       prevChannelRef.current = channel;
       lastIdRef.current = messages[messages.length - 1]?.id ?? null;
-      atBottomRef.current = true;
-      setNewSinceScroll(0);
-      el.scrollTop = el.scrollHeight;
-      markRead(channel);
+      pinToBottom(el);
       return;
     }
 
@@ -708,14 +713,25 @@ export function MessageList({
     lastIdRef.current = last?.id ?? null;
     if (!isNewTail) return;
 
-    if (atBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-      markRead(channel);
+    if (atBottomRef.current || last.authorId === self?.id) {
+      pinToBottom(el);
     } else {
       setNewSinceScroll((n) => n + 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads atBottomRef/lastIdRef by design
-  }, [channel, messages]);
+  }, [channel, messages, self?.id]);
+
+  // A new message's attachments (text cards, images) grow after paint. Stay
+  // pinned so the view doesn't freeze one viewport above the new tail.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    for (const child of el.children) ro.observe(child);
+    return () => ro.disconnect();
+  }, [channel, timeline.length]);
 
   const maybeLoadOlder = (el: HTMLDivElement) => {
     if (loadingOlder || !hasMore) return;
@@ -1024,7 +1040,12 @@ export function MessageList({
                     <AuthorHeader m={m} />
                     {m.replyToId && <ReplyPreview replyToId={m.replyToId} messages={messages} onJump={jumpToMessage} />}
                     {m.trace ? (
-                      <TraceMessageFinished message={m} durationMs={runDurations.get(m.runId ?? "")} />
+                      <TraceMessageFinished
+                        message={m}
+                        durationMs={runDurations.get(m.runId ?? "")}
+                        mentionRegex={mentionRegex}
+                        onRefClick={onRefClick}
+                      />
                     ) : (
                       messageBody(m)
                     )}

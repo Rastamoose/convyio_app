@@ -11,9 +11,9 @@ Convyio contains isolated shared workspaces. Within each workspace, humans and a
 
 Features must be designed across the ecosystem rather than inside package
 silos. Planning and ticket approval therefore require an explicit impact map
-covering shared protocol, server, client, agent harnesses, database and
-security, deployment, tests, demos and documentation. A reasoned `N/A` is a
-valid assessment.
+covering shared protocol, server, client, agent harnesses, local Toolman,
+database and security, deployment, tests, demos and documentation. A reasoned
+`N/A` is a valid assessment.
 
 ## Relationship map
 

@@ -1,4 +1,4 @@
-import type { AuthzDenyCode, BoardItem, WorkCapability } from "@workspace/shared";
+import type { AuthzDenyCode, BoardItem, ProjectAction, WorkCapability } from "@workspace/shared";
 import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
@@ -185,6 +185,23 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
   },
   {
+    name: "project_list",
+    description: "List shared projects, assignment status, stable project ids, owners, and pending access requests.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "project_request_access",
+    description: "Request access to an unassigned shared project. The folder owner must approve it.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        reason: { type: "string", description: "Why this task needs the folder" },
+      },
+      required: ["project_id", "reason"],
+    },
+  },
+  {
     name: "project_read_file",
     description: "Read a text file from an assigned local folder.",
     parameters: {
@@ -223,7 +240,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_write_file",
-    description: "Write a text file in an assigned local folder. Requires a workable project-bound ticket.",
+    description: "Write a text file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit so the server can request the required human grant.",
     parameters: {
       type: "object",
       properties: {
@@ -232,12 +249,12 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         content: { type: "string" },
         board_item_ref: { type: "string" },
       },
-      required: ["project_id", "path", "content", "board_item_ref"],
+      required: ["project_id", "path", "content"],
     },
   },
   {
     name: "project_edit_file",
-    description: "Replace one exact string in a project file. Requires a workable project-bound ticket.",
+    description: "Replace one exact string in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
     parameters: {
       type: "object",
       properties: {
@@ -247,14 +264,41 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         new_string: { type: "string" },
         board_item_ref: { type: "string" },
       },
-      required: ["project_id", "path", "old_string", "new_string", "board_item_ref"],
+      required: ["project_id", "path", "old_string", "new_string"],
+    },
+  },
+  {
+    name: "project_delete_file",
+    description: "Delete one file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        path: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "path"],
+    },
+  },
+  {
+    name: "project_move_file",
+    description: "Move or rename one file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        from: { type: "string" },
+        to: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "from", "to"],
     },
   },
   {
     name: "project_run_command",
     description:
-      "Run a non-interactive command in the assigned local folder. " +
-      "Requires a workable project-bound ticket with shell_repo. This is not an OS sandbox.",
+      "Run a non-interactive command in the assigned project checkout. Include board_item_ref for ticket work; " +
+      "omit it for a bounded chat action that may request approval. This is not an OS sandbox.",
     parameters: {
       type: "object",
       properties: {
@@ -262,7 +306,55 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         command: { type: "string" },
         board_item_ref: { type: "string" },
       },
-      required: ["project_id", "command", "board_item_ref"],
+      required: ["project_id", "command"],
+    },
+  },
+  {
+    name: "project_git_status",
+    description: "Show branch, working tree, and ahead/behind state for an assigned Git project. Read-only.",
+    parameters: {
+      type: "object",
+      properties: { project_id: { type: "string" } },
+      required: ["project_id"],
+    },
+  },
+  ...["fetch", "pull", "push"].map((operation): ToolDeclaration => ({
+    name: `project_git_${operation}`,
+    description: `${operation} the assigned Git project. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.`,
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id"],
+    },
+  })),
+  {
+    name: "project_git_branch",
+    description: "Create and publish a branch in an assigned Git project. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        name: { type: "string" },
+        start_point: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "name"],
+    },
+  },
+  {
+    name: "project_git_commit",
+    description: "Commit all approved working-tree changes as the current agent. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        message: { type: "string" },
+        board_item_ref: { type: "string" },
+      },
+      required: ["project_id", "message"],
     },
   },
 ];
@@ -395,6 +487,26 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           const result = await board.requestAction({ kind: "list_files", path }, null);
           return result.ok ? { listing: result.output } : { error: result.error };
         }
+        case "project_list": {
+          hooks.onActivity("project_list");
+          const projects = await board.refreshProjectAccess();
+          return {
+            projects: projects.map(({ project, assignment, request }) => ({
+              id: project.id,
+              name: project.name,
+              kind: project.kind,
+              owner: project.createdByName ?? project.createdBy,
+              folder_policy: project.accessMode,
+              assignment_status: assignment?.status ?? null,
+              access_request_pending: Boolean(request),
+            })),
+          };
+        }
+        case "project_request_access": {
+          hooks.onActivity(`project_request_access ${str("project_id")}`);
+          await board.requestProjectAccess(str("project_id"), str("reason"));
+          return { requested: true, note: "The folder owner must approve this request before project tools can run." };
+        }
         case "project_read_file": {
           hooks.onActivity(`${name} ${str("path")}`);
           const result = await board.requestAction(
@@ -427,25 +539,75 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           );
           return result.ok ? { content: result.output } : { error: result.error };
         }
+        case "project_git_status": {
+          hooks.onActivity(`${name} ${str("project_id")}`);
+          const result = await board.requestAction(
+            { kind: "project_git_status", projectId: str("project_id") },
+            null,
+            hooks.conversationId ?? null,
+          );
+          return result.ok ? { status: result.output } : { error: result.error };
+        }
+        case "project_git_fetch":
+        case "project_git_pull":
+        case "project_git_push":
+        case "project_git_branch":
+        case "project_git_commit": {
+          const ref = str("board_item_ref");
+          const item = board.resolve(ref);
+          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
+          hooks.onActivity(`${name} ${str("project_id")} (${ref || "no ref"})`);
+          const action = name === "project_git_branch"
+            ? {
+                kind: "project_git_branch" as const,
+                projectId: str("project_id"),
+                name: str("name"),
+                ...(args.start_point ? { startPoint: str("start_point") } : {}),
+              }
+            : name === "project_git_commit"
+              ? { kind: "project_git_commit" as const, projectId: str("project_id"), message: str("message") }
+              : name === "project_git_fetch"
+                ? { kind: "project_git_fetch" as const, projectId: str("project_id") }
+                : name === "project_git_pull"
+                  ? { kind: "project_git_pull" as const, projectId: str("project_id") }
+                  : { kind: "project_git_push" as const, projectId: str("project_id") };
+          const result = await board.requestAction(action, ref || null, hooks.conversationId ?? null);
+          if (!result.ok && result.code) {
+            hooks.onActivity(`toolman denied ${name}: ${result.code}`);
+            return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
+          }
+          return result.ok ? { done: result.output } : { error: result.error };
+        }
         case "project_write_file":
         case "project_edit_file":
+        case "project_delete_file":
+        case "project_move_file":
         case "project_run_command": {
           const ref = str("board_item_ref");
           const item = board.resolve(ref);
           if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
-          hooks.onActivity(`${name} ${str("path") || str("command")} (${ref || "no ref"})`);
+          const target = str("path") || str("from") || str("command");
+          hooks.onActivity(`${name} ${target} (${ref || "chat grant"})`);
+          let action: ProjectAction;
+          if (name === "project_run_command") {
+            action = { kind: name, projectId: str("project_id"), command: str("command") };
+          } else if (name === "project_edit_file") {
+            action = {
+              kind: name,
+              projectId: str("project_id"),
+              path: str("path"),
+              oldString: str("old_string"),
+              newString: str("new_string"),
+            };
+          } else if (name === "project_delete_file") {
+            action = { kind: name, projectId: str("project_id"), path: str("path") };
+          } else if (name === "project_move_file") {
+            action = { kind: name, projectId: str("project_id"), from: str("from"), to: str("to") };
+          } else {
+            action = { kind: name, projectId: str("project_id"), path: str("path"), content: str("content") };
+          }
           const result = await board.requestAction(
-            name === "project_run_command"
-              ? { kind: name, projectId: str("project_id"), command: str("command") }
-              : name === "project_edit_file"
-                ? {
-                    kind: name,
-                    projectId: str("project_id"),
-                    path: str("path"),
-                    oldString: str("old_string"),
-                    newString: str("new_string"),
-                  }
-                : { kind: name, projectId: str("project_id"), path: str("path"), content: str("content") },
+            action,
             ref || null,
             hooks.conversationId ?? null,
           );

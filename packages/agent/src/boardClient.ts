@@ -4,6 +4,7 @@ import {
   isBoardEnvelope,
   mergeLiveItems,
   type ActionResultEvent,
+  type AgentProjectAccess,
   type BoardItem,
   type BoardPlan,
   type ToolmanAction,
@@ -25,6 +26,7 @@ const APPROVAL_WAIT_MS = 11 * 60 * 1000;
  */
 export class BoardClient {
   private items = new Map<string, BoardItem>();
+  private projects: AgentProjectAccess[] = [];
   private envelope: PromptEnvelope | null = null;
   private token: string | null = null;
   private apiUrl: string | null = null;
@@ -63,6 +65,7 @@ export class BoardClient {
       const merged = mergeLiveItems(snapshot.items, [...this.items.values()]);
       this.items.clear();
       for (const item of merged) this.items.set(item.id, item);
+      await this.refreshProjectAccess();
       try {
         const body = (await this.api("GET", "/api/workspace/prompt-envelope")) as { envelope: PromptEnvelope };
         this.envelope = body.envelope;
@@ -87,6 +90,21 @@ export class BoardClient {
 
   myProposedItems(myId: string): BoardItem[] {
     return this.list().filter((i) => i.status === "proposed" && i.createdBy === myId);
+  }
+
+  listProjectAccess(): AgentProjectAccess[] {
+    return this.projects;
+  }
+
+  async refreshProjectAccess(): Promise<AgentProjectAccess[]> {
+    const body = (await this.api("GET", "/api/agent-project-access")) as { projects: AgentProjectAccess[] };
+    this.projects = body.projects;
+    return this.projects;
+  }
+
+  async requestProjectAccess(projectId: string, reason: string): Promise<AgentProjectAccess[]> {
+    await this.api("POST", `/api/projects/${projectId}/access-requests`, { reason });
+    return this.refreshProjectAccess();
   }
 
   // -------------------------------------------------------------------------
@@ -208,17 +226,31 @@ export class BoardClient {
 
   /** Compact board summary for the model's context window. */
   summary(): string {
-    if (this.envelope) return renderPromptEnvelope(this.envelope);
-    const items = this.list();
-    if (items.length === 0) return "(board is empty)";
-    return items
-      .map((i) => {
-        const proposal =
-          i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
-        const scope = i.scopePaths ? ` — scope: ${i.scopePaths.join(", ")}` : "";
-        const owner = i.ownerName ? ` — owner: ${i.ownerName}` : "";
-        return `${i.ref} [${i.status}] ${i.title}${owner}${proposal}${scope}`;
-      })
-      .join("\n");
+    const board = this.envelope
+      ? renderPromptEnvelope(this.envelope)
+      : this.list().length === 0
+        ? "(board is empty)"
+        : this.list()
+            .map((i) => {
+              const proposal =
+                i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
+              const scope = i.scopePaths ? ` — scope: ${i.scopePaths.join(", ")}` : "";
+              const owner = i.ownerName ? ` — owner: ${i.ownerName}` : "";
+              return `${i.ref} [${i.status}] ${i.title}${owner}${proposal}${scope}`;
+            })
+            .join("\n");
+    const projects = this.projects.length === 0
+      ? "(no shared projects)"
+      : this.projects
+          .map(({ project, assignment, request }) => {
+            const access = assignment
+              ? `assigned:${assignment.status}`
+              : request
+                ? "access-request:pending"
+                : "not-assigned";
+            return `${project.id} [${access}] ${project.name} (${project.kind}) — owner: ${project.createdByName ?? project.createdBy} — folder-policy: ${project.accessMode}`;
+          })
+          .join("\n");
+    return `${board}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
   }
 }

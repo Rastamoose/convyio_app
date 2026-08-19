@@ -18,8 +18,8 @@ const PREVIEW = 4_000;
 export interface ExecutionInput {
   agentId: string;
   projectId: string;
-  mountId: string;
-  nodeId: string;
+  mountId: string | null;
+  nodeId: string | null;
   boardItemRef: string | null;
   action: ProjectAction;
   conversationId?: string | null;
@@ -219,8 +219,8 @@ interface ExecutionRow {
   run_id: string | null;
   agent_id: string;
   project_id: string;
-  mount_id: string;
-  node_id: string;
+  mount_id: string | null;
+  node_id: string | null;
   board_item_ref: string | null;
   action: ToolmanActionKind;
   status: ToolExecutionStatus;

@@ -3,24 +3,30 @@
 These constraints describe the implementation now. A target-architecture file
 does not supersede them until the corresponding code change lands.
 
-- The board is a permission boundary. No agent write path may bypass
-  `Toolman.execute`; tools not known to be read-only are treated as mutating
-  (fail closed). `ClaudeBrain` enables only read-only native tools, so native
-  Claude Code execution cannot mutate around this.
-- Authorization is two layers, in this order. Layer 1 is the hard ceiling:
-  identity, sandbox, classified tools, and either a workable owned ticket or
-  an explicit chat grant. Layer 2 is the conversation's permission mode,
-  which only decides how much of that ceiling runs without asking — it can
-  never widen layer 1. Plan mode refuses mutations before Toolman.
+- Toolman authorization is the agent mutation boundary. No agent write path may
+  execute before `Toolman.authorize`; unknown tools fail closed. Server-local
+  actions recheck in `Toolman.execute`, while project actions run only after the
+  Hub has settled that decision plus assignment, consent and permission mode,
+  then route to ToolmanGateway or GitRepositories. `ClaudeBrain` enables only
+  read-only native tools, so native Claude Code execution cannot mutate around
+  this boundary.
+- Authorization starts with the hard ceiling: identity, sandbox, classified
+  tool, and either a workable owned ticket or explicit bounded chat grant.
+  Project actions then add assignment/checkout and owner-consent policy. The
+  conversation permission mode decides how much of the resulting ceiling runs
+  without another prompt and can never widen it. An accepted `ask` owner prompt
+  answers that action and avoids a duplicate mode prompt. Plan mode refuses
+  mutations before any executor.
 - Every ticket starts proposed. Approval is human-only and requires an owner,
   acceptance criteria and a complete impact map. Only the assigned owner may
   start, mutate, block, unblock or complete. Completion requires evidence.
 - An accepted Plan may have at most one live ticket. Plan acceptance grants
   no mutating authority.
-- `shell_repo` is bounded by the sandbox root, not by `scope_paths`: a shell
-  command's writes are not statically knowable. That coarseness is the reason
-  it is a separate capability a human grants explicitly, rather than something
-  `file_write` implies.
+- `shell_repo` is coarse because a command's writes are not statically
+  knowable, so `scope_paths` cannot bound it and `file_write` never implies it.
+  Server-local commands start in the workspace sandbox; local project commands
+  start at the assigned mount. Managed Git checkouts refuse arbitrary project
+  commands and expose only classified first-class Git actions.
 - An action class absent from `ACTION_CAPABILITY` can never be authorized, so a
   newly added tool fails closed until it is deliberately classified.
 - If a permission decision cannot be recorded, the action does not run
@@ -30,7 +36,11 @@ does not supersede them until the corresponding code change lands.
   child process or its output.
 - Actor identity is never taken from a request body: the ws `join` upserts
   the persistent actor, HTTP derives the actor from the bearer token (I1).
-- Every workspace-scoped runtime and store carries one immutable workspace id. Chat rows, channels, attachments, plans, board data, context, agent work, projects and Toolman records are filtered and constrained by it.
+- Every workspace-scoped runtime and store carries one immutable workspace id.
+  Chat rows, channels, attachments, plans, board/context/agent work, projects,
+  Toolman records, linked Git repositories and branch-channel bindings are
+  filtered and constrained by it. GitHub connections are the deliberate
+  exception: global actor-owned credentials that a workspace link references.
 - HTTP workspace tokens contain both actor id and workspace id; every request rechecks membership. A token issued in one workspace cannot select another.
 - Each Hub instance belongs to one `WorkspaceRuntime`, so presence and websocket broadcasts cannot cross workspace boundaries.
 - The first username claim creates a starter workspace, but a global account with no memberships remains valid after leaving and may create or request another workspace. Removal from one workspace never removes the account or its other memberships.
@@ -52,7 +62,45 @@ does not supersede them until the corresponding code change lands.
 - Tickets always carry `scope_paths` (enforced at creation). An entry ending
   in `/` grants a subtree; anything else is exactly that file. Chat grants
   stay inside the workspace sandbox but do not invent a board scope.
-- Server-local Toolman actions are confined to `data/workspaces/<sha256(workspace-id)>/`; paired node, project, mount, assignment and execution records remain workspace-scoped.
+- Server-local Toolman actions and managed Git checkouts live under
+  `data/workspaces/<sha256(workspace-id)>/`; managed repositories use its
+  `repositories/` child. Paired node credentials resolve one workspace
+  server-side; project, opaque mount, assignment and execution records remain
+  workspace-scoped, while concrete local paths stay only on the node.
+- A Toolman folder's creator exclusively controls device revocation, agent
+  assignments, assignment revocation, access-request decisions, folder policy
+  and direct human file management. Other workspace humans receive no implicit
+  local-folder authority.
+- Folder policy is independent of action authority: `deny` always refuses;
+  `ask` requires the owner online and prompts once per agent conversation;
+  `always` is durable folder consent while the assigned node remains available.
+  Policy never bypasses the owned ticket or bounded chat grant, project/path/
+  capability checks, Plan mode, or the conversation permission mode.
+- Agents discover shared projects and their assignment/request state through
+  provider-neutral tools. Claude and ACP use the current run's scoped Toolman
+  executor for every mutation; their native filesystem and shell paths remain
+  read-only.
+- Toolman reconnects with bounded backoff and a connection timeout. One node
+  has one live authenticated socket; re-pair, unpair or revocation evicts the
+  previous socket, revoked mounts cannot execute, unauthenticated result frames
+  are rejected, and disconnect fails in-flight executions closed.
+- GitHub credentials belong to one global human actor, are AES-256-GCM
+  encrypted at rest, rotate through encrypted refresh tokens under one refresh
+  lock, and are erased on disconnect. Raw credentials never enter browser,
+  agent, repository remote, generic command, event or log state.
+- Human Git APIs require a current workspace session; agents cannot call them
+  and instead require explicit project assignment plus Toolman and owner-consent
+  gates. Linking a private repository deliberately shares its readable forge
+  projection with current human members of that workspace.
+- Managed Git transport accepts only credential-free `https://github.com/…`
+  repository URLs, disables repository hooks and credential helpers during
+  authenticated transport, and addresses the stored provider URL rather than
+  mutable `origin`. File access rejects traversal, symlinks, sensitive names
+  and files over the shared limit.
+- Each managed non-default branch has at most one active workspace channel.
+  Branch creation creates/reactivates it; branch deletion, repository unlink or
+  pull-request merge archives it. Unlink preserves project/event attribution
+  and a later relink reuses the same project id.
 - The Hub knows nothing about demos; `DemoOrchestrator` attaches through the
   Hub's three hooks and feeds inputs through the same paths humans use.
 - `messages.author_id` has no FK to `actors`: kept loose so a message and

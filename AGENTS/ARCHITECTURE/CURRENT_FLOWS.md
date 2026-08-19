@@ -49,11 +49,67 @@ whose owner is an agent queues a durable run request for that owner.
 3. `BoardClient.summary()` renders that envelope (policy, actor, plans,
    live tickets, members, context) when one was loaded; otherwise it falls
    back to a local item list.
-4. `Memory` is a rolling fifty-message transcript stored by the runner.
-5. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
+4. `BoardClient` also loads the agent's project catalogue, assignment and
+   pending-request projection. Provider-neutral tools can list projects and
+   file an owner-targeted access request; neither action grants access.
+5. `Memory` is a rolling fifty-message transcript stored by the runner.
+6. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
 
 The envelope is compiled at snapshot time, not per run. The actor cursor is
 not yet advanced when a runner acknowledges an envelope.
+
+## Toolman folder sharing and collaboration
+
+1. A human creates a one-time Toolman pairing in Resources. The local CLI
+   exchanges it for a workspace-bound installation token, registers one or
+   more folders by opaque mount id, and keeps every absolute path on-device.
+2. A mounted folder becomes a workspace project owned by the human who paired
+   the node. Device and project names cannot be claimed by another human.
+3. The owner assigns a specific workspace agent to a specific mount, or an
+   agent discovers the project with `project_list` and submits
+   `project_request_access`; only the owner can resolve that request.
+4. The owner independently sets folder policy: `deny` refuses, `ask` requires
+   the owner online and prompts once per agent conversation, and `always` is
+   durable folder consent while the node is connected. None of these modes
+   widens board/chat authority or the conversation permission mode.
+5. Every agent project action first passes Toolman authorization, assignment
+   and checkout checks, then folder policy. File writes may use an owned
+   workable project-bound ticket or a bounded chat grant; shell and Git
+   mutations additionally require `shell_repo`.
+6. The server records the execution and routes an already-authorized local
+   action to the assigned live node. The node confines list/read/search/write/
+   edit/move/delete operations to the mounted folder and protects sensitive
+   names, symlinks, traversal and output/file-size limits.
+7. The project owner may browse, create, edit and delete local files directly
+   from Resources over owner-only workspace HTTP routes; other humans receive
+   no implicit folder authority.
+8. The Toolman process reconnects with bounded backoff after network or shell
+   restarts and counts itself connected only after `toolman_welcome`.
+   Re-pairing, unpairing or owner revocation disconnects the old socket;
+   revoked mounts cannot execute and in-flight work fails closed.
+
+## GitHub repositories
+
+1. A human starts server-owned GitHub OAuth from a workspace. Random in-memory
+   state binds actor, workspace, callback and browser return origin. The server
+   exchanges the code and stores AES-256-GCM encrypted access/refresh tokens on
+   the global actor; expiring access tokens rotate under one refresh lock.
+2. The human selects a GitHub repository. The server accepts only a
+   credential-free `https://github.com/…` clone URL, creates or reactivates one
+   workspace Git project and clones an isolated managed checkout under the
+   workspace's hashed `DATA_DIR` directory.
+3. Humans use Projects for overview/import, remote or working-tree files,
+   branches, commits, sync state, pull requests/checks/changed files and issues.
+   Unlink archives the project, assignments and branch rooms, removes its
+   checkout, and supports later relink to the same project id.
+4. Agents use the same project catalogue, assignment and owner-consent flow as
+   local folders. Managed checkouts expose first-class status, fetch, pull,
+   push, branch and commit actions; arbitrary project commands are refused
+   there and require a paired local Toolman checkout. Provider credentials
+   never enter agent, browser, remote URL or generic command state.
+5. Creating a non-default branch creates a linked chat channel. Deleting the
+   branch or merging its pull request archives that channel; Projects can jump
+   directly into the room.
 
 ## Board and action authorization
 
@@ -71,7 +127,10 @@ not yet advanced when a runner acknowledges an envelope.
 6. The conversation permission mode either denies the action, allows it, or
    creates a durable human interaction request. Modes never override the
    hard ceiling.
-7. Toolman rechecks authorization and executes inside the workspace sandbox.
+7. `Toolman.execute` rechecks server-local actions before the workspace
+   sandbox. Project actions run only after the Hub has settled that same hard
+   decision plus assignment/consent/mode, then route to the assigned Toolman
+   mount or managed Git checkout without exposing credentials or absolute paths.
 
 ## Approval surfaces
 

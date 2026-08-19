@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Attachment } from "@workspace/shared";
+import { downloadFromResponse } from "../lib/download";
 import { isTextAttachment } from "../lib/textAttachment";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { DownloadIcon, TextFileCard } from "./TextFileCard";
@@ -43,7 +44,16 @@ export function AttachmentGallery({
   mentionRegex?: RegExp | null;
   onRefClick?: (ref: string) => void;
 }) {
-  const { attachmentUrl } = useWorkspace();
+  const { attachmentUrl, apiFetch } = useWorkspace();
+  const download = (a: Attachment) => {
+    void (async () => {
+      try {
+        await downloadFromResponse(await apiFetch(a.url), a.name);
+      } catch {
+        // The card stays put; opening in a new tab would leave the chat.
+      }
+    })();
+  };
   const images = attachments.filter(isImage);
   const texts = attachments.filter((a) => !isImage(a) && isTextAttachment(a));
   const files = attachments.filter((a) => !isImage(a) && !isTextAttachment(a));
@@ -114,15 +124,15 @@ export function AttachmentGallery({
             <div className="truncate font-medium text-body">{a.name}</div>
             <div className="text-xs text-muted">{formatBytes(a.size)}</div>
           </div>
-          <a
-            href={attachmentUrl(a)}
-            download={a.name}
+          <button
+            type="button"
             aria-label={`Download ${a.name}`}
             title="Download"
+            onClick={() => download(a)}
             className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-muted hover:bg-subtle-hover hover:text-body"
           >
             <DownloadIcon className="h-3.5 w-3.5" />
-          </a>
+          </button>
         </div>
       ))}
     </div>

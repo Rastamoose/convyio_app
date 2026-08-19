@@ -1,12 +1,14 @@
 # Human–agent workspace
 
-Team chat where AI agents connect over the same websocket protocol as humans
-and appear as full members. The **canonical board** is the record of project
-work and the authorization layer: an agent cannot perform any mutating action
-unless it references a workable (approved or in-progress) board item whose
-declared `scope_paths` cover the target path. Humans approve; agents propose.
-Enforcement is server-side in Toolman. Provider-native mutation tools are
-restricted so they cannot bypass the same boundary.
+Team chat where humans and AI agents share workspaces, channels, plans,
+tickets, local folders and GitHub repositories. Agents connect over the same
+websocket protocol and appear as full members. Toolman authorization is the
+mutation boundary: an agent needs either a workable owned ticket or explicit
+bounded chat grant, then any project assignment, owner-consent, capability and
+path checks. Provider-native mutation tools are restricted so they cannot
+bypass the same server decision. Local folders execute on a paired Toolman
+node; managed Git repositories expose first-class Git/forge actions without
+sending provider credentials to the runner.
 
 See `AGENTS/ARCHITECTURE/README.md` for the current architecture, recorded
 decisions and explicitly separated target workflow.
@@ -18,38 +20,41 @@ npm install
 npm run dev   # server ws+http on :3001, client on :5173, agent
 ```
 
-Set `GEMINI_API_KEY` in `.env` for the agent (default provider), or set
-`AGENT_PROVIDER=claude` to run it against a Claude subscription instead — see
-`AGENTS/DEPLOY.md` for what that requires. Env overrides: `PORT`, `CORS_ORIGIN`,
-`DATA_DIR` (server), `WS_URL` (agent), `VITE_WS_URL` (client).
+Copy `.env.example` to `.env` and configure Supabase plus at least one sign-in
+method. Set `GEMINI_API_KEY` for the default managed agent, or
+`AGENT_PROVIDER=claude` to use a Claude subscription. GitHub Projects is
+optional and requires the OAuth/encryption variables documented in
+`AGENTS/DEPLOY.md`; that runbook also covers Toolman pairing and every override.
 
 In production the server serves the built client itself — one origin for
 page, API, and websocket (`npm run build -w @workspace/client`, then the
 server picks up `packages/client/dist` or `CLIENT_DIST`). See
-`AGENTS/DEPLOY.md` for the container image, reverse-proxy/TLS, and Google
-Sign-In runbook.
+`AGENTS/DEPLOY.md` for the container image, reverse-proxy/TLS, sign-in,
+Toolman and GitHub runbooks.
 
 ## Tests
 
 ```
-npm test -w @workspace/server   # invariants T1-T12, pressure suite, hardening suite
-npm test -w @workspace/shared   # wire-protocol validation
-npm test -w @workspace/agent    # memory, pending work, tool executor
+npm test -w @workspace/server   # invariants, stores, auth, projects/Git/Toolman gateway
+npm test -w @workspace/shared   # wire-protocol and shared contracts
+npm test -w @workspace/agent    # brains, runtime, memory, project/Git tools
+npm test -w @workspace/toolman  # installation, safe files, commands, reconnecting runtime
 npm test -w @workspace/client   # vitest: hooks, formatting, components
 ```
 
-The server suite covers the spec's invariant tests T1–T12 (including the
-full-stack approval fan-out check), HTTP edge cases, approve/deny races,
-sandbox traversal, lifecycle abuse, scope enforcement, session expiry, and
-the Postgres chat store.
+The server suite covers invariant tests T1–T12, full-stack approval fan-out,
+HTTP and lifecycle abuse, workspace isolation, project ownership/consent,
+Toolman gateway hardening, encrypted GitHub credential and managed Git
+lifecycles, scope enforcement, session expiry and the Postgres stores.
 
 ## Known limitations
 
-- Sessions are in-memory (12h TTL, revoked on disconnect); a server restart
-  logs everyone out.
-- One workspace: a single `workspaces` row (named `test_space`) with
-  membership plumbed through the data model, but no multi-tenancy in the
-  transport.
-- Scope enforcement is path-based. It bounds an item's footprint precisely,
-  but the toolman does not judge whether the *content* written matches the
-  item's intent — that remains the human reviewer's job.
+- Workspace HTTP sessions are in-memory (12h TTL, revoked on disconnect). A
+  server restart drops them and live sockets; a valid Supabase browser session
+  can reconnect and receive a fresh workspace token.
+- Local-folder actions require the selected Toolman node to remain reachable;
+  `always` removes owner-presence prompts, not the need for a live mount.
+- GitHub is the managed repository/forge system of record; Convyio does not
+  host a sovereign Git remote.
+- Path and capability enforcement bounds authority but cannot judge whether
+  written content matches a ticket's intent — that remains human review.

@@ -457,7 +457,8 @@ describe("T10: full-stack approval fan-out", async () => {
       humanA.ws.close();
       humanB.ws.close();
     } finally {
-      server.close();
+      await hub.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       await drop();
     }
   });

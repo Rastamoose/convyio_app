@@ -205,4 +205,9 @@ export const ACTION_CAPABILITY: Readonly<Record<string, WorkCapability>> = {
   project_delete_file: "file_write",
   project_move_file: "file_write",
   project_run_command: "shell_repo",
+  project_git_fetch: "shell_repo",
+  project_git_pull: "shell_repo",
+  project_git_push: "shell_repo",
+  project_git_branch: "shell_repo",
+  project_git_commit: "shell_repo",
 };

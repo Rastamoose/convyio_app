@@ -397,6 +397,21 @@ export const actionRequestEventSchema = z.object({
       projectId: z.string().min(1).max(128),
       command: z.string().min(1).max(4000),
     }),
+    z.object({ kind: z.literal("project_git_status"), projectId: z.string().min(1).max(128) }),
+    z.object({ kind: z.literal("project_git_fetch"), projectId: z.string().min(1).max(128) }),
+    z.object({ kind: z.literal("project_git_pull"), projectId: z.string().min(1).max(128) }),
+    z.object({ kind: z.literal("project_git_push"), projectId: z.string().min(1).max(128) }),
+    z.object({
+      kind: z.literal("project_git_branch"),
+      projectId: z.string().min(1).max(128),
+      name: z.string().min(1).max(200),
+      startPoint: z.string().min(1).max(200).optional(),
+    }),
+    z.object({
+      kind: z.literal("project_git_commit"),
+      projectId: z.string().min(1).max(128),
+      message: z.string().min(1).max(500),
+    }),
   ]),
   /** Conversation the action belongs to; selects the permission mode. */
   conversationId: z.string().max(128).nullable().optional(),

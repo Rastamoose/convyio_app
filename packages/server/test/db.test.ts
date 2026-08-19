@@ -37,10 +37,10 @@ describe("WorkspaceDb", () => {
   });
 
   test("findActorByName is case-insensitive and null when absent", async () => {
-    await db.upsertActor("agent", "Noodle");
-    const found = await db.findActorByName("agent", "NOODLE");
+    await db.upsertActor("agent", "Case Bot");
+    const found = await db.findActorByName("agent", "CASE BOT");
     assert.ok(found);
-    assert.equal(found!.displayName, "Noodle");
+    assert.equal(found!.displayName, "Case Bot");
     assert.equal(await db.findActorByName("agent", "nope"), null);
   });
 

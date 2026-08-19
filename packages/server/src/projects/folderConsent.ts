@@ -7,16 +7,9 @@ export type FolderConsent =
 
 /**
  * Layer 3 for local folders. The board and conversation mode never widen this:
- * the folder owner must be online, and their mode decides whether Toolman asks.
+ * deny refuses, always is durable consent, and ask requires the owner online.
  */
 export function folderConsent(project: Project, ownerOnline: boolean): FolderConsent {
-  if (!ownerOnline) {
-    return {
-      allow: false,
-      code: "OWNER_OFFLINE",
-      message: `${project.name} is unavailable because its owner is offline`,
-    };
-  }
   if (project.accessMode === "deny") {
     return {
       allow: false,
@@ -25,5 +18,12 @@ export function folderConsent(project: Project, ownerOnline: boolean): FolderCon
     };
   }
   if (project.accessMode === "always") return { allow: true };
+  if (!ownerOnline) {
+    return {
+      allow: false,
+      code: "OWNER_OFFLINE",
+      message: `${project.name} is unavailable because its owner is offline`,
+    };
+  }
   return { prompt: true };
 }

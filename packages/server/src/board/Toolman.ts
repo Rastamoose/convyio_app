@@ -32,6 +32,7 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "project_read_file",
   "project_list_files",
   "project_search_files",
+  "project_git_status",
 ]);
 
 export function isMutating(toolName: string): boolean {

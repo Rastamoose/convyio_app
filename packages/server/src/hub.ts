@@ -47,6 +47,7 @@ import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
 import type { ProjectAction } from "@workspace/shared";
 import type { Toolman, ToolmanResult } from "./board/Toolman";
+import type { GitRepositories } from "./projects/GitRepositories";
 import type { ProjectStore } from "./projects/ProjectStore";
 import type { ToolmanGateway } from "./projects/ToolmanGateway";
 import type { ToolExecutionStore } from "./projects/ToolExecutionStore";
@@ -90,6 +91,7 @@ export interface HubOptions {
   threadEvents?: ThreadEventStore;
   contextCursors?: ContextCursorStore;
   projects?: ProjectStore;
+  gitRepositories?: GitRepositories;
   toolmanGateway?: ToolmanGateway;
   executions?: ToolExecutionStore;
 }
@@ -802,8 +804,14 @@ export class Hub {
     }
     if (isProjectAction(event.action)) {
       const folderGate = await this.gateFolderAccess(actor, event, event.action);
-      if (folderGate) {
-        return this.send(conn, { type: "action_result", requestId: event.requestId, ...folderGate });
+      if (folderGate.result) {
+        return this.send(conn, { type: "action_result", requestId: event.requestId, ...folderGate.result });
+      }
+      if (!folderGate.ownerPromptApproved) {
+        const gate = await this.gateByMode(actor, event, mode, capability);
+        if (gate) {
+          return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+        }
       }
     } else {
       const gate = await this.gateByMode(actor, event, mode, capability);
@@ -812,38 +820,62 @@ export class Hub {
       }
     }
     const result = isProjectAction(event.action)
-      ? await this.executeProjectAction(actor.id, event.action, event.requestId)
+      ? await this.executeProjectAction(actor, event.action, event.boardItemRef ?? null, conversationId, event.requestId)
       : await this.toolman.execute(actor, event.action, event.boardItemRef ?? null, { chatGrant });
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
   }
 
   /**
    * Local-folder consent. Conversation permission modes never widen this:
-   * the folder owner must be online, and their mode decides whether Toolman asks.
+   * deny refuses, always is durable consent, and ask requires the owner online.
    */
   private async gateFolderAccess(
     actor: { id: string; workspaceId: string },
     event: ActionRequestEvent,
     action: ProjectAction,
-  ): Promise<ToolmanResult | null> {
+  ): Promise<{ result: ToolmanResult | null; ownerPromptApproved: boolean }> {
     if (!this.options.projects) {
-      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" };
+      return {
+        result: { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" },
+        ownerPromptApproved: false,
+      };
     }
     const project = await this.options.projects.find(action.projectId);
     if (!project || project.archivedAt) {
-      return { ok: false, code: "PROJECT_REQUIRED", error: "no such folder" };
+      return {
+        result: { ok: false, code: "PROJECT_REQUIRED", error: "no such folder" },
+        ownerPromptApproved: false,
+      };
+    }
+    const assignment = await this.options.projects.assignment(action.projectId, actor.id);
+    if (!assignment) {
+      return {
+        result: { ok: false, code: "PROJECT_UNASSIGNED", error: "you are not assigned to this project" },
+        ownerPromptApproved: false,
+      };
+    }
+    if (assignment.status !== "ready" && assignment.status !== "pending") {
+      return {
+        result: { ok: false, code: "CHECKOUT_UNAVAILABLE", error: assignment.lastError ?? "the assigned checkout is not ready" },
+        ownerPromptApproved: false,
+      };
     }
     const decision = folderConsent(project, this.isHumanOnline(project.createdBy));
     if ("allow" in decision) {
-      return decision.allow ? null : { ok: false, code: decision.code, error: decision.message };
+      return {
+        result: decision.allow ? null : { ok: false, code: decision.code, error: decision.message },
+        ownerPromptApproved: false,
+      };
     }
     const leaseKey = folderLeaseKey(actor.id, action.projectId, event.conversationId ?? null);
-    if (this.folderLeases.get(leaseKey) === project.createdBy) return null;
+    if (this.folderLeases.get(leaseKey) === project.createdBy) {
+      return { result: null, ownerPromptApproved: true };
+    }
     const capability = ACTION_CAPABILITY[action.kind] ?? "folder_read";
     const gate = await this.awaitApproval(actor, event, capability, event.conversationId ?? null, project.createdBy);
-    if (gate) return gate;
+    if (gate) return { result: gate, ownerPromptApproved: false };
     this.folderLeases.set(leaseKey, project.createdBy);
-    return null;
+    return { result: null, ownerPromptApproved: true };
   }
 
   private isHumanOnline(actorId: string): boolean {
@@ -864,30 +896,40 @@ export class Hub {
     }
   }
 
-  private async executeProjectAction(agentId: string, action: ProjectAction, requestId?: string): Promise<ToolmanResult> {
-    if (!this.options.projects || !this.options.toolmanGateway) {
-      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions require a paired Toolman node" };
+  private async executeProjectAction(
+    actor: import("@workspace/shared").Actor,
+    action: ProjectAction,
+    boardItemRef: string | null,
+    conversationId: string | null,
+    requestId?: string,
+  ): Promise<ToolmanResult> {
+    if (!this.options.projects) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "project actions are not available" };
     }
-    const assignment = await this.options.projects.assignment(action.projectId, agentId);
+    const assignment = await this.options.projects.assignment(action.projectId, actor.id);
     if (!assignment) {
       return { ok: false, code: "PROJECT_UNASSIGNED", error: "you are not assigned to this project" };
     }
     if (assignment.status !== "ready" && assignment.status !== "pending") {
       return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: assignment.lastError ?? "the assigned checkout is not ready" };
     }
-    const mount = await this.options.toolmanGateway.findMount(assignment.mountId);
-    if (!mount) {
+    const managed = Boolean(this.options.gitRepositories && await this.options.gitRepositories.isManaged(action.projectId));
+    const mount = assignment.mountId && this.options.toolmanGateway
+      ? await this.options.toolmanGateway.findMount(assignment.mountId)
+      : null;
+    if (!managed && (!assignment.mountId || !mount || !this.options.toolmanGateway)) {
       return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned project mount is gone" };
     }
     let started: { execution: import("@workspace/shared").ToolExecution; event?: import("@workspace/shared").ThreadEvent } | null = null;
     if (this.options.executions) {
       try {
         started = await this.options.executions.start({
-          agentId,
+          agentId: actor.id,
           projectId: action.projectId,
           mountId: assignment.mountId,
-          nodeId: mount.nodeId,
-          boardItemRef: null,
+          nodeId: mount?.nodeId ?? null,
+          boardItemRef,
+          conversationId,
           action,
         });
         this.broadcast({ type: "tool_execution", execution: started.execution });
@@ -896,7 +938,9 @@ export class Hub {
         console.warn("[hub] could not persist tool execution:", err instanceof Error ? err.message : err);
       }
     }
-    const result = await this.options.toolmanGateway.execute(assignment, action, requestId);
+    const result = managed
+      ? await this.options.gitRepositories!.execute(actor, action)
+      : await this.options.toolmanGateway!.execute(assignment, action, requestId);
     if (started && this.options.executions) {
       try {
         const finished = await this.options.executions.finish(started.execution.id, {

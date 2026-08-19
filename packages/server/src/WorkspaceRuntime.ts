@@ -23,6 +23,8 @@ import { WorkspaceDb } from "./db";
 import { DemoOrchestrator } from "./demo/DemoOrchestrator";
 import type { DemoScript } from "./demo/script";
 import { Hub } from "./hub";
+import { GitRepositories } from "./projects/GitRepositories";
+import type { GitHub } from "./projects/GitHub";
 import { ProjectStore } from "./projects/ProjectStore";
 import { ToolExecutionStore } from "./projects/ToolExecutionStore";
 import { ToolmanGateway } from "./projects/ToolmanGateway";
@@ -36,6 +38,7 @@ export interface WorkspaceRuntimeOptions {
   auth: Auth | null;
   agentToken: string | null;
   supabase: SupabaseClient;
+  github: GitHub;
   dataDir: string;
   demoScripts?: Map<string, DemoScript>;
   demoSeedRoot?: string;
@@ -51,6 +54,7 @@ export class WorkspaceRuntime {
   readonly context!: ContextStore;
   readonly contextCursors!: ContextCursorStore;
   readonly projects!: ProjectStore;
+  readonly gitRepositories!: GitRepositories;
   readonly toolmanNodes!: ToolmanNodes;
   readonly snapshot!: WorkspaceSnapshotBuilder;
   readonly envelope!: PromptEnvelopeBuilder;
@@ -76,12 +80,26 @@ export class WorkspaceRuntime {
     const board = new BoardService(db, threadEvents, plans);
     const context = new ContextStore(db, threadEvents);
     const contextCursors = new ContextCursorStore(db, threadEvents);
+    const workspaceDir = path.join(
+      options.dataDir,
+      "workspaces",
+      createHash("sha256").update(db.workspaceId).digest("hex"),
+    );
     const projects = new ProjectStore(db, threadEvents);
+    const channels = new Channels(db);
+    const gitRepositories = new GitRepositories(
+      db,
+      threadEvents,
+      projects,
+      options.github,
+      channels,
+      path.join(workspaceDir, "repositories"),
+    );
+    await gitRepositories.init();
     const toolmanNodes = new ToolmanNodes(db, threadEvents);
     const snapshot = new WorkspaceSnapshotBuilder(db, board, plans, context, projects);
     const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
     const interactions = new InteractionStore(db, threadEvents);
-    const channels = new Channels(db);
     const demoScripts = options.demoScripts ?? new Map<string, DemoScript>();
     const demoChannels = [...demoScripts.keys()].sort();
     await channels.seed([
@@ -92,11 +110,6 @@ export class WorkspaceRuntime {
     const agentInvites = new AgentInvites(db);
     const runnerRuntime = new RunnerRuntime();
     const executions = new ToolExecutionStore(db, threadEvents, options.supabase);
-    const workspaceDir = path.join(
-      options.dataDir,
-      "workspaces",
-      createHash("sha256").update(db.workspaceId).digest("hex"),
-    );
     const toolman = new Toolman(board, workspaceDir);
     await toolman.init();
     const roster = await Roster.create(db, agentInvites);
@@ -122,6 +135,7 @@ export class WorkspaceRuntime {
         threadEvents,
         contextCursors,
         projects,
+        gitRepositories,
         toolmanGateway,
         executions,
       },
@@ -137,6 +151,7 @@ export class WorkspaceRuntime {
       context,
       contextCursors,
       projects,
+      gitRepositories,
       toolmanNodes,
       snapshot,
       envelope,

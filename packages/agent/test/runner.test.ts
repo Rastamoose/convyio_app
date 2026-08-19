@@ -7,7 +7,7 @@ import { Presence } from "../src/presence";
 import { ConversationSessions } from "../src/conversationSessions";
 import type { AgentSocket } from "../src/socket";
 import type { BoardClient } from "../src/boardClient";
-import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions } from "../src/brain";
+import type { Brain, BrainCallbacks, BrainInput, BrainRunOptions, ToolExecutor } from "../src/brain";
 import { tempDir, waitFor } from "./helpers";
 
 // The brain (Gemini) and socket (server) are the runner's network
@@ -78,6 +78,37 @@ describe("AgentRunner", () => {
         { channelId: "random", content: "reply 2" },
       ],
     );
+  });
+
+  test("binds the run-scoped tool executor for ACP and clears it after the run", async () => {
+    let external: ToolExecutor | null = null;
+    const board = fakeBoard();
+    const brain = {
+      run: async () => {
+        assert.ok(external);
+        assert.deepEqual(await external("board_list", {}), { board: "(board is empty)" });
+        return { text: "done", providerSessionId: null };
+      },
+    } as unknown as Brain;
+    const { socket, sent } = fakeSocket();
+    const dir = await tempDir();
+    const runner = new AgentRunner(
+      socket,
+      brain,
+      await Memory.load(dir),
+      board,
+      await ConversationSessions.load(dir),
+      new Presence(socket, board),
+      "system prompt",
+      undefined,
+      (executor) => {
+        external = executor;
+      },
+    );
+
+    runner.enqueue({ authorName: "dana", content: "list work", channel: "general", conversationId: "conversation-1" });
+    await waitFor(() => sent.find((event) => event.type === "agent_run_finish"), "run finish");
+    assert.equal(external, null);
   });
 });
 

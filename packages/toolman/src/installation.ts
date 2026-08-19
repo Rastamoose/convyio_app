@@ -122,6 +122,23 @@ export async function listInstallations(env: NodeJS.ProcessEnv = process.env): P
   return loaded;
 }
 
+export async function installationHealth(
+  installation: StoredToolman,
+  fetcher: typeof fetch = fetch,
+): Promise<"ready" | "offline" | "revoked" | "unreachable"> {
+  try {
+    const response = await fetcher(new URL("/api/toolman/installation", installation.serverOrigin), {
+      headers: { Authorization: `Bearer ${installation.installationToken}` },
+    });
+    if (response.status === 401) return "revoked";
+    if (!response.ok) return "unreachable";
+    const parsed = z.object({ node: z.object({ health: z.enum(["ready", "offline"]) }) }).safeParse(await response.json());
+    return parsed.success ? parsed.data.node.health : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
 export async function clearInstallations(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch): Promise<string[]> {
   const installations = await listInstallations(env);
   const names: string[] = [];

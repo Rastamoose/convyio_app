@@ -13,6 +13,10 @@ describe("toolman contracts", () => {
     assert.equal(isReadOnlyToolmanAction("project_write_file"), false);
     assert.equal(requiredCapability("project_write_file"), "file_write");
     assert.equal(requiredCapability("project_run_command"), "shell_repo");
+    assert.equal(requiredCapability("project_git_push"), "shell_repo");
+    assert.equal(requiredCapability("project_git_commit"), "shell_repo");
+    assert.equal(isReadOnlyToolmanAction("project_git_status"), true);
+    assert.equal(isReadOnlyToolmanAction("project_git_fetch"), false);
     assert.equal(requiredCapability("project_read_file"), undefined);
     assert.equal("unknown_tool" in TOOLMAN_ACTION_CAPABILITY, false);
   });

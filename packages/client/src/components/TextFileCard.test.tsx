@@ -22,7 +22,7 @@ const notes: Attachment = {
 };
 
 describe("TextFileCard", () => {
-  it("clips a long file and expands on Show all", async () => {
+  it("clips a long file and pops the full text out on Expand", async () => {
     const user = userEvent.setup();
     const body = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
     apiFetch.mockResolvedValue({ ok: true, text: async () => body });
@@ -32,19 +32,39 @@ describe("TextFileCard", () => {
     expect(await screen.findByText((value) => value.includes("line 1"))).toBeInTheDocument();
     expect(screen.queryByText((value) => value.includes("line 20"))).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Show all" }));
-    expect(screen.getByText((value) => value.includes("line 20"))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand message.txt" }));
+    const dialog = screen.getByRole("dialog", { name: "message.txt" });
+    expect(dialog).toHaveTextContent("line 20");
 
-    await user.click(screen.getByRole("button", { name: "Show less" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText((value) => value.includes("line 20"))).not.toBeInTheDocument();
   });
 
-  it("puts a download icon in the card corner", async () => {
-    apiFetch.mockResolvedValue({ ok: true, text: async () => "hi" });
+  it("downloads the file in place from the corner button", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["hi"], { type: "text/plain" });
+    apiFetch.mockResolvedValue({
+      ok: true,
+      text: async () => "hi",
+      blob: async () => blob,
+    });
+    const create = vi.fn(() => "blob:file");
+    URL.createObjectURL = create;
+    URL.revokeObjectURL = vi.fn();
+    const clicked: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this);
+    });
     render(<TextFileCard attachment={notes} mentionRegex={null} />);
 
-    const link = await screen.findByRole("link", { name: "Download message.txt" });
-    expect(link).toHaveAttribute("href", "http://api.test/api/uploads/up-txt/message.txt");
-    expect(link).toHaveAttribute("download", "message.txt");
+    await user.click(await screen.findByRole("button", { name: "Download message.txt" }));
+    expect(apiFetch).toHaveBeenCalledWith("/api/uploads/up-txt/message.txt");
+    expect(create).toHaveBeenCalled();
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0].download).toBe("message.txt");
+    expect(clicked[0].href).toBe("blob:file");
   });
 });

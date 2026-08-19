@@ -6,6 +6,7 @@ import type { Auth } from "./auth/Auth";
 import type { Sessions } from "./board/sessions";
 import type { WorkspaceDb } from "./db";
 import type { DemoScript } from "./demo/script";
+import type { GitHub } from "./projects/GitHub";
 import { WorkspaceRuntime } from "./WorkspaceRuntime";
 
 export class WorkspaceRegistry {
@@ -17,6 +18,7 @@ export class WorkspaceRegistry {
     private auth: Auth | null,
     private agentToken: string | null,
     private supabase: SupabaseClient,
+    private github: GitHub,
     private dataDir: string,
     private defaultWorkspaceId: string,
     private demoScripts: Map<string, DemoScript>,
@@ -34,6 +36,7 @@ export class WorkspaceRegistry {
       auth: this.auth,
       agentToken: this.agentToken,
       supabase: this.supabase,
+      github: this.github,
       dataDir: this.dataDir,
       demoScripts: workspaceId === this.defaultWorkspaceId ? this.demoScripts : undefined,
       demoSeedRoot: workspaceId === this.defaultWorkspaceId ? this.demoSeedRoot : undefined,

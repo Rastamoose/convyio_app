@@ -24,6 +24,7 @@ describe("local checkout operations", () => {
     await moveFile(root, "notes/a.md", "notes/b.md");
     assert.deepEqual(await listFiles(root, "notes"), ["b.md"]);
     await deleteFile(root, "notes/b.md");
+    assert.equal((await listFiles(root)).includes(".env"), false);
   });
 
   test("absolute, traversal, symlink, and sensitive paths are refused", async () => {

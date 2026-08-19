@@ -168,6 +168,9 @@ describe("multi-workspace schema foundation", () => {
         { relation: "messages", workspace_id: "legacy-workspace" },
         { relation: "messages", workspace_id: "legacy-workspace" },
         { relation: "messages", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
+        { relation: "messages", workspace_id: "legacy-workspace" },
       ]);
       const [attachment] = await db.sql<{ storage_key: string }[]>`
         SELECT storage_key FROM attachments WHERE id = 'legacy-attachment'

@@ -31,7 +31,7 @@ export interface ProjectAssignment {
   projectId: string;
   agentId: string;
   agentName?: string;
-  mountId: string;
+  mountId: string | null;
   assignedBy: string;
   assignedByName?: string;
   assignedAt: number;
@@ -47,6 +47,7 @@ export interface ProjectAccessRequest {
   id: string;
   workspaceId: string;
   projectId: string;
+  projectName?: string;
   agentId: string;
   agentName?: string;
   reason: string;
@@ -55,6 +56,12 @@ export interface ProjectAccessRequest {
   resolvedBy: string | null;
   resolvedByName?: string;
   resolvedAt: number | null;
+}
+
+export interface AgentProjectAccess {
+  project: Project;
+  assignment: ProjectAssignment | null;
+  request: ProjectAccessRequest | null;
 }
 
 export interface ProjectMount {

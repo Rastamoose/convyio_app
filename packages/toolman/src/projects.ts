@@ -34,9 +34,12 @@ export async function addProject(
     }),
   });
   if (!response.ok) throw new Error(`Project registration returned HTTP ${response.status}.`);
-  const body = (await response.json()) as { project: { id: string; name: string } };
+  const body = (await response.json()) as {
+    project: { id: string; name: string };
+    mount: { mountKey: string };
+  };
   const mount: LocalMount = {
-    mountKey,
+    mountKey: body.mount.mountKey,
     projectId: body.project.id,
     projectName: body.project.name,
     kind: "directory",

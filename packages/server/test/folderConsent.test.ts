@@ -19,13 +19,17 @@ function folder(accessMode: Project["accessMode"]): Project {
 }
 
 describe("folderConsent", () => {
-  test("offline owners make the folder unavailable", () => {
-    const denied = folderConsent(folder("always"), false);
+  test("ask requires the owner online", () => {
+    const denied = folderConsent(folder("ask"), false);
     assert.deepEqual(denied, {
       allow: false,
       code: "OWNER_OFFLINE",
       message: "notes is unavailable because its owner is offline",
     });
+  });
+
+  test("always is durable consent while the Toolman node remains available", () => {
+    assert.deepEqual(folderConsent(folder("always"), false), { allow: true });
   });
 
   test("deny refuses even when the owner is online", () => {

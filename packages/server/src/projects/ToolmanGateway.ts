@@ -15,6 +15,7 @@ interface NodeConnection {
 }
 
 interface PendingExecution {
+  nodeId: string;
   resolve: (result: ToolmanResult) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -63,14 +64,37 @@ export class ToolmanGateway {
     return Boolean(conn && conn.socket.readyState === WebSocket.OPEN);
   }
 
+  disconnect(nodeId: string): void {
+    this.nodes.get(nodeId)?.socket.terminate();
+  }
+
   async execute(assignment: ProjectAssignment, action: ProjectAction, clientRequestId?: string): Promise<ToolmanResult> {
-    const mount = await this.nodesStore.findMountById(assignment.mountId);
-    if (!mount) {
-      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned project mount is gone" };
+    if (!assignment.mountId) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned project has no local mount" };
+    }
+    return this.executeMount(
+      assignment.mountId,
+      assignment.agentId,
+      assignment.checkoutKey,
+      action,
+      clientRequestId,
+    );
+  }
+
+  async executeMount(
+    mountId: string,
+    actorId: string,
+    checkoutKey: string,
+    action: ProjectAction,
+    clientRequestId?: string,
+  ): Promise<ToolmanResult> {
+    const mount = await this.nodesStore.findActiveMountById(mountId);
+    if (!mount || mount.projectId !== action.projectId) {
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the project mount is gone" };
     }
     const conn = this.nodes.get(mount.nodeId);
     if (!conn || conn.socket.readyState !== WebSocket.OPEN) {
-      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the assigned Toolman node is offline" };
+      return { ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the Toolman node is offline" };
     }
     const requestId = clientRequestId ?? randomUUID();
     return new Promise((resolve) => {
@@ -78,15 +102,15 @@ export class ToolmanGateway {
         this.pending.delete(requestId);
         resolve({ ok: false, error: "Toolman node timed out" });
       }, EXECUTION_TIMEOUT_MS);
-      this.pending.set(requestId, { resolve, timer });
+      this.pending.set(requestId, { nodeId: mount.nodeId, resolve, timer });
       conn.socket.send(
         JSON.stringify({
           type: "toolman_execute",
           requestId,
           action,
-          checkoutKey: assignment.checkoutKey,
-          agentId: assignment.agentId,
-          projectId: assignment.projectId,
+          checkoutKey,
+          agentId: actorId,
+          projectId: action.projectId,
         }),
       );
     });
@@ -112,7 +136,14 @@ export class ToolmanGateway {
     socket.on("close", () => {
       if (!nodeId) return;
       const current = this.nodes.get(nodeId);
-      if (current?.socket === socket) this.nodes.delete(nodeId);
+      if (current?.socket !== socket) return;
+      this.nodes.delete(nodeId);
+      for (const [requestId, pending] of this.pending) {
+        if (pending.nodeId !== nodeId) continue;
+        clearTimeout(pending.timer);
+        this.pending.delete(requestId);
+        pending.resolve({ ok: false, code: "CHECKOUT_UNAVAILABLE", error: "the Toolman node disconnected" });
+      }
     });
   }
 
@@ -139,6 +170,8 @@ export class ToolmanGateway {
         return;
       }
       bind(resolved.node.id);
+      const previous = this.nodes.get(resolved.node.id);
+      if (previous?.socket !== socket) previous?.socket.terminate();
       this.nodes.set(resolved.node.id, { socket, node: resolved.node });
       socket.send(JSON.stringify({ type: "toolman_welcome", node: resolved.node }));
       const assignments = await this.projectsForNode(resolved.node.id);
@@ -146,6 +179,11 @@ export class ToolmanGateway {
       return;
     }
     if (event.type === "toolman_execution_result" && event.requestId) {
+      const authenticated = [...this.nodes.values()].some((connection) => connection.socket === socket);
+      if (!authenticated) {
+        socket.close();
+        return;
+      }
       const waiter = this.pending.get(event.requestId);
       if (!waiter) return;
       clearTimeout(waiter.timer);

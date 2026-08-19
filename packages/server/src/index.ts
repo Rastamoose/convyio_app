@@ -31,6 +31,7 @@ import { ContextStore } from "./context/ContextStore";
 import { ContextCursorStore } from "./context/ContextCursorStore";
 import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
 import { PromptEnvelopeBuilder } from "./context/PromptEnvelope";
+import { GitHub } from "./projects/GitHub";
 import { ProjectStore } from "./projects/ProjectStore";
 import { ToolmanNodes } from "./projects/ToolmanNodes";
 import { ToolmanGateway } from "./projects/ToolmanGateway";
@@ -57,6 +58,7 @@ async function main() {
   const supabase = createClient(config.supabaseUrl, config.supabaseSecretKey);
   const accounts = new AccountStore(db.sql);
   const workspaceAccess = new WorkspaceAccess(db.sql, accounts);
+  const github = new GitHub(db.sql, config.github);
   const sessions = new Sessions();
   const auth = config.googleAuthEnabled || config.emailAuthEnabled
     ? new Auth(accounts, supabase, workspaceAccess)
@@ -82,6 +84,7 @@ async function main() {
     auth,
     config.agentToken,
     supabase,
+    github,
     config.dataDir,
     db.workspaceId,
     scripts,
@@ -111,8 +114,11 @@ async function main() {
     snapshot: runtime.snapshot,
     plans: runtime.plans,
     envelope: runtime.envelope,
+    github,
+    gitRepositories: runtime.gitRepositories,
     projects: runtime.projects,
     toolmanNodes: runtime.toolmanNodes,
+    toolmanGateway: runtime.toolmanGateway,
     executions: runtime.executions,
     accounts,
     workspaceAccess,

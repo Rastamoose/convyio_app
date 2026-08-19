@@ -104,6 +104,20 @@ describe("renderMessageContent", () => {
     expect(container.querySelector(".text-accent")?.textContent).toBe("task-7");
   });
 
+  it("renders headings and lists without leaving the markers", () => {
+    const content = "#### greeting\nI am **noodle**.\n\n* be useful\n* be kind\n\n1. first\n2. second";
+    const { container } = render(<div>{renderMessageContent(content, mentionRegex)}</div>);
+
+    expect(container.textContent).not.toContain("####");
+    expect(container.textContent).not.toMatch(/(^|\n)\* /);
+    expect(container.querySelector(".text-sm.font-semibold")?.textContent).toBe("greeting");
+    expect(container.querySelector("strong")?.textContent).toBe("noodle");
+    expect(container.textContent).toContain("•");
+    expect(container.textContent).toContain("be useful");
+    expect(container.textContent).toContain("1.");
+    expect(container.textContent).toContain("first");
+  });
+
   it("renders a raw script tag as literal text, never as an element", () => {
     const content = "<script>alert(1)</script>";
     const { container } = render(<div>{renderMessageContent(content, mentionRegex)}</div>);

@@ -43,11 +43,31 @@ export class ToolmanNodes {
     const pairingCode = randomBytes(TOKEN_BYTES).toString("hex");
     const now = Date.now();
     const pairing = await this.store.transaction(async (sql) => {
+      const [collision] = await sql<{ id: string }[]>`
+        SELECT id FROM toolman_nodes
+        WHERE workspace_id = ${this.store.workspaceId}
+          AND name = ${name}
+          AND created_by <> ${actor.id}
+          AND revoked_at IS NULL
+      `;
+      const [pendingCollision] = await sql<{ id: string }[]>`
+        SELECT id FROM toolman_pairings
+        WHERE workspace_id = ${this.store.workspaceId}
+          AND node_name = ${name}
+          AND created_by <> ${actor.id}
+          AND consumed_at IS NULL
+          AND revoked_at IS NULL
+          AND expires_at > ${now}
+      `;
+      if (collision || pendingCollision) {
+        throw new ApiError(409, "NAME_TAKEN", `another member already paired a device named ${name}`);
+      }
       await sql`
         UPDATE toolman_pairings
         SET revoked_at = ${now}
         WHERE workspace_id = ${this.store.workspaceId}
           AND node_name = ${name}
+          AND created_by = ${actor.id}
           AND consumed_at IS NULL
           AND revoked_at IS NULL
       `;
@@ -90,6 +110,7 @@ export class ToolmanNodes {
         JOIN actors a ON a.id = n.created_by
         WHERE n.workspace_id = ${this.store.workspaceId}
           AND n.name = ${consumed.node_name}
+          AND n.created_by = ${consumed.created_by}
           AND n.revoked_at IS NULL
         FOR UPDATE
       `;
@@ -147,13 +168,13 @@ export class ToolmanNodes {
     return row ? { node: toNode(row, "ready") } : null;
   }
 
-  async revokeInstallation(token: string): Promise<boolean> {
-    const rows = await this.store.sql`
+  async revokeInstallation(token: string): Promise<string | null> {
+    const [row] = await this.store.sql<{ id: string }[]>`
       UPDATE toolman_nodes SET revoked_at = ${Date.now()}
       WHERE token_hash = ${hashToken(token)} AND revoked_at IS NULL
       RETURNING id
     `;
-    return rows.length > 0;
+    return row?.id ?? null;
   }
 
   async revoke(actor: Actor, nodeId: string): Promise<ToolmanNodeSummary> {
@@ -162,7 +183,10 @@ export class ToolmanNodes {
     return this.store.transaction(async (sql) => {
       const [row] = await sql<NodeRow[]>`
         UPDATE toolman_nodes SET revoked_at = ${now}
-        WHERE id = ${nodeId} AND workspace_id = ${this.store.workspaceId} AND revoked_at IS NULL
+        WHERE id = ${nodeId}
+          AND workspace_id = ${this.store.workspaceId}
+          AND created_by = ${actor.id}
+          AND revoked_at IS NULL
         RETURNING *
       `;
       if (!row) throw new ApiError(404, "NOT_FOUND", "no such Toolman node");
@@ -205,6 +229,9 @@ export class ToolmanNodes {
     const now = Date.now();
     return this.store.transaction(async (sql) => {
       let project = await this.findProjectByName(sql, report.projectName);
+      if (project && project.createdBy !== node.createdBy) {
+        throw new ApiError(409, "NAME_TAKEN", `another member already shared a folder named ${report.projectName}`);
+      }
       if (!project) {
         const projectId = randomUUID();
         const remoteUrl = report.remoteUrl ? sanitizeRemoteUrl(report.remoteUrl) : null;
@@ -227,7 +254,7 @@ export class ToolmanNodes {
         project = (await this.findProjectByName(sql, report.projectName))!;
       }
       const existing = await sql<MountRow[]>`
-        SELECT * FROM project_mounts WHERE node_id = ${nodeId} AND mount_key = ${report.mountKey}
+        SELECT * FROM project_mounts WHERE node_id = ${nodeId} AND project_id = ${project.id}
       `;
       let mountId = existing[0]?.id;
       if (mountId) {
@@ -265,6 +292,21 @@ export class ToolmanNodes {
 
   async findMountById(mountId: string): Promise<ProjectMount | null> {
     return this.findMount(this.store.sql, mountId);
+  }
+
+  async findActiveMountById(mountId: string): Promise<ProjectMount | null> {
+    const [row] = await this.store.sql<MountRow[]>`
+      SELECT m.*
+      FROM project_mounts m
+      JOIN projects p ON p.id = m.project_id
+      JOIN toolman_nodes n ON n.id = m.node_id
+      WHERE m.id = ${mountId}
+        AND p.workspace_id = ${this.store.workspaceId}
+        AND n.workspace_id = ${this.store.workspaceId}
+        AND p.archived_at IS NULL
+        AND n.revoked_at IS NULL
+    `;
+    return row ? toMount(row) : null;
   }
 
   async mountsForProject(projectId: string): Promise<ProjectMount[]> {

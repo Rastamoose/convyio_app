@@ -2,10 +2,10 @@
 
 This page describes units that exist in the code now.
 
-Monorepo of four npm workspaces. `shared` depends on nothing; `server`,
-`client`, and `agent` depend only on `shared`. There are no other
-cross-package edges — client and agent talk to the server exclusively over
-the wire protocol (websocket) and the HTTP board API.
+Monorepo of five npm workspaces. `shared` depends on nothing; `server`,
+`client`, `agent`, and `toolman` depend only on `shared`. There are no other
+cross-package edges — client, agent, and Toolman talk to the server exclusively
+over the shared websocket and HTTP protocols.
 
 ## Units
 
@@ -17,6 +17,10 @@ the wire protocol (websocket) and the HTTP board API.
 - `thread.ts` — canonical append-only workspace event and channel shapes.
 - `context.ts` — plan, context-entry, cursor and workspace-snapshot shapes.
 - `prompt.ts` — typed Prompt Envelope and its render function.
+- `project.ts` — project, assignment, access-request and opaque-mount shapes.
+- `git.ts` — Git account, repository, sync, branch, commit, pull-request,
+  check, changed-file and issue shapes.
+- `toolman.ts` — paired-node, project-action and durable execution contracts.
 - `protocol.ts` — the wire protocol: zod schemas for client→server frames,
   types for server→client frames.
 
@@ -28,7 +32,7 @@ the wire protocol (websocket) and the HTTP board API.
 - `joinNotices.ts` — writes the idempotent durable system message for a member's first workspace join.
 - `GET /api/hosted-agent/workspaces` — token-authenticated manifest of active noodle memberships with workspace-specific websocket URLs.
 - `WorkspaceRegistry` — lazily creates one `WorkspaceRuntime` per active workspace and routes `/ws/:workspaceId`, `/toolman/:workspaceId`, pairing credentials and workspace-bound API sessions to it.
-- `WorkspaceRuntime` — composes one workspace's roster, Hub, stores, Toolman sandbox, projects, context and demos. A runtime broadcasts only to its own connections.
+- `WorkspaceRuntime` — composes one workspace's roster, Hub, stores, Toolman sandbox/gateway, projects, managed Git checkouts, context and demos. A runtime broadcasts only to its own connections.
 - `MessageStore` (`chat/`) — chat history rows.  → WorkspaceDb
 - `Channels` (`chat/`) — the set of chat channels: seeds defaults, validates
   names, records new ones.  → WorkspaceDb
@@ -39,17 +43,20 @@ the wire protocol (websocket) and the HTTP board API.
   members (humans and agents) as offline so registered users never vanish
   from the list.  → WorkspaceDb
 - `Hub` — routes websocket frames; the single message-posting, agent-dispatch
-  and Toolman gateway. → Roster, MessageStore, AgentWorkStore, Channels,
-  Attachments, Sessions, Toolman, InteractionStore, RunnerRuntime
+  and action-authorization gateway. Project actions pass assignment and
+  owner-consent checks here before routing to a paired Toolman node or managed
+  Git checkout. → Roster, MessageStore, AgentWorkStore, Channels, Attachments,
+  Sessions, Toolman, InteractionStore, RunnerRuntime, ProjectStore,
+  ToolmanGateway, GitRepositories
 - `BoardService` — every ticket transition, each with its audit row in one
   transaction, fanned out after commit. Tickets start proposed and require an
   accepted plan.  → WorkspaceDb, PlanService
 - `PlanService` — persistent megaplan records. Acceptance is human-only and
   grants no mutating authority.  → WorkspaceDb, ThreadEventStore
-- `Toolman` — the enforcement point for agent actions; sandboxed filesystem
-  and shell mechanics. `authorizeMutation` is the pure policy decision.
-  `authorize` exposes that decision on its own so the Hub can settle the board
-  ceiling before prompting a human.  → BoardService
+- `Toolman` — the server-owned authorization decision and server-local
+  non-project filesystem/shell executor. `authorizeMutation` is the pure policy
+  decision; `authorize` exposes it so the Hub settles the hard ceiling before
+  project consent or permission prompting. → BoardService
 - `InteractionStore` (`chat/`) — durable permission prompts. A paused run is a
   row, so it survives a restart and every surface resolves the same request id.
   Startup expires prompts left by a previous process — their waiter is gone.
@@ -60,6 +67,28 @@ the wire protocol (websocket) and the HTTP board API.
   mention-triggered run requests, including claim, completion, restart
   requeue and approved-ticket dispatch. → WorkspaceDb, ThreadEventStore, MessageStore
 - `scope.ts` — scope-path semantics: normalize, match, validate.
+- `ProjectStore` (`projects/`) — logical projects, owner-only access policy,
+  agent discovery/requests, explicit assignments and checkout state. A project
+  is the resource; local paths never enter this store. → WorkspaceDb,
+  ThreadEventStore
+- `ToolmanNodes` (`projects/`) — one-time node pairing, hashed installation
+  credentials and opaque project mounts. Re-pair/revoke returns the node id so
+  the live gateway can evict stale connections. → WorkspaceDb, ThreadEventStore
+- `ToolmanGateway` (`projects/`) — authenticated node websocket, single live
+  socket per node, assignment dispatch/cancellation and immediate failure of
+  in-flight work on disconnect. → ToolmanNodes, ProjectStore
+- `ToolExecutionStore` (`projects/`) — durable project-action execution and
+  artifact projection. Managed Git executions deliberately have no local
+  mount/node id. → WorkspaceDb, ThreadEventStore, Supabase Storage
+- `GitHub` (`projects/GitHub.ts`) — global human OAuth state, AES-256-GCM
+  credential storage, access-token refresh and the GitHub API boundary.
+  Provider credentials never enter client or agent records. → root Sql
+- `GitRepositories` (`projects/GitRepositories.ts`) — workspace-linked managed
+  checkouts, safe Git transport, local/remote source projections, branches,
+  commits, pull requests/checks/files, issues, unlink/relink and branch-channel
+  lifecycle. → ProjectStore, GitHub, Channels, ThreadEventStore
+- `ManagedProjectFiles` (`projects/ManagedProjectFiles.ts`) — symlink-,
+  traversal-, secret-name- and size-safe file mechanics for managed checkouts.
 - `schemaCheck.ts` — boot-time assertion that the database has what the code
   needs, with the fix in the message. A database a few migrations behind
   otherwise starts fine and fails feature by feature, which surfaces in the
@@ -80,10 +109,13 @@ the wire protocol (websocket) and the HTTP board API.
   to an allowed participant name (a verified Supabase session, the agent's
   shared secret, or a per-agent invite token), so the Hub never knows how
   identities are proven.  → Auth, AgentInvites
-- `api.ts` — HTTP routes for board items, actors, agent invites
-  (`/api/agents`), channel creation, file uploads, login (`/api/auth/*`),
-  and the unauthenticated `/api/health` liveness probe.  → BoardService,
-  Sessions, Auth, AgentInvites, WorkspaceDb, Channels, Attachments
+- `api.ts` — HTTP routes for board/plans, actors and agent invites, channels,
+  uploads, workspace access, project/node management, owner file management,
+  GitHub OAuth/forge operations and the unauthenticated `/api/health` liveness
+  probe. Human Git routes are workspace-session gated; agents use the action
+  protocol instead. → BoardService, Sessions, Auth, AgentInvites, WorkspaceDb,
+  Channels, Attachments, ProjectStore, ToolmanNodes, ToolmanGateway, GitHub,
+  GitRepositories
 - `staticSite.ts` — serves the built client so production needs one origin
   and no second server; unknown paths fall back to index.html (SPA routing).
   Wired only when the dist directory exists (dev stays API-only).
@@ -109,6 +141,13 @@ the wire protocol (websocket) and the HTTP board API.
 - `WorkspaceLobby` — lists memberships and pending/denied requests; creates workspaces and submits access requests by public code.
 - `WorkspaceInviteFlow` — previews an invite before auth, preserves it across OAuth/email redirects and accepts it after identity is established.
 - `WorkspaceSettings` — workspace code, invite links, access decisions, roles, member removal and self-service leave.
+- `ResourcesView` — Toolman pairing/device health, owner access policy,
+  agent assignment/revocation, access-request mount choice and human local-file
+  management through the server/node gateway.
+- `GitProjectsView` — GitHub connect/disconnect, repository import/overview,
+  agent assignment, remote/local source browser, branch/sync controls,
+  branch-room navigation, commits, pull-request review/checks/files, issues and
+  repository unlink/relink.
 - `ws.ts` `WorkspaceSocket` — exists so UI code never handles raw WebSocket
   frames or reconnection. Joins with a guest name or an authToken; treats
   the server's `unauthenticated` verdict as fatal (no reconnect loop).
@@ -129,6 +168,10 @@ the wire protocol (websocket) and the HTTP board API.
 - `WorkspaceContext` — one selected workspace's state only. Drafts, unread cursors, HTTP credentials, messages, board state and sockets are discarded or namespace-scoped when switching.
 - `lib/format.ts`, `lib/status.ts` — the only copies of date formatting and
   status→label/color mappings.
+- `ResourcesView` — pairs/revokes Toolman devices, displays live node health,
+  lets project owners set folder policy and grant/revoke specific agents,
+  resolves agent access requests against a selected mount, and provides the
+  owner-only local-folder browser/editor over the authenticated project API.
 - `index.css` — the design-token layer (Tailwind v4 `@theme`): every color a
   component may use, named by role, plus the `elevated` utility that owns all
   floating surfaces. The language it implements is `AGENTS/DESIGN.md`.
@@ -159,12 +202,34 @@ the wire protocol (websocket) and the HTTP board API.
 - `installation.ts` — the durable pairing credential on disk, outside the
   repo.
 - `runtime.ts` — resolves a stored profile into an effective local
-  configuration and reports the result as runner health.
-- `BoardClient` — the agent's view of the board over the HTTP API; loads
-  the Prompt Envelope when present.
+  configuration, reports runner health, and binds ACP's local MCP bridge to
+  the current run's conversation-scoped tool executor.
+- `BoardClient` — the agent's HTTP/websocket view of board authority and shared
+  projects; loads the Prompt Envelope plus assignment/request state and exposes
+  project discovery and access requests to provider-neutral tools.
+- `tools.ts` — provider-neutral board, workspace, project-file and first-class
+  Git status/fetch/pull/push/branch/commit tools. Project mutations may use an
+  owned ticket or bounded chat grant and always route through server policy.
 - `ConversationSessions` — persists each conversation's provider-session id
   and permission mode outside the repository.
 - `nativeTools.ts` — provider-neutral ceiling for Claude/ACP native tools.
   Mutations still go through Toolman.
 - `Memory` — rolling transcript; static async factory so an uninitialized
   instance cannot exist. Approved ticket work is queued by the server.
+
+### packages/toolman
+- `cli.ts` — `convyio-toolman` pair, project-add, run, status and unpair
+  commands. Status distinguishes stored credentials from a live node; multiple
+  installations require an explicit node/workspace/id.
+- `installation.ts` — private on-device installation tokens, workspace metadata
+  and opaque mount-to-path mappings. Exchange verifies returned API/ws origins;
+  absolute paths never leave the device.
+- `projects.ts` — validates and registers a concrete local directory without
+  requiring a clean Git tree, then persists the server-returned identities.
+- `runtime.ts` — reconnecting authenticated node websocket with bounded
+  backoff, connection timeout, malformed-frame rejection, cancellation and
+  safe project file/Git action dispatch.
+- `fsSafe.ts` — traversal-, symlink-, sensitive-name- and size-safe local file
+  list/read/search/write/edit/move/delete mechanics.
+- `command.ts` — bounded, cancellable project command execution with a minimal
+  secret-free child environment.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   Actor,
+  AgentProjectAccess,
   CheckoutStatus,
   FolderAccessMode,
   Project,
@@ -88,6 +89,7 @@ export class ProjectStore {
 
   async archive(actor: Actor, id: string): Promise<Project> {
     this.assertHuman(actor);
+    await this.requireOwner(actor, id);
     const now = Date.now();
     return this.store.transaction(async (sql) => {
       const [row] = await sql<ProjectRow[]>`
@@ -173,14 +175,23 @@ export class ProjectStore {
     actor: Actor,
     requestId: string,
     decision: "approved" | "denied",
-    mountId?: string,
+    mountId?: string | null,
   ): Promise<ProjectAccessRequest> {
     this.assertHuman(actor);
-    if (decision === "approved" && !mountId) {
-      throw new ApiError(400, "MOUNT_REQUIRED", "approving access requires a project mount");
-    }
     const now = Date.now();
     return this.store.transaction(async (sql) => {
+      const [pending] = await sql<{ created_by: string }[]>`
+        SELECT p.created_by
+        FROM project_access_requests r
+        JOIN projects p ON p.id = r.project_id
+        WHERE r.id = ${requestId}
+          AND r.workspace_id = ${this.store.workspaceId}
+          AND r.status = 'pending'
+      `;
+      if (!pending) throw new ApiError(404, "NOT_FOUND", "no pending access request");
+      if (pending.created_by !== actor.id) {
+        throw new ApiError(403, "OWNER_ONLY", "only the folder owner can resolve its access requests");
+      }
       const [row] = await sql<AccessRow[]>`
         UPDATE project_access_requests
         SET status = ${decision}, resolved_by = ${actor.id}, resolved_at = ${now}
@@ -192,7 +203,7 @@ export class ProjectStore {
         await this.insertAssignment(sql, {
           projectId: row.project_id,
           agentId: row.agent_id,
-          mountId: mountId!,
+          mountId: mountId ?? null,
           assignedBy: actor.id,
           assignedAt: now,
         });
@@ -211,11 +222,10 @@ export class ProjectStore {
 
   async assign(
     actor: Actor,
-    input: { projectId: string; agentId: string; mountId: string },
+    input: { projectId: string; agentId: string; mountId?: string | null },
   ): Promise<ProjectAssignment> {
     this.assertHuman(actor);
-    const project = await this.find(input.projectId);
-    if (!project || project.archivedAt) throw new ApiError(404, "NOT_FOUND", "no such project");
+    await this.requireOwner(actor, input.projectId);
     const now = Date.now();
     return this.store.transaction(async (sql) => {
       const assignment = await this.insertAssignment(sql, {
@@ -237,6 +247,7 @@ export class ProjectStore {
 
   async revoke(actor: Actor, projectId: string, agentId: string): Promise<void> {
     this.assertHuman(actor);
+    await this.requireOwner(actor, projectId);
     const now = Date.now();
     await this.store.transaction(async (sql) => {
       const rows = await sql`
@@ -282,16 +293,35 @@ export class ProjectStore {
     return rows.map(toAssignment);
   }
 
-  async pendingAccess(): Promise<ProjectAccessRequest[]> {
+  async agentAccess(actor: Actor): Promise<AgentProjectAccess[]> {
+    if (actor.kind !== "agent") throw new ApiError(403, "AGENT_ONLY", "only agents have project access records");
+    const [projects, assignments, requests] = await Promise.all([
+      this.list(),
+      this.assignmentsForAgent(actor.id),
+      this.pendingAccess(actor),
+    ]);
+    const assignmentByProject = new Map(assignments.map((assignment) => [assignment.projectId, assignment]));
+    const requestByProject = new Map(requests.map((request) => [request.projectId, request]));
+    return projects.map((project) => ({
+      project,
+      assignment: assignmentByProject.get(project.id) ?? null,
+      request: requestByProject.get(project.id) ?? null,
+    }));
+  }
+
+  async pendingAccess(actor: Actor): Promise<ProjectAccessRequest[]> {
     const rows = await this.store.sql<NamedAccessRow[]>`
-      SELECT r.*, ag.display_name AS agent_name, res.display_name AS resolved_by_name
+      SELECT r.*, p.name AS project_name, ag.display_name AS agent_name, res.display_name AS resolved_by_name
       FROM project_access_requests r
+      JOIN projects p ON p.id = r.project_id
       JOIN actors ag ON ag.id = r.agent_id
       LEFT JOIN actors res ON res.id = r.resolved_by
-      WHERE r.workspace_id = ${this.store.workspaceId} AND r.status = 'pending'
+      WHERE r.workspace_id = ${this.store.workspaceId}
+        AND r.status = 'pending'
+        AND ${actor.kind === "human" ? this.store.sql`p.created_by = ${actor.id}` : this.store.sql`r.agent_id = ${actor.id}`}
       ORDER BY r.created_at ASC
     `;
-    return rows.map((row) => toAccess(row, row.agent_name, row.resolved_by_name));
+    return rows.map((row) => toAccess(row, row.agent_name, row.resolved_by_name, row.project_name));
   }
 
   async updateCheckout(
@@ -331,15 +361,33 @@ export class ProjectStore {
     });
   }
 
+  async requireOwner(actor: Actor, projectId: string): Promise<Project> {
+    this.assertHuman(actor);
+    const project = await this.find(projectId);
+    if (!project || project.archivedAt) throw new ApiError(404, "NOT_FOUND", "no such project");
+    if (project.createdBy !== actor.id) {
+      throw new ApiError(403, "OWNER_ONLY", "only the project owner can manage it");
+    }
+    return project;
+  }
+
   private async insertAssignment(
     sql: Sql,
-    input: { projectId: string; agentId: string; mountId: string; assignedBy: string; assignedAt: number },
+    input: { projectId: string; agentId: string; mountId?: string | null; assignedBy: string; assignedAt: number },
   ): Promise<ProjectAssignment> {
-    const mount = await sql<{ id: string; project_id: string }[]>`
-      SELECT id, project_id FROM project_mounts WHERE id = ${input.mountId}
-    `;
-    if (!mount[0] || mount[0].project_id !== input.projectId) {
-      throw new ApiError(400, "BAD_MOUNT", "mount does not belong to this project");
+    if (input.mountId) {
+      const mount = await sql<{ id: string; project_id: string }[]>`
+        SELECT id, project_id FROM project_mounts WHERE id = ${input.mountId}
+      `;
+      if (!mount[0] || mount[0].project_id !== input.projectId) {
+        throw new ApiError(400, "BAD_MOUNT", "mount does not belong to this project");
+      }
+    } else {
+      const managed = await sql<{ project_id: string }[]>`
+        SELECT project_id FROM git_repositories
+        WHERE project_id = ${input.projectId} AND workspace_id = ${this.store.workspaceId}
+      `;
+      if (!managed[0]) throw new ApiError(400, "MOUNT_REQUIRED", "assigning a local folder requires a project mount");
     }
     const agent = await sql<{ id: string; kind: string }[]>`
       SELECT a.id, a.kind FROM actors a
@@ -354,8 +402,8 @@ export class ProjectStore {
         INSERT INTO project_assignments (
           project_id, agent_id, mount_id, assigned_by, assigned_at, checkout_key, status, updated_at
         ) VALUES (
-          ${input.projectId}, ${input.agentId}, ${input.mountId}, ${input.assignedBy},
-          ${input.assignedAt}, ${randomUUID()}, 'pending', ${input.assignedAt}
+          ${input.projectId}, ${input.agentId}, ${input.mountId ?? null}, ${input.assignedBy},
+          ${input.assignedAt}, ${randomUUID()}, 'ready', ${input.assignedAt}
         )
       `;
     } catch (err) {
@@ -420,7 +468,7 @@ interface ProjectRow {
 interface AssignmentRow {
   project_id: string;
   agent_id: string;
-  mount_id: string;
+  mount_id: string | null;
   assigned_by: string;
   assigned_at: number;
   checkout_key: string;
@@ -446,6 +494,7 @@ interface AccessRow {
 }
 
 interface NamedAccessRow extends AccessRow {
+  project_name: string;
   agent_name: string;
   resolved_by_name: string | null;
 }
@@ -484,11 +533,17 @@ function toAssignment(row: AssignmentRow): ProjectAssignment {
   };
 }
 
-function toAccess(row: AccessRow, agentName?: string, resolvedByName?: string | null): ProjectAccessRequest {
+function toAccess(
+  row: AccessRow,
+  agentName?: string,
+  resolvedByName?: string | null,
+  projectName?: string,
+): ProjectAccessRequest {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     projectId: row.project_id,
+    projectName,
     agentId: row.agent_id,
     agentName,
     reason: row.reason,

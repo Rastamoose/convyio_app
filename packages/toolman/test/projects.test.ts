@@ -36,6 +36,7 @@ describe("local folder attach", () => {
     assert.equal(mount.kind, "directory");
     assert.equal(mount.absolutePath, folder);
     assert.equal(mount.projectName, "notes");
+    assert.equal(mount.mountKey, "server-mount-key");
   });
 
   test("attaches a plain folder", async () => {
@@ -73,6 +74,9 @@ function fakeMountFetch(projectName: string): typeof fetch {
     const body = JSON.parse(String(init?.body)) as { kind: string; projectName: string };
     assert.equal(body.kind, "directory");
     assert.equal(body.projectName, projectName);
-    return new Response(JSON.stringify({ project: { id: "proj-1", name: projectName } }), { status: 200 });
+    return new Response(
+      JSON.stringify({ project: { id: "proj-1", name: projectName }, mount: { mountKey: "server-mount-key" } }),
+      { status: 200 },
+    );
   }) as typeof fetch;
 }

@@ -10,6 +10,7 @@ import { MessageList } from "./components/MessageList";
 import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
 import { ResourcesView } from "./components/ResourcesView";
+import { GitProjectsView } from "./components/GitProjectsView";
 import { ApprovalQueue } from "./components/ApprovalQueue";
 import { PanelHeader } from "./components/PanelHeader";
 import { StatusBar } from "./components/StatusBar";
@@ -798,6 +799,8 @@ function Workspace({
         />
         {view === "resources" ? (
           <ResourcesView />
+        ) : view === "projects" ? (
+          <GitProjectsView onOpenChannel={(target) => { setChannel(target); setView("chat"); }} />
         ) : view === "chat" ? (
           <FileDropZone
             onFiles={(files) => workspace.addAttachments(channel, files)}

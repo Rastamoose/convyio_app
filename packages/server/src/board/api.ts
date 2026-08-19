@@ -7,6 +7,7 @@ import type {
   AgentProvider,
   EcosystemImpact,
   ItemStatus,
+  ProjectAction,
   WorkCapability,
   WorkspaceInviteMaxAgeSeconds,
   WorkspaceInviteMaxUses,
@@ -14,6 +15,7 @@ import type {
 } from "@workspace/shared";
 import {
   DEFAULT_WORKSPACE_INVITE_OPTIONS,
+  MAX_FILE_BYTES,
   WORK_CAPABILITIES,
   WORKSPACE_INVITE_MAX_AGE_SECONDS,
   WORKSPACE_INVITE_MAX_USES,
@@ -43,8 +45,11 @@ import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
+import type { GitHub } from "../projects/GitHub";
+import type { GitRepositories } from "../projects/GitRepositories";
 import type { ProjectStore } from "../projects/ProjectStore";
 import type { ToolmanNodes } from "../projects/ToolmanNodes";
+import type { ToolmanGateway } from "../projects/ToolmanGateway";
 import type { ToolExecutionStore } from "../projects/ToolExecutionStore";
 
 const scopePathsSchema = z.array(z.string().min(1).max(500)).max(50);
@@ -137,14 +142,37 @@ const toolmanMountBodySchema = z.object({
 const projectAccessBodySchema = z.object({ reason: z.string().min(1).max(1000) });
 const projectAssignBodySchema = z.object({
   agentId: z.string().min(1).max(128),
-  mountId: z.string().min(1).max(128),
+  mountId: z.string().min(1).max(128).nullable().optional(),
 });
 const projectAccessResolveBodySchema = z.object({
   decision: z.enum(["approved", "denied"]),
-  mountId: z.string().min(1).max(128).optional(),
+  mountId: z.string().min(1).max(128).nullable().optional(),
 });
 const folderAccessModeBodySchema = z.object({
   accessMode: z.enum(["ask", "always", "deny"]),
+});
+const projectFileBodySchema = z.object({
+  mountId: z.string().min(1).max(128),
+  path: z.string().min(1).max(1000),
+  content: z.string().max(MAX_FILE_BYTES).optional(),
+});
+const gitRepositoryBodySchema = z.object({
+  fullName: z.string().regex(/^[^/\s]+\/[^/\s]+$/).max(401),
+});
+const gitSyncBodySchema = z.object({ operation: z.enum(["fetch", "pull", "push"]) });
+const gitBranchBodySchema = z.object({
+  name: z.string().min(1).max(200),
+  startPoint: z.string().min(1).max(200).optional(),
+});
+const gitPullBodySchema = z.object({
+  title: z.string().min(1).max(256),
+  body: z.string().max(20_000).default(""),
+  head: z.string().min(1).max(200),
+  base: z.string().min(1).max(200),
+});
+const gitIssueBodySchema = z.object({
+  title: z.string().min(1).max(256),
+  body: z.string().max(20_000).default(""),
 });
 
 const denyBodySchema = z.object({ reason: z.string().max(1000).optional() });
@@ -186,8 +214,11 @@ export interface ApiServices {
   snapshot?: WorkspaceSnapshotBuilder | null;
   plans?: PlanService | null;
   envelope?: PromptEnvelopeBuilder | null;
+  github?: GitHub | null;
+  gitRepositories?: GitRepositories | null;
   projects?: ProjectStore | null;
   toolmanNodes?: ToolmanNodes | null;
+  toolmanGateway?: ToolmanGateway | null;
   executions?: ToolExecutionStore | null;
   accounts?: AccountStore | null;
   workspaceAccess?: WorkspaceAccess | null;
@@ -215,8 +246,11 @@ export function createApiHandler(services: ApiServices) {
     snapshot = null,
     plans = null,
     envelope = null,
+    github = null,
+    gitRepositories = null,
     projects = null,
     toolmanNodes = null,
+    toolmanGateway = null,
     executions = null,
     accounts = null,
     workspaceAccess = null,
@@ -243,7 +277,7 @@ export function createApiHandler(services: ApiServices) {
     }
     res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
       "Authorization, Content-Type, X-File-Name, X-Image-Width, X-Image-Height",
@@ -284,6 +318,41 @@ export function createApiHandler(services: ApiServices) {
       } else if (parts[1] === "auth") {
         // Login endpoints are how a token is obtained, so they cannot demand one.
         await routeAuth(req, res, parts, url, authGate);
+      } else if (
+        parts[1] === "git" &&
+        parts[2] === "github" &&
+        parts[3] === "callback" &&
+        parts.length === 4 &&
+        method === "GET"
+      ) {
+        if (!github) throw new ApiError(501, "GITHUB_UNAVAILABLE", "GitHub integration is not configured");
+        const code = url.searchParams.get("code");
+        const state = url.searchParams.get("state");
+        if (!state) throw new ApiError(400, "GITHUB_OAUTH_FAILED", "GitHub did not return OAuth state");
+        const workspaceId = github.oauthWorkspace(state);
+        const returnOrigin = github.oauthReturnOrigin(state);
+        if (!workspaceId || !returnOrigin) throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired; start again");
+        if (!code) {
+          github.cancel(state);
+          res.writeHead(302, {
+            Location: new URL(`/w/${encodeURIComponent(workspaceId)}?git=error`, returnOrigin).toString(),
+            "Cache-Control": "no-store",
+          }).end();
+        } else {
+          try {
+            const completed = await github.complete(code, state);
+            res.writeHead(302, {
+              Location: new URL(`/w/${encodeURIComponent(completed.workspaceId)}?git=connected`, completed.returnOrigin).toString(),
+              "Cache-Control": "no-store",
+            }).end();
+          } catch (error) {
+            if (!(error instanceof ApiError)) throw error;
+            res.writeHead(302, {
+              Location: new URL(`/w/${encodeURIComponent(workspaceId)}?git=error`, returnOrigin).toString(),
+              "Cache-Control": "no-store",
+            }).end();
+          }
+        }
       } else if (
         parts[1] === "account" ||
         parts[1] === "workspaces" ||
@@ -365,6 +434,7 @@ export function createApiHandler(services: ApiServices) {
         if (!nodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
         const exchanged = await nodes.exchangePairing(body.pairingCode);
         if (!exchanged) throw new ApiError(401, "INVALID_PAIRING", "pairing code is invalid or expired");
+        (runtime?.toolmanGateway ?? toolmanGateway)?.disconnect(exchanged.node.id);
         const apiUrl = requestOrigin(req);
         json(res, 200, {
           node: exchanged.node,
@@ -378,6 +448,27 @@ export function createApiHandler(services: ApiServices) {
         parts[1] === "toolman" &&
         parts[2] === "installation" &&
         parts.length === 3 &&
+        method === "GET"
+      ) {
+        const token = bearerToken(req);
+        if (!token) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        const runtime = workspaceRegistry
+          ? await workspaceRegistry.workspaceForToolmanInstallation(token)
+          : null;
+        const nodes = runtime?.toolmanNodes ?? toolmanNodes;
+        const gateway = runtime?.toolmanGateway ?? toolmanGateway;
+        const resolved = nodes ? await nodes.resolveInstallation(token) : null;
+        if (!resolved) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+        json(res, 200, {
+          node: {
+            ...resolved.node,
+            health: gateway?.isOnline(resolved.node.id) ? "ready" : "offline",
+          },
+        });
+      } else if (
+        parts[1] === "toolman" &&
+        parts[2] === "installation" &&
+        parts.length === 3 &&
         method === "DELETE"
       ) {
         const token = bearerToken(req);
@@ -386,9 +477,11 @@ export function createApiHandler(services: ApiServices) {
           ? await workspaceRegistry.workspaceForToolmanInstallation(token)
           : null;
         const nodes = runtime?.toolmanNodes ?? toolmanNodes;
-        if (!nodes || !(await nodes.revokeInstallation(token))) {
+        const nodeId = nodes ? await nodes.revokeInstallation(token) : null;
+        if (!nodeId) {
           throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
         }
+        (runtime?.toolmanGateway ?? toolmanGateway)?.disconnect(nodeId);
         json(res, 200, { ok: true });
       } else if (
         parts[1] === "toolman" &&
@@ -410,7 +503,7 @@ export function createApiHandler(services: ApiServices) {
       } else {
         const authenticated = await authenticate(req, db, sessions, workspaceRegistry);
         const scoped = authenticated.runtime
-          ? runtimeRouteServices(authenticated.runtime, accounts, workspaceAccess)
+          ? runtimeRouteServices(authenticated.runtime, accounts, workspaceAccess, github)
           : {
               db,
               service,
@@ -427,8 +520,11 @@ export function createApiHandler(services: ApiServices) {
               snapshot,
               plans,
               envelope,
+              github,
+              gitRepositories,
               projects,
               toolmanNodes,
+              toolmanGateway,
               executions,
               accounts,
               workspaceAccess,
@@ -465,8 +561,11 @@ interface RouteServices {
   snapshot: WorkspaceSnapshotBuilder | null;
   plans: PlanService | null;
   envelope: PromptEnvelopeBuilder | null;
+  github: GitHub | null;
+  gitRepositories: GitRepositories | null;
   projects: ProjectStore | null;
   toolmanNodes: ToolmanNodes | null;
+  toolmanGateway: ToolmanGateway | null;
   executions: ToolExecutionStore | null;
   accounts: AccountStore | null;
   workspaceAccess: WorkspaceAccess | null;
@@ -496,8 +595,11 @@ async function route(
     snapshot,
     plans,
     envelope,
+    github,
+    gitRepositories,
     projects,
     toolmanNodes,
+    toolmanGateway,
     executions,
     accounts,
     workspaceAccess,
@@ -804,6 +906,121 @@ async function route(
     return json(res, 201, { attachment: await attachments.save(actor, uploadMeta(req), bytes) });
   }
 
+  if (parts[1] === "git") {
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "agents access repositories through Toolman");
+    if (!github) throw new ApiError(501, "GITHUB_UNAVAILABLE", "GitHub integration is not configured");
+    if (parts[2] === "account" && parts.length === 3 && method === "GET") {
+      return json(res, 200, { available: github.available, account: await github.account(actor.id) });
+    }
+    if (parts[2] === "account" && parts.length === 3 && method === "DELETE") {
+      await github.disconnect(actor);
+      return json(res, 200, { ok: true });
+    }
+    if (parts[2] === "github" && parts[3] === "authorize" && parts.length === 4 && method === "POST") {
+      return json(res, 200, { url: github.authorize(actor, actor.workspaceId, requestOrigin(req), browserReturnOrigin(req)) });
+    }
+    if (parts[2] === "available-repositories" && parts.length === 3 && method === "GET") {
+      return json(res, 200, { repositories: await github.repositories(actor.id) });
+    }
+    if (parts[2] === "repositories") {
+      if (!gitRepositories) throw new ApiError(501, "NOT_IMPLEMENTED", "Git repositories are not available");
+      if (parts.length === 3 && method === "GET") {
+        return json(res, 200, { repositories: await gitRepositories.list() });
+      }
+      if (parts.length === 3 && method === "POST") {
+        const body = gitRepositoryBodySchema.parse(await readBody(req));
+        return json(res, 201, { repository: await gitRepositories.link(actor, body.fullName) });
+      }
+      const projectId = parts[3];
+      if (!projectId) throw new ApiError(404, "NOT_FOUND", "no such Git route");
+      if (parts.length === 4 && method === "GET") {
+        const repository = await gitRepositories.find(projectId);
+        if (!repository) throw new ApiError(404, "NOT_FOUND", "no such linked repository");
+        return json(res, 200, { repository });
+      }
+      if (parts.length === 4 && method === "DELETE") {
+        await gitRepositories.unlink(actor, projectId);
+        return json(res, 200, { ok: true });
+      }
+      if (parts[4] === "retry" && parts.length === 5 && method === "POST") {
+        return json(res, 200, { repository: await gitRepositories.retry(actor, projectId) });
+      }
+      if (parts[4] === "sync" && parts.length === 5 && method === "POST") {
+        const body = gitSyncBodySchema.parse(await readBody(req));
+        return json(res, 200, { repository: await gitRepositories.sync(actor, projectId, body.operation) });
+      }
+      if (parts[4] === "branches" && parts.length === 5 && method === "GET") {
+        return json(res, 200, { branches: await gitRepositories.branches(projectId) });
+      }
+      if (parts[4] === "branches" && parts.length === 5 && method === "POST") {
+        const body = gitBranchBodySchema.parse(await readBody(req));
+        return json(res, 201, { repository: await gitRepositories.createBranch(actor, projectId, body.name, body.startPoint) });
+      }
+      if (parts[4] === "branches" && parts.length === 6 && method === "DELETE") {
+        return json(res, 200, { repository: await gitRepositories.deleteBranch(actor, projectId, decodedPathPart(parts[5])) });
+      }
+      if (parts[4] === "commits" && parts.length === 5 && method === "GET") {
+        return json(res, 200, { commits: await gitRepositories.commits(projectId, url.searchParams.get("ref") ?? undefined) });
+      }
+      if (parts[4] === "tree" && parts.length === 5 && method === "GET") {
+        return json(res, 200, {
+          entries: await gitRepositories.tree(
+            projectId,
+            url.searchParams.get("ref") ?? undefined,
+            url.searchParams.get("path") ?? undefined,
+            gitSource(url.searchParams.get("source")),
+          ),
+        });
+      }
+      if (parts[4] === "file" && parts.length === 5 && method === "GET") {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) throw new ApiError(400, "BAD_PATH", "path is required");
+        return json(res, 200, {
+          content: await gitRepositories.file(
+            projectId,
+            filePath,
+            url.searchParams.get("ref") ?? undefined,
+            gitSource(url.searchParams.get("source")),
+          ),
+        });
+      }
+      if (parts[4] === "pulls" && parts.length === 5 && method === "GET") {
+        const state = gitListState(url.searchParams.get("state"));
+        return json(res, 200, { pulls: await gitRepositories.pulls(projectId, state) });
+      }
+      if (parts[4] === "pulls" && parts.length === 5 && method === "POST") {
+        const body = gitPullBodySchema.parse(await readBody(req));
+        return json(res, 201, { pull: await gitRepositories.createPull(actor, projectId, body) });
+      }
+      if (parts[4] === "pulls" && parts.length === 7 && method === "GET") {
+        const number = gitNumber(parts[5]);
+        if (parts[6] === "files") return json(res, 200, { files: await gitRepositories.pullFiles(projectId, number) });
+        if (parts[6] === "checks") return json(res, 200, { checks: await gitRepositories.pullChecks(projectId, number) });
+      }
+      if (parts[4] === "pulls" && parts.length === 7 && method === "POST") {
+        const number = gitNumber(parts[5]);
+        if (parts[6] === "approve") {
+          await gitRepositories.approvePull(actor, projectId, number);
+          return json(res, 200, { ok: true });
+        }
+        if (parts[6] === "merge") {
+          await gitRepositories.mergePull(actor, projectId, number);
+          return json(res, 200, { ok: true });
+        }
+      }
+      if (parts[4] === "issues" && parts.length === 5 && method === "GET") {
+        const state = gitListState(url.searchParams.get("state"));
+        return json(res, 200, { issues: await gitRepositories.issues(projectId, state) });
+      }
+      if (parts[4] === "issues" && parts.length === 5 && method === "POST") {
+        const body = gitIssueBodySchema.parse(await readBody(req));
+        return json(res, 201, { issue: await gitRepositories.createIssue(actor, projectId, body.title, body.body) });
+      }
+      throw new ApiError(404, "NOT_FOUND", "no such Git route");
+    }
+    throw new ApiError(404, "NOT_FOUND", "no such Git route");
+  }
+
   if (parts[1] === "projects") {
     if (!projects) throw new ApiError(501, "NOT_IMPLEMENTED", "projects are not available");
     if (parts.length === 2 && method === "GET") {
@@ -817,6 +1034,53 @@ async function route(
         assignments: await projects.listAssignments(project.id),
         mounts: toolmanNodes ? await toolmanNodes.mountsForProject(project.id) : [],
       });
+    }
+    if (parts.length === 4 && parts[3] === "files" && method === "GET") {
+      const mountId = requiredSearchParam(url, "mountId");
+      const filePath = url.searchParams.get("path") ?? ".";
+      const output = await executeOwnedProjectAction(
+        actor,
+        parts[2],
+        mountId,
+        { kind: "project_list_files", projectId: parts[2], path: filePath },
+        projects,
+        toolmanNodes,
+        toolmanGateway,
+      );
+      return json(res, 200, { entries: output === "(empty)" ? [] : output.split("\n") });
+    }
+    if (parts.length === 4 && parts[3] === "file" && method === "GET") {
+      const mountId = requiredSearchParam(url, "mountId");
+      const filePath = requiredSearchParam(url, "path");
+      const output = await executeOwnedProjectAction(
+        actor,
+        parts[2],
+        mountId,
+        { kind: "project_read_file", projectId: parts[2], path: filePath },
+        projects,
+        toolmanNodes,
+        toolmanGateway,
+      );
+      return json(res, 200, { content: output });
+    }
+    if (parts.length === 4 && parts[3] === "file" && (method === "PUT" || method === "DELETE")) {
+      const body = projectFileBodySchema.parse(await readBody(req));
+      if (method === "PUT" && body.content === undefined) {
+        throw new ApiError(400, "CONTENT_REQUIRED", "content is required");
+      }
+      const action: ProjectAction = method === "PUT"
+        ? { kind: "project_write_file", projectId: parts[2], path: body.path, content: body.content! }
+        : { kind: "project_delete_file", projectId: parts[2], path: body.path };
+      const output = await executeOwnedProjectAction(
+        actor,
+        parts[2],
+        body.mountId,
+        action,
+        projects,
+        toolmanNodes,
+        toolmanGateway,
+      );
+      return json(res, 200, { ok: true, output });
     }
     if (parts.length === 3 && method === "DELETE") {
       return json(res, 200, { project: await projects.archive(actor, parts[2]) });
@@ -867,10 +1131,15 @@ async function route(
     return;
   }
 
+  if (parts[1] === "agent-project-access" && parts.length === 2 && method === "GET") {
+    if (!projects) throw new ApiError(501, "NOT_IMPLEMENTED", "projects are not available");
+    return json(res, 200, { projects: await projects.agentAccess(actor) });
+  }
+
   if (parts[1] === "project-access-requests") {
     if (!projects) throw new ApiError(501, "NOT_IMPLEMENTED", "projects are not available");
     if (parts.length === 2 && method === "GET") {
-      return json(res, 200, { requests: await projects.pendingAccess() });
+      return json(res, 200, { requests: await projects.pendingAccess(actor) });
     }
     if (parts.length === 4 && parts[3] === "resolve" && method === "POST") {
       const body = projectAccessResolveBodySchema.parse(await readBody(req));
@@ -884,14 +1153,21 @@ async function route(
   if (parts[1] === "toolman") {
     if (!toolmanNodes) throw new ApiError(501, "NOT_IMPLEMENTED", "Toolman nodes are not available");
     if (parts[2] === "nodes" && parts.length === 3 && method === "GET") {
-      return json(res, 200, { nodes: await toolmanNodes.list() });
+      const nodes = await toolmanNodes.list();
+      return json(res, 200, {
+        nodes: nodes.map((node) => node.revokedAt
+          ? node
+          : { ...node, health: toolmanGateway?.isOnline(node.id) ? "ready" : "offline" }),
+      });
     }
     if (parts[2] === "pairings" && parts.length === 3 && method === "POST") {
       const body = toolmanPairingBodySchema.parse(await readBody(req));
       return json(res, 201, await toolmanNodes.createPairing(actor, body.name));
     }
     if (parts[2] === "nodes" && parts.length === 4 && method === "DELETE") {
-      return json(res, 200, { node: await toolmanNodes.revoke(actor, parts[3]) });
+      const node = await toolmanNodes.revoke(actor, parts[3]);
+      toolmanGateway?.disconnect(node.id);
+      return json(res, 200, { node });
     }
     throw new ApiError(404, "NOT_FOUND", "no such route");
   }
@@ -1085,6 +1361,7 @@ function runtimeRouteServices(
   runtime: WorkspaceRuntime,
   accounts: AccountStore | null,
   workspaceAccess: WorkspaceAccess | null,
+  github: GitHub | null,
 ): RouteServices {
   return {
     db: runtime.db,
@@ -1105,8 +1382,11 @@ function runtimeRouteServices(
     snapshot: runtime.snapshot,
     plans: runtime.plans,
     envelope: runtime.envelope,
+    github,
+    gitRepositories: runtime.gitRepositories,
     projects: runtime.projects,
     toolmanNodes: runtime.toolmanNodes,
+    toolmanGateway: runtime.toolmanGateway,
     executions: runtime.executions,
     accounts,
     workspaceAccess,
@@ -1139,6 +1419,42 @@ async function authenticate(
     throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
   }
   return { actor, runtime: null };
+}
+
+async function executeOwnedProjectAction(
+  actor: Actor,
+  projectId: string,
+  mountId: string,
+  action: ProjectAction,
+  projects: ProjectStore,
+  nodes: ToolmanNodes | null,
+  gateway: ToolmanGateway | null,
+): Promise<string> {
+  await projects.requireOwner(actor, projectId);
+  if (!nodes || !gateway) throw new ApiError(503, "TOOLMAN_OFFLINE", "Toolman is not available");
+  const mount = await nodes.findMountById(mountId);
+  if (!mount || mount.projectId !== projectId) throw new ApiError(404, "NOT_FOUND", "no such project mount");
+  const result = await gateway.executeMount(mountId, actor.id, `human:${actor.id}`, action);
+  if (!result.ok) throw new ApiError(503, result.code ?? "TOOLMAN_FAILED", result.error ?? "Toolman action failed");
+  return result.output ?? "";
+}
+
+function requiredSearchParam(url: URL, name: string): string {
+  const value = url.searchParams.get(name);
+  if (!value) throw new ApiError(400, "VALIDATION", `${name} is required`);
+  return value;
+}
+
+function browserReturnOrigin(req: IncomingMessage): string {
+  const origin = req.headers.origin;
+  if (!origin) return requestOrigin(req);
+  try {
+    const parsed = new URL(origin);
+    if ((parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password) return parsed.origin;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+  }
+  throw new ApiError(400, "BAD_ORIGIN", "browser origin is invalid");
 }
 
 function workspaceSocketUrl(origin: string, workspaceId: string): string {
@@ -1198,6 +1514,33 @@ function uploadMeta(req: IncomingMessage): { name: string; mime: string; width?:
     width: intHeader(req, "x-image-width"),
     height: intHeader(req, "x-image-height"),
   };
+}
+
+function decodedPathPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError) throw new ApiError(400, "BAD_PATH", "URL path is malformed");
+    throw error;
+  }
+}
+
+function gitNumber(value: string): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) throw new ApiError(400, "BAD_NUMBER", "pull request number is invalid");
+  return number;
+}
+
+function gitSource(value: string | null): "remote" | "local" {
+  if (value === null || value === "remote") return "remote";
+  if (value === "local") return "local";
+  throw new ApiError(400, "BAD_SOURCE", "source must be remote or local");
+}
+
+function gitListState(value: string | null): "open" | "closed" | "all" {
+  if (value === null || value === "open") return "open";
+  if (value === "closed" || value === "all") return value;
+  throw new ApiError(400, "BAD_STATE", "state must be open, closed, or all");
 }
 
 /** Clamp ?limit= to [1, MAX_HISTORY_LIMIT]; missing or non-numeric falls
@@ -1282,6 +1625,10 @@ function enforceRateLimit(
   if (parts[1] === "agent-pairings" || parts[1] === "agent-installations") limit = 20;
   if (parts[1] === "toolman" && (parts[2] === "pairings" || parts[2] === "installation")) limit = 20;
   if (parts[1] === "uploads" && method === "POST") limit = 30;
+  if (parts[1] === "git" && method !== "GET") {
+    key = "git-mutation";
+    limit = 20;
+  }
   if (!limiter.take(`${address}:${key}`, limit, windowMs)) {
     throw new ApiError(429, "RATE_LIMITED", "too many requests; try again shortly");
   }

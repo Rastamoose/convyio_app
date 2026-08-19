@@ -11,6 +11,7 @@ import { Auth } from "../src/auth/Auth";
 import { WorkspaceAccess } from "../src/auth/WorkspaceAccess";
 import { Sessions } from "../src/board/sessions";
 import { createApiHandler } from "../src/board/api";
+import { GitHub } from "../src/projects/GitHub";
 import { WorkspaceRegistry } from "../src/WorkspaceRegistry";
 import { createTestDb } from "./pgSchema";
 import { fakeSupabase } from "./helpers";
@@ -60,6 +61,7 @@ describe("multi-workspace runtime", () => {
       auth,
       null,
       fakeSupabase(users),
+      new GitHub(db.sql, null),
       dataDir,
       db.workspaceId,
       new Map(),

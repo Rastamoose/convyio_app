@@ -17,6 +17,7 @@ import {
   summarizedToolOutput,
   type Brain,
   type BrainEvent,
+  type ToolExecutor,
 } from "./brain";
 import type { Memory } from "./memory";
 import type { BoardClient } from "./boardClient";
@@ -72,6 +73,7 @@ export class AgentRunner {
     private presence: Presence,
     private systemPrompt: string,
     private limiter?: { check(authorId: string): { allowed: boolean; announce: boolean } },
+    private setExternalToolExecutor?: (executor: ToolExecutor | null) => void,
   ) {}
 
   /** Profile changes affect the next run; an input already handed to a brain stays immutable. */
@@ -274,6 +276,7 @@ export class AgentRunner {
         actions = [{ type: "add_agent", label: "Add agent" }];
       }
     } else try {
+      this.setExternalToolExecutor?.(executeTool);
       const result = await this.brain.run(
         {
           system: this.systemPrompt,
@@ -300,6 +303,7 @@ export class AgentRunner {
         console.error("[agent] run failed:", detail);
       }
     } finally {
+      this.setExternalToolExecutor?.(null);
       activity?.flush();
       this.abortController = null;
     }
