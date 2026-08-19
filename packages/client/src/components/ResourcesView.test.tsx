@@ -79,6 +79,7 @@ describe("ResourcesView", () => {
     expect((await screen.findByLabelText("Setup prompt")).textContent).toBe(expectedPrompt);
     expect(screen.getByRole("button", { name: (n) => n === "CLI" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: (n) => n === "Pairing code" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open local folder" })).toBeInTheDocument();
     expect(screen.queryByText("pair-code-xyz")).not.toBeInTheDocument();
 
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -92,12 +93,64 @@ describe("ResourcesView", () => {
     );
   });
 
+  it("opens a local folder picker and names that folder in the setup prompt", async () => {
+    const user = userEvent.setup();
+    fetchActors.mockResolvedValue([]);
+    apiFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/toolman/nodes") return response({ nodes: [] });
+      if (path === "/api/projects") return response({ projects: [] });
+      if (path === "/api/project-access-requests") return response({ requests: [] });
+      if (path === "/api/toolman/pairings" && init?.method === "POST") {
+        return {
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              pairing: {
+                id: "pair-1",
+                workspaceId: "w1",
+                nodeName: "desk",
+                createdBy: "human-1",
+                createdAt: 1,
+                expiresAt: 2,
+                consumedAt: null,
+                revokedAt: null,
+              },
+              pairingCode: "pair-code-xyz",
+            }),
+        } as Response;
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    window.showDirectoryPicker = vi.fn().mockResolvedValue({
+      name: "notes",
+      async *entries() {
+        yield ["README.md", { kind: "file", name: "README.md" }];
+        yield ["src", { kind: "directory", name: "src" }];
+      },
+    });
+
+    render(<ResourcesView />);
+    await user.click(await screen.findByText("Share this folder"));
+    await user.click(await screen.findByRole("button", { name: "Open local folder" }));
+
+    expect(await screen.findByText("notes")).toBeInTheDocument();
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("src/")).toBeInTheDocument();
+    const expected = toolmanSetupPrompt("http://localhost:3001", "pair-code-xyz", "desk", "notes");
+    expect(screen.getByLabelText("Setup prompt").textContent).toBe(expected);
+    expect(expected).toContain('the folder named "notes" on this computer');
+  });
+
   it("writes a local-only setup prompt that includes pair, attach, and run", () => {
     const prompt = toolmanSetupPrompt("https://app.convyio.com", "secret-code", "laptop");
     expect(prompt).toContain(toolmanPairCommand("https://app.convyio.com", "secret-code"));
     expect(prompt).toContain("convyio-toolman project add .");
     expect(prompt).toContain("convyio-toolman run");
     expect(prompt).toContain('machine "laptop"');
+    expect(prompt).toContain("the folder already open here");
+    expect(toolmanSetupPrompt("https://app.convyio.com", "secret-code", "laptop", "notes"))
+      .toContain('the folder named "notes" on this computer');
     expect(prompt).toContain("does not need an API key");
     expect(prompt).toContain("A dirty or uncommitted tree is fine");
     expect(prompt).not.toContain("commit or stash first");

@@ -17,7 +17,17 @@ function Chevron({ expanded }: { expanded: boolean }) {
   );
 }
 
-export function SetupPromptCard({ value }: { value: string }) {
+export function SetupPromptCard({
+  value,
+  onOpenFolder,
+  folderName,
+  folderEntries,
+}: {
+  value: string;
+  onOpenFolder?: () => void;
+  folderName?: string;
+  folderEntries?: string[];
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -36,15 +46,42 @@ export function SetupPromptCard({ value }: { value: string }) {
         <p className="text-[10px] font-bold tracking-wider text-muted uppercase">
           Setup prompt
         </p>
-        <button
-          type="button"
-          onClick={() => void copy()}
-          aria-label="Copy setup prompt"
-          className="shrink-0 cursor-pointer rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
-        >
-          {copied ? "Copied" : "Copy prompt"}
-        </button>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {onOpenFolder && (
+            <button
+              type="button"
+              onClick={onOpenFolder}
+              aria-label="Open local folder"
+              className="cursor-pointer rounded-md border border-divider bg-input px-2.5 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+            >
+              Open folder
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void copy()}
+            aria-label="Copy setup prompt"
+            className="cursor-pointer rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+          >
+            {copied ? "Copied" : "Copy prompt"}
+          </button>
+        </span>
       </div>
+      {folderName && (
+        <div className="mb-2 rounded-md border border-divider bg-subtle px-2.5 py-2">
+          <p className="text-[10px] font-bold tracking-wider text-muted uppercase">
+            This computer
+          </p>
+          <p className="mt-0.5 font-mono text-xs text-body">{folderName}</p>
+          {folderEntries && folderEntries.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5 font-mono text-xs text-muted">
+              {folderEntries.map((entry) => (
+                <li key={entry}>{entry}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <pre
         aria-label="Setup prompt"
         className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-divider bg-composer px-2.5 py-2 font-mono text-xs text-body"

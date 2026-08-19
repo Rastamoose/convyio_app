@@ -10,6 +10,7 @@ import type {
   ToolmanPairingResponse,
 } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { pickLocalFolder, type PickedLocalFolder } from "../lib/localFolder";
 import { PairingCopyRow, SetupPromptCard } from "./PairingCopy";
 
 interface ProjectDetail {
@@ -41,9 +42,15 @@ export function toolmanCliCommands(apiUrl: string, pairingCode: string): string 
 }
 
 /** Prompt a local coding agent can follow to pair Toolman and attach this folder. */
-export function toolmanSetupPrompt(apiUrl: string, pairingCode: string, nodeName: string): string {
+export function toolmanSetupPrompt(
+  apiUrl: string,
+  pairingCode: string,
+  nodeName: string,
+  folderName?: string,
+): string {
+  const folder = folderName ? `the folder named "${folderName}" on this computer` : "the folder already open here";
   return [
-    `Set up Convyio Toolman on this computer as machine "${nodeName}", and attach the folder already open here.`,
+    `Set up Convyio Toolman on this computer as machine "${nodeName}", and attach ${folder}.`,
     "",
     "Toolman is a small local process. It streams one folder from this machine into the workspace. Agents never see the rest of the disk. It does not host an LLM and does not need an API key. A dirty or uncommitted tree is fine — do not ask the human to commit or stash.",
     "",
@@ -57,7 +64,7 @@ export function toolmanSetupPrompt(apiUrl: string, pairingCode: string, nodeName
     "   - Else if this workspace or a parent contains packages/toolman/package.json named @workspace/toolman, from that folder run:",
     "     npm install && npm run build -w @workspace/toolman && npm link -w @workspace/toolman",
     "   - Else stop and tell the human they need the Convyio app repo to build the CLI.",
-    "3. From the folder already open here, run the pairing command above.",
+    `3. From ${folderName ? `the folder named "${folderName}"` : "the folder already open here"}, run the pairing command above.`,
     "4. Attach this same folder, dirty or not:",
     "     convyio-toolman project add .",
     "5. Start Toolman in this terminal and keep it running: `convyio-toolman run`",
@@ -76,6 +83,7 @@ export function ResourcesView() {
   const [details, setDetails] = useState<Record<string, ProjectDetail>>({});
   const [requestMounts, setRequestMounts] = useState<Record<string, string>>({});
   const [pairing, setPairing] = useState<ToolmanPairingResponse | null>(null);
+  const [localFolder, setLocalFolder] = useState<PickedLocalFolder | null>(null);
   const [nodeName, setNodeName] = useState("desk");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +134,17 @@ export function ResourcesView() {
     }
     setPairing((await res.json()) as ToolmanPairingResponse);
     await load();
+  };
+
+  const openLocalFolder = async () => {
+    try {
+      const folder = await pickLocalFolder();
+      if (!folder) return;
+      setLocalFolder(folder);
+      setError(null);
+    } catch {
+      setError("Could not open a local folder");
+    }
   };
 
   const setAccessMode = async (project: Project, accessMode: FolderAccessMode) => {
@@ -277,7 +296,10 @@ export function ResourcesView() {
                 once and expires in about 10 minutes.
               </p>
               <SetupPromptCard
-                value={toolmanSetupPrompt(apiUrl, pairing.pairingCode, pairing.pairing.nodeName)}
+                value={toolmanSetupPrompt(apiUrl, pairing.pairingCode, pairing.pairing.nodeName, localFolder?.name)}
+                onOpenFolder={() => void openLocalFolder()}
+                folderName={localFolder?.name}
+                folderEntries={localFolder?.entries}
               />
               <div>
                 <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">

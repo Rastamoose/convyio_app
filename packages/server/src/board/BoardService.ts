@@ -180,6 +180,7 @@ export class BoardService {
     }
     if (input.owner) await this.requireMember(input.owner);
     const origin = await this.resolveOrigin(input.channel, plan.originChannelId);
+    const impactMap = input.impactMap ?? plan.impactMap;
     const now = Date.now();
     const id = randomUUID();
     return this.mutate(actor, "item.proposed", async (sql) => {
@@ -198,7 +199,7 @@ export class BoardService {
           ${scopePaths ? JSON.stringify(scopePaths) : null},
           ${capabilities ? JSON.stringify(capabilities) : null},
           ${plan.id}, ${sql.json(criteria)},
-          ${input.impactMap ? sql.json(JSON.parse(JSON.stringify(input.impactMap))) : null},
+          ${impactMap ? sql.json(JSON.parse(JSON.stringify(impactMap))) : null},
           ${now}, ${null}, ${origin?.id ?? null}
         )
       `;

@@ -70,9 +70,9 @@ describe("conversation-native work loop", async () => {
       channel: "general",
       scopePaths: ["invoice.ts"],
       acceptanceCriteria: ["Invoice and PDF agree", "Ledger fixtures remain unchanged"],
-      impactMap: accepted.body.plan.impactMap,
     });
     assert.equal(ticket.status, 201);
+    assert.deepEqual(ticket.body.item.impactMap, accepted.body.plan.impactMap);
     assert.ok(ticket.body.item.originChannelId);
     assert.equal(ticket.body.item.originChannelId, created.body.plan.originChannelId);
 

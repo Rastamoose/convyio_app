@@ -251,6 +251,18 @@ describe("ACP read-only client security", () => {
     for (const kind of ["search", "think", "fetch"] as const) {
       assert.deepEqual(await decision({ toolCallId: kind, kind }), { outcome: { outcome: "selected", optionId: "allow" } });
     }
+    assert.deepEqual(
+      await decision({ toolCallId: "board", kind: "other", name: "mcp__convyio-toolman__board_propose_plan" }),
+      { outcome: { outcome: "selected", optionId: "allow" } },
+    );
+    assert.deepEqual(
+      await decision({ toolCallId: "project", kind: "execute", title: "project_list_files" }),
+      { outcome: { outcome: "selected", optionId: "allow" } },
+    );
+    assert.deepEqual(
+      await decision({ toolCallId: "write", kind: "edit", name: "Write" }),
+      { outcome: { outcome: "selected", optionId: "reject" } },
+    );
   });
 
   test("realpath-confines reads and rejects symlinks and sensitive names", async () => {

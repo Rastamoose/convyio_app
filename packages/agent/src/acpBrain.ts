@@ -18,6 +18,7 @@ import type {
 import type { NormalizedUsage, RunnerConfigOption } from "@workspace/shared";
 import { boundedToolInput, buildPromptText, summarizedToolOutput, type Brain, type BrainCallbacks, type BrainInput, type BrainResult, type BrainRunOptions } from "./brain";
 import { isSafeAcpKind } from "./nativeTools";
+import { TOOL_DECLARATIONS } from "./tools";
 
 export type AcpReadiness = {
   harness: { id: string; version: string };
@@ -333,10 +334,11 @@ export async function readWorkspaceFile(workspace: string, request: ReadTextFile
 }
 
 export async function permissionDecision(workspace: string, request: RequestPermissionRequest) {
-  const kind = request.toolCall.kind;
-  const allow = kind === "read"
-    ? await readPermissionAllowed(workspace, request.toolCall)
-    : isSafeAcpKind(kind);
+  const allow = isClassifiedBoardTool(request.toolCall.name) || isClassifiedBoardTool(request.toolCall.title)
+    ? true
+    : request.toolCall.kind === "read"
+      ? await readPermissionAllowed(workspace, request.toolCall)
+      : isSafeAcpKind(request.toolCall.kind);
   const desired = allow ? "allow_once" : "reject_once";
   const option = request.options.find((candidate) => candidate.kind === desired)
     ?? request.options.find((candidate) => candidate.kind.startsWith(allow ? "allow" : "reject"));
@@ -518,6 +520,15 @@ function selectChoices(option: Extract<SessionConfigOption, { type: "select" }>)
   return option.options.flatMap((choice) => "options" in choice
     ? choice.options.map((nested) => ({ value: nested.value, label: nested.name }))
     : [{ value: choice.value, label: choice.name }]);
+}
+
+const CLASSIFIED_BOARD_TOOLS = new Set(TOOL_DECLARATIONS.map((decl) => decl.name));
+
+export function isClassifiedBoardTool(name: string | null | undefined): boolean {
+  if (!name) return false;
+  if (CLASSIFIED_BOARD_TOOLS.has(name)) return true;
+  const suffix = name.split("__").at(-1);
+  return Boolean(suffix && CLASSIFIED_BOARD_TOOLS.has(suffix));
 }
 
 function isSensitiveName(name: string): boolean {
