@@ -1,0 +1,779 @@
+CONVYIO VALUE-FIRST ONBOARDING RESEARCH AND EXECUTION PLAN
+
+Status: approved research and implementation direction
+Prepared: 2026-08-19
+
+PURPOSE
+
+Convyio needs a first-signup onboarding experience that immediately communicates why the product matters, produces a useful result, introduces its unusual human-agent workflow, and then gets out of the user's way.
+
+The experience must not become a passive feature parade. The strongest research consistently finds that forced tutorials interrupt users, are quickly forgotten, and rarely improve task performance. Convyio should instead combine:
+
+1. A short, cinematic visual orientation using noodle and spotlighted UI.
+2. A real first task where the user receives useful output from noodle.
+3. A persistent, contextual setup guide that introduces controlled work, projects, agents, and collaboration only when relevant.
+
+The product thesis is already captured in packages/server/assets/demo/scripts/copy.json:
+
+    The product is the room, not the model.
+
+The onboarding must prove that idea rather than explain every control.
+
+
+1. THE VALUE USERS MUST UNDERSTAND
+
+By the end of their first session, users should understand that Convyio gives them:
+
+- An answer: research, synthesis, drafting, or a recommendation.
+- A plan: ordered work with objectives, ownership, and completion criteria.
+- A controlled change: agent work bounded by human-approved scope and permissions.
+- Proof: visible activity, decisions, outputs, and completion evidence.
+- A shared room: teammates and agents retain the same context instead of working in isolated chat sessions.
+
+The practical output model should be communicated in outcome language rather than feature language:
+
+- Get an answer.
+- Get a plan.
+- Get a change.
+- Get proof.
+- Keep the whole team in context.
+
+This is substantially stronger than merely introducing Chat, Board, Projects, and Resources as navigation labels.
+
+
+2. RESEARCH FINDINGS
+
+2.1 Tutorials versus contextual help
+
+Nielsen Norman Group's research finds that launch-time tutorials and push revelations:
+
+- interrupt users who already want to begin a task;
+- present information before it has useful context;
+- depend on limited working memory;
+- are frequently skipped;
+- often fail to improve later task performance.
+
+Guidance is more effective when it appears at the moment a user can apply it. For Convyio, that means a short optional orientation followed by contextual help attached to real work.
+
+Source:
+https://www.nngroup.com/articles/onboarding-tutorials/
+
+2.2 Empty states must show a path to value
+
+An empty or unexplained workspace reduces confidence. Empty states should communicate system status, demonstrate what success looks like, and provide a direct path to a key task.
+
+Convyio already avoids a completely blank workspace by creating noodle and three welcome messages. The remaining problem is that these messages explain the product without making the user experience its value.
+
+Source:
+https://www.nngroup.com/articles/empty-state-interface-design/
+
+2.3 Progressive disclosure
+
+Users want both power and simplicity. Progressive disclosure resolves this by showing only the few actions most likely to matter now, then revealing advanced capabilities when requested or contextually relevant.
+
+For Convyio:
+
+- First session: ask noodle something useful.
+- After a reply: introduce plans and controlled work.
+- At the first proposal: explain scope and approval.
+- At the first project visit: explain repositories and outputs.
+- At the first Resources visit: explain selected-folder isolation.
+- At Add Agent: explain local credentials and pairing.
+
+Source:
+https://www.nngroup.com/articles/progressive-disclosure/
+
+2.4 Learn by doing
+
+Intercom's Product Tours research uses three useful principles:
+
+- Learn by doing, not passive reading.
+- Orient guidance around the user's aha moment.
+- Measure whether onboarding affects meaningful activation rather than tour completion.
+
+Convyio's first useful action must therefore go through the real composer and the real noodle runner. It must not be a simulated chat animation.
+
+Source:
+https://www.intercom.com/blog/building-product-tours/
+
+2.5 Activation must predict retention
+
+PostHog defines activation as a set of actions correlated with later retention. Completing a tutorial is not inherently activation. A product team should test multiple candidate event groups against retained usage.
+
+Initial Convyio hypotheses are:
+
+- First value: a human addresses an agent and receives a reply.
+- Trust activation: a human accepts a plan or approves/denies scoped work.
+- Work activation: a ticket reaches done with evidence, or a connected project produces a reviewable change.
+- Collaboration activation: a second human or user-owned agent participates.
+
+These are hypotheses to validate against retention, not permanent definitions.
+
+Source:
+https://posthog.com/product-engineers/activation-metrics
+
+2.6 Time to activation is not time to value
+
+Amplitude distinguishes completing a product action from receiving the benefit of that action. Creating an object or completing setup can be activation without giving the user a reason to return.
+
+Convyio should measure both:
+
+- Time from workspace connection to first prompt.
+- Time from first prompt to a useful agent reply.
+- Time from first reply to the first governed work decision.
+
+Source:
+https://amplitude.com/blog/time-to-value-drives-user-retention
+
+2.7 Strong product precedents
+
+GitHub's refreshed new-user dashboard uses a small set of interactive, dismissible getting-started tasks and removes secondary distraction during the early learning period.
+
+Source:
+https://github.blog/changelog/2025-06-12-new-user-dashboard-refresh/
+
+Linear makes its first-time introduction replayable from the command menu, acknowledging that first-use education must remain available later.
+
+Source:
+https://linear.app/changelog/2019-05-09-first-time-user-experience
+
+Cursor's official quickstart moves from understanding context to one small useful change and then reviewing the result. This is a strong model for agent onboarding: orient, act, inspect.
+
+Source:
+https://cursor.com/docs/get-started/quickstart
+
+2.8 Accessibility requirements
+
+Native modal dialog behavior is preferable during passive showcase steps because the browser supplies:
+
+- initial focus movement;
+- focus containment;
+- inert background content;
+- Escape handling;
+- focus restoration.
+
+The underlying product must not remain keyboard-focusable while visually obscured by a blur layer. Real product interaction should happen only after the showcase dialog closes.
+
+Source:
+https://www.w3.org/WAI/WCAG21/Techniques/html/H102
+
+Motion must respect prefers-reduced-motion. Large movement, scaling, panning, or continuous mascot animation is unnecessary. Reduced-motion mode should use immediate state changes or restrained opacity transitions.
+
+Source:
+https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/@media/prefers-reduced-motion
+
+
+3. CURRENT CONVYIO FOUNDATION
+
+3.1 Signup and workspace creation
+
+- packages/server/src/auth/Auth.ts creates the permanent human actor and first workspace.
+- The starter workspace is named `{displayName}'s workspace`.
+- packages/server/src/auth/WorkspaceAccess.ts creates the workspace, owner membership, #general, join notice, and managed noodle state.
+- packages/client/src/App.tsx automatically opens a sole workspace after account resolution.
+- Invite continuation already takes precedence over automatic workspace selection.
+
+3.2 Noodle
+
+packages/server/src/managedAgents.ts creates a workspace-scoped managed noodle actor and three one-time messages. Noodle is an existing product capability, not a client-side persona.
+
+The current messages introduce the workspace and suggest @noodle, but the third message compares noodle negatively to other agents before the user has experienced value. The copy should become a concise fallback for users who skip the visual onboarding and should reinforce the value-first flow.
+
+3.3 Product surfaces
+
+The client already provides the complete capability map:
+
+- Chat and durable history in MessageList and MessageInput.
+- Visible agent presence and run state in Sidebar.
+- Plans, tickets, owner, scope, criteria, and lifecycle in BoardView.
+- Inline ProposalCard and PermissionCard approval surfaces.
+- GitHub repositories, branches, commits, issues, and pull requests in GitProjectsView.
+- Selected local folder sharing and Toolman access modes in ResourcesView.
+- Local agent creation, pairing, instructions, model, and access in AddAgentModal.
+- Workspace switching, settings, and membership management.
+
+3.4 Existing design system
+
+AGENTS/DESIGN.md requires:
+
+- calm canvas, warm signal;
+- one amber accent;
+- flat surfaces and no gradients;
+- glass only for floating surfaces through the elevated utility;
+- semantic color tokens;
+- restrained animation;
+- both light and dark themes designed independently;
+- personality through voice and small moments rather than decorated chrome.
+
+The onboarding must follow this contract rather than introduce a separate marketing-site visual language.
+
+3.5 Missing pieces
+
+- No production first-run state exists.
+- `convyio:opened:*` appears only in client tests.
+- useChatMessages contains a stale comment claiming first-run welcome pacing lives in Workspace, but no pacing exists.
+- No reduced-motion media treatment exists.
+- No product analytics provider or onboarding funnel exists.
+- No onboarding or positioning dependency is installed.
+
+
+4. PROPOSED EXPERIENCE
+
+The complete experience has three layers.
+
+
+LAYER 1: NOODLE'S FIRST 90 SECONDS
+
+The visual orientation is automatically offered on the first starter-workspace entry. It is optional, pausable, skippable, and replayable.
+
+Beat 0: The promise
+
+The complete workspace remains visible but is softly dimmed and blurred. A centered elevated card uses the favicon mascot.
+
+Headline:
+    Your workspace already has a teammate.
+
+Body:
+    Convyio is where people and agents share context, turn conversation into accountable work, and keep every result visible.
+
+Primary action:
+    Show me — about 90 seconds
+
+Secondary action:
+    Let me explore
+
+No feature list is shown yet.
+
+Beat 1: Meet noodle
+
+Spotlight noodle's participant row.
+
+Headline:
+    I'm noodle. Ask me something real.
+
+Body:
+    I'm already connected. Amber means I'm working, red means I'm waiting on you, and gray means I'm offline.
+
+This teaches identity, availability, and transparent presence rather than merely identifying the sidebar.
+
+Beat 2: Get the first win
+
+Spotlight the conversation and composer, then leave modal showcase mode so the actual composer becomes usable.
+
+Offer outcome-based starters:
+
+- Shape an idea into a plan.
+- Research a decision.
+- Draft something useful.
+- Show me a safe workflow.
+
+Each option prefills an editable real prompt mentioning @noodle. The user edits and submits through the existing MessageInput.
+
+Suggested templates:
+
+Shape an idea into a plan:
+    @noodle Help me turn this rough idea into a clear plan: [describe the idea]. Ask one question if important context is missing.
+
+Research a decision:
+    @noodle Help me compare the best options for [decision], surface the tradeoffs, and recommend a practical next step.
+
+Draft something useful:
+    @noodle Draft [what is needed] for [audience]. Keep it practical and ask one question if context is missing.
+
+Safe workflow:
+    @noodle Show me how Convyio would take a real request from conversation to a reviewed result. Do not change anything.
+
+Beat 3: Work remains visible
+
+While noodle responds, a small non-blocking guide points to noodle's working presence and the live shared timeline.
+
+Headline:
+    Agents work in the room, not behind a loading screen.
+
+Body:
+    You can see who is working, what needs attention, and what came back.
+
+When a reply arrives:
+
+Headline:
+    That's your first useful output.
+
+Body:
+    It stays here with the conversation that produced it.
+
+Use a restrained mascot nod and amber confirmation. Do not use confetti, points, streaks, or gamified rewards.
+
+Beat 4: Conversation becomes controlled work
+
+Switch to Board and spotlight the workflow.
+
+Headline:
+    A useful answer can become accountable work.
+
+Body:
+    Plans capture the objective. Tickets capture why, expected effect, owner, scope, and what done means.
+
+If the interaction created a real plan or ticket, spotlight it. Otherwise, show a compact example inside the coach card labeled as an example. Never insert fake durable records into the workspace solely for onboarding.
+
+Beat 5: Human control and practical outputs
+
+Headline:
+    Nothing changes until a human says yes.
+
+Body:
+    Approve the owner, scope, capabilities, and done criteria. Convyio keeps the request, work, and evidence together.
+
+Show the capability-to-output map:
+
+- Chat: answers, drafts, decisions, and shared context.
+- Board: plans, ownership, scope, approval, and evidence.
+- Projects: repositories, branches, pull requests, issues, and code review.
+- Resources: intentionally shared local folders and tools.
+- Add agent: the user's local agent and subscription, paired without giving Convyio the provider credential.
+- Timeline and item history: decisions, actions, and proof.
+
+Final line:
+    You are not setting up a chatbot. You are giving your team and its agents one place to think, decide, and ship.
+
+
+LAYER 2: PERSISTENT GETTING-STARTED GUIDE
+
+After the visual sequence, onboarding becomes a non-blocking setup panel opened from a quiet Getting started chip or the mascot in the AppBar.
+
+Maximum five milestones:
+
+1. Get a useful answer from noodle.
+2. Turn a conversation into a plan.
+3. Approve scoped work and inspect its result.
+4. Connect a repository/folder or pair a local agent.
+5. Bring another human or agent into the room.
+
+Each item deep-links to the relevant real surface. The panel is dismissible and replayable. It never permanently blocks workspace use and does not linger indefinitely after being skipped.
+
+
+LAYER 3: CONTEXTUAL ONBOARDING
+
+Later guidance appears only when it can be applied:
+
+- First proposed ticket: explain owner, scope, acceptance criteria, and approval.
+- First permission request: explain that permission mode cannot exceed the board's hard ceiling.
+- First visit to Projects: explain what connecting GitHub practically produces.
+- First visit to Resources: explain selected-folder isolation and owner presence.
+- First Add Agent open: explain local pairing and credential isolation.
+- First teammate invite: explain shared context and durable attribution.
+
+These are short, one-time contextual revelations, not another linear tour.
+
+
+5. VISUAL DIRECTION
+
+5.1 Spotlight treatment
+
+Use four fixed blur panes around the active target:
+
+- top pane;
+- bottom pane;
+- left middle pane;
+- right middle pane.
+
+This leaves the active target crisp while everything else is dimmed and blurred. It is simpler and more reliable than combining SVG subtraction masks with backdrop-filter.
+
+Add a target frame using a semantic divider or accent ring. Do not use a colored border with a lower-opacity version of the same color inside.
+
+5.2 Guide card
+
+- Use the existing elevated utility.
+- Use rounded-xl or rounded-2xl for the guide panel.
+- Use semantic tokens only.
+- Use amber for the single primary action, current progress, and active target.
+- Keep copy to a headline and one or two short paragraphs.
+- Use the favicon mascot as noodle's guide identity.
+- Keep mark-yellow as the product mark where brand identity is needed.
+
+5.3 Motion
+
+- Use one short entrance transition.
+- Use a short position transition between nearby targets only when reduced motion is not requested.
+- Give the mascot a single nod/tilt on step changes.
+- Do not use perpetual mascot bouncing or looping ambient motion.
+- Under prefers-reduced-motion, use immediate positioning and minimal opacity changes.
+
+5.4 Responsive behavior
+
+Desktop:
+- place the guide card beside the target when space allows;
+- select the side with the most available room;
+- clamp the panel inside the viewport.
+
+Mobile/narrow viewport:
+- use a bottom sheet;
+- use 100dvh rather than 100vh;
+- include env(safe-area-inset-bottom);
+- keep the primary action above browser chrome;
+- scroll the target into view before measuring;
+- fall back to an unanchored explanation if the target cannot remain visible.
+
+5.5 Themes
+
+Verify every step independently in light and dark mode. Theme changes should update semantic tokens without recalculating hardcoded color values.
+
+
+6. TECHNICAL ARCHITECTURE
+
+6.1 Durable account-scoped state
+
+Use server-authoritative onboarding state rather than localStorage alone.
+
+A browser-only completion flag would:
+
+- replay on another device;
+- fail to identify the starter workspace robustly;
+- risk opening in an accepted invite workspace;
+- be difficult to distinguish from an existing user creating a later workspace;
+- make cross-device resume impossible.
+
+Add an account_onboarding record containing:
+
+- actor_id;
+- workspace_id for the starter workspace;
+- version;
+- status: pending, in_progress, paused, completed, or skipped;
+- current_step;
+- selected first-task intent;
+- started_at;
+- first_prompt_at;
+- first_reply_at;
+- finished_at;
+- updated_at.
+
+Enable RLS with no policies, matching every other application-owned table.
+
+Existing humans are migrated as completed for version 1. Newly provisioned humans receive a pending record tied to their starter workspace.
+
+GET /api/account returns the onboarding summary. An authenticated account endpoint advances, pauses, completes, or skips it. The server derives actor identity from the Supabase JWT and never accepts actor identity from the body.
+
+The visual onboarding triggers only when:
+
+- the onboarding state is pending or in progress;
+- the active workspace matches onboarding.workspaceId;
+- the workspace welcome frame has connected;
+- the selected workspace still exists and the user remains a member;
+- no invite continuation is active.
+
+Invite acceptance may therefore complete before onboarding. The guide appears only when the user enters their actual starter workspace.
+
+6.2 Ownership seam
+
+App.tsx:
+- owns account boot;
+- receives onboarding state from /api/account;
+- owns account-level persistence and whether the guide is eligible.
+
+Workspace in App.tsx:
+- owns view, channel, sidebar, queue, settings, and Add Agent navigation;
+- passes navigation callbacks into the guide.
+
+OnboardingGuide:
+- reads participants, messages, runs, plans, board items, agents, and connection status from WorkspaceContext;
+- receives navigation callbacks for changing view, opening the sidebar, opening Add Agent, and prefilling the composer.
+
+This preserves the client invariant that workspace data/actions come from context while navigation remains explicit callbacks.
+
+6.3 Components
+
+Recommended new client units:
+
+- components/SpotlightDialog.tsx
+  Owns visual spotlight measurement, blur panes, coach placement, dialog behavior, and target fallback.
+
+- components/OnboardingGuide.tsx
+  Owns the first-run state machine and copy.
+
+- components/GettingStartedPanel.tsx
+  Owns persistent post-tour milestones and deep links.
+
+- hooks/useOnboarding.ts
+  Owns account onboarding hydration, local session state, and persistence calls.
+
+Recommended server unit:
+
+- auth/AccountOnboardingStore.ts
+  Owns creation, lookup, and monotonic lifecycle updates for account onboarding records.
+
+6.4 Stable targets
+
+Use explicit data attributes rather than style selectors:
+
+- data-onboarding-target="noodle"
+- data-onboarding-target="conversation"
+- data-onboarding-target="composer"
+- data-onboarding-target="board-tab"
+- data-onboarding-target="board-workflow"
+- data-onboarding-target="view-switcher"
+- data-onboarding-target="add-agent"
+
+These attributes document intentional onboarding integration and survive Tailwind/class refactors.
+
+6.5 Showcase mode versus action mode
+
+Showcase mode:
+- render through a React portal;
+- use native dialog.showModal();
+- background is inert;
+- target is visible but not interactive;
+- actions happen in the guide card;
+- focus begins on the guide heading or primary action;
+- Escape pauses the guide rather than permanently skipping it;
+- close restores focus appropriately.
+
+Action mode:
+- close the modal;
+- remove blur and inert state;
+- render inline guidance next to the actual composer or relevant control;
+- allow the user to operate the real product;
+- never obscure the currently focused element.
+
+6.6 Measurement and target lifecycle
+
+SpotlightDialog should:
+
+- resolve the target by data attribute;
+- measure with getBoundingClientRect in useLayoutEffect;
+- account for the app's current html zoom: 0.9 behavior;
+- remeasure on resize;
+- remeasure on scroll, including nested scroll containers;
+- use ResizeObserver for target size changes;
+- wait for view/sidebar transitions to settle before measuring;
+- use a bounded MutationObserver wait when a target mounts asynchronously;
+- fall back to a centered card instead of failing if the target is absent.
+
+6.7 Failure behavior
+
+Noodle offline:
+- complete the visual tour;
+- show the real prompt as a resumable milestone;
+- do not imply that a reply is currently available.
+
+Noodle removed:
+- skip noodle-specific live activation;
+- offer an owner-only restore path or Add Agent path without forcing it.
+
+Noodle slow:
+- after a bounded wait, show Continue while noodle works;
+- keep observing the real reply without blocking navigation.
+
+Socket disconnected:
+- do not begin the live action;
+- show normal connection state and allow pause.
+
+Workspace switch:
+- pause and unmount immediately;
+- never carry tour state or a prompt into another workspace.
+
+Target missing:
+- render an unanchored coach card;
+- never loop, crash, or leave a permanent backdrop.
+
+Storage denied:
+- server state remains authoritative;
+- local duplicate-tab suppression may degrade without blocking the guide.
+
+Multiple tabs:
+- write a small local cache/lock and listen for storage events so another tab closes a duplicate guide;
+- keep the server record authoritative across devices.
+
+
+7. WELCOME COPY DIRECTION
+
+Retain three one-time managed welcome messages as a fallback for users who skip onboarding, but revise them to lead with value rather than comparison.
+
+Proposed copy:
+
+1.
+    Hey {ownerName} — I'm noodle, the little face in the tab and your built-in Convyio guide. I'm already connected, so you can start now.
+
+2.
+    This is the room where people and agents share context, turn conversation into plans, and keep decisions and results visible.
+
+3.
+    Try @noodle with something real. I can research, draft, or turn a rough goal into a plan. When work needs access, you choose the scope and approve it first.
+
+The visual guide can introduce adding a stronger local agent later, after the user has first experienced value.
+
+
+8. IMPLEMENTATION SEQUENCE
+
+The work crosses client, shared types, server API, database, tests, and architecture documentation. It should land as reviewable vertical tickets.
+
+Ticket 1: First-run lifecycle
+
+- Add account_onboarding migration.
+- Enable deny-all RLS.
+- Backfill existing humans as completed.
+- Add shared onboarding types.
+- Add AccountOnboardingStore.
+- Seed pending state for new starter workspaces.
+- Extend /api/account.
+- Add authenticated lifecycle endpoint.
+- Add transition, identity, invite-precedence, and migration tests.
+
+Ticket 2: Visual guide system
+
+- Add stable onboarding targets.
+- Build SpotlightDialog.
+- Add native dialog focus behavior.
+- Add blur panes and smart panel placement.
+- Add mobile bottom sheet.
+- Add missing-target fallback.
+- Add reduced-motion CSS.
+- Verify both themes.
+
+Ticket 3: Value-first noodle loop
+
+- Build the first-run guide state machine.
+- Add starter prompt selection.
+- Connect selection to the real composer prefill.
+- Observe noodle presence, active run, and reply.
+- Add offline, removal, timeout, and disconnect behavior.
+- Revise the three durable noodle welcome messages.
+
+Ticket 4: Getting-started and contextual help
+
+- Add the persistent Getting Started panel.
+- Derive real milestones from messages, plans, board items, agents, members, and projects.
+- Add deep links into the correct workspace surface.
+- Add pause, resume, replay, and permanent skip.
+- Add one-time contextual guidance for approvals, permissions, Projects, Resources, and Add Agent.
+
+Ticket 5: Validation and rollout
+
+- Add onboarding funnel queries.
+- Validate activation hypotheses against retention when enough data exists.
+- Perform keyboard and screen-reader review.
+- Test narrow viewport, landscape, 200% zoom, and both themes.
+- Run full client/server/shared verification.
+- Update architecture documentation after exact wording approval.
+
+
+9. MEASUREMENT PLAN
+
+Do not use tour completion as the north-star activation metric.
+
+Measure:
+
+- account created to starter workspace connected;
+- workspace connected to onboarding offered;
+- onboarding offered to started;
+- started to first prompt;
+- first prompt to first agent reply;
+- first reply to first plan or ticket;
+- first governed record to human approval/denial;
+- first approved work to done/evidence;
+- onboarding paused, skipped, completed, and replayed;
+- Day 1, Day 7, and Day 30 retained usage by activation cohort;
+- median and slow-path time to first value.
+
+No third-party analytics dependency is required for the first implementation. The onboarding lifecycle record captures state and timestamps, while existing durable message, plan, ticket, membership, and thread records capture real product outcomes.
+
+Once enough cohorts exist, compare multiple activation definitions against retained usage. Select a definition that both a meaningful percentage of users can reach and that predicts later use.
+
+
+10. TEST PLAN
+
+10.1 Server and database
+
+- New signup creates exactly one pending onboarding record bound to the starter workspace.
+- Existing migrated users are completed and never auto-trigger.
+- Invite continuation does not alter the starter onboarding workspace.
+- Account response returns onboarding state only for the verified human.
+- Lifecycle transitions are monotonic and idempotent.
+- One actor cannot update another actor's onboarding state.
+- Invalid versions, statuses, or workspace IDs fail cleanly.
+- RLS is enabled with no policies.
+- A user with zero memberships remains a valid account and does not enter a broken guide.
+
+10.2 Client behavior
+
+- Pending starter onboarding starts only after workspace connection.
+- Completed/skipped onboarding never auto-opens.
+- Wrong active workspace does not open the guide.
+- Welcome, next, back, pause, skip, resume, and replay work.
+- Sidebar is opened before measuring noodle when necessary.
+- View changes wait for the target to mount.
+- Missing targets use centered fallback.
+- Workspace switching removes every overlay and listener.
+- Starter prompts prefill the actual composer and remain editable.
+- The real send path is used.
+- Noodle reply advances first-value state.
+- Noodle offline/removal/timeout never dead-ends.
+- Duplicate tabs synchronize completion or pause locally where storage is available.
+
+10.3 Accessibility
+
+- Native dialog receives initial focus.
+- Tab and Shift+Tab stay inside showcase dialog.
+- Escape pauses and removes the backdrop.
+- Focus returns to an appropriate visible control.
+- The guide has an accessible name and current-step description.
+- Progress is announced without repeatedly reading the full dialog.
+- No visual-only instruction such as "click the highlighted area" is used.
+- Inline action mode does not cover the focused composer.
+- Reduced-motion behavior suppresses nonessential movement.
+- Screen reader review is performed with at least VoiceOver or NVDA.
+
+10.4 Visual and responsive
+
+- Light mode and dark mode.
+- 375px-wide viewport.
+- Short viewport and landscape mode.
+- Browser zoom through 200%.
+- Sidebar open and collapsed.
+- Long workspace and channel names.
+- Target near every viewport edge.
+- Theme switch while a step is open.
+- No gradients, second accent, ad-hoc color, or invalid floating surface.
+
+10.5 Verification commands
+
+- npm test -w @workspace/client
+- npm test -w @workspace/server -- --test-name-pattern "onboarding"
+- npm run typecheck
+- npm run build -w @workspace/client
+- npm test when a suitable local Postgres or transaction-pooler environment is available
+
+
+11. ACCEPTANCE CRITERIA
+
+The onboarding is complete only when all of the following are true:
+
+- It auto-opens exclusively for newly created starter-workspace accounts.
+- Invite flows and existing users never receive an incorrect first-run tour.
+- Users can pause, skip, go back, and replay it.
+- The first requested action is useful work, not configuration.
+- The flow produces a real noodle reply when noodle is available.
+- Offline, removed, slow, or disconnected noodle states never dead-end the user.
+- Every spotlight target survives sidebar state, view changes, resize, scroll, and missing elements.
+- Showcase beats are keyboard-contained and action beats expose the real product.
+- Focus is restored correctly and no focused element is hidden beneath blur.
+- Reduced-motion users receive fades or immediate transitions rather than scaling or panning.
+- The experience works at narrow widths, 200% zoom, and in both themes.
+- No gradient, second accent, ad-hoc hardcoded color, or non-elevated floating surface is introduced.
+- No fake user data, ticket, project, or mutation is created merely by viewing the tour.
+- The onboarding never bypasses the board, permission, identity, membership, or sandbox boundaries.
+- Client, shared, server, migration, and end-to-end onboarding tests pass.
+- Current architecture documentation remains accurate after implementation.
+
+
+12. PRINCIPLES TO PRESERVE DURING IMPLEMENTATION
+
+- Value before explanation.
+- Real work before configuration.
+- Outcomes before feature names.
+- Show capability without pretending unavailable functionality exists.
+- Human control is part of the value proposition, not compliance copy.
+- The tour is optional; the product remains usable without it.
+- Contextual help replaces repeated tutorials.
+- Noodle is a real workspace participant, not decorative animation.
+- Every visual treatment follows AGENTS/DESIGN.md.
+- Every new persistence or API path respects existing identity and workspace boundaries.
+- Completion is not activation; retained value is activation.
