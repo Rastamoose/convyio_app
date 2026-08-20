@@ -67,7 +67,20 @@ interface Connection {
    *  never interleave — this preserves server-side ordering for tests and
    *  clients that send rapid, causally-related frames. */
   queue: Promise<void>;
+  /** Answered the last heartbeat ping; false for two rounds means dead. */
+  alive: boolean;
 }
+
+/**
+ * Ping interval. Under the 60s idle timeout every proxy in front of us uses:
+ * without traffic the connection is cut silently and clients reconnect-loop.
+ * It is also how presence learns the truth — a process that was killed or lost
+ * its network never sends a close frame, so without a heartbeat its
+ * participant stays green until the OS gives up on the TCP socket (minutes, or
+ * never). Missing two rounds terminates the socket, which runs the ordinary
+ * disconnect path and turns the dot grey.
+ */
+const HEARTBEAT_MS = 30_000;
 
 /** Verdict from the join gate: whether a join stands, and as what stored identity. */
 export type JoinDecision =
@@ -87,6 +100,9 @@ export interface HubOptions {
    */
   authorizeJoin?: (join: JoinEvent) => Promise<JoinDecision>;
   authorizeAgentWork?: (agentId: string, authorId: string) => Promise<boolean>;
+  /** Overrides HEARTBEAT_MS. Only tests set it, so presence-on-death is
+   *  observable without waiting out a real 30s round. */
+  heartbeatMs?: number;
   /** Sequenced workspace projection used to stamp welcome.snapshotSeq. */
   threadEvents?: ThreadEventStore;
   contextCursors?: ContextCursorStore;
@@ -104,6 +120,7 @@ export interface HubOptions {
  */
 export class Hub {
   private wss: WebSocketServer;
+  private heartbeat: NodeJS.Timeout;
   private connections = new Set<Connection>();
   /** In-memory trace buffers keyed by runId. Dropped once summarized. */
   private traceBuffers = new Map<string, TraceChunk[]>();
@@ -158,6 +175,19 @@ export class Hub {
       if (err.code !== "EADDRINUSE") console.warn("[hub] websocket server error:", err.message);
     });
     this.wss.on("connection", (socket, request) => this.onConnection(socket, request));
+    // unref: a heartbeat must not be the reason the process stays alive.
+    this.heartbeat = setInterval(() => this.pingAll(), options.heartbeatMs ?? HEARTBEAT_MS).unref();
+  }
+
+  private pingAll(): void {
+    for (const conn of this.connections) {
+      if (!conn.alive) {
+        conn.socket.terminate();
+        continue;
+      }
+      conn.alive = false;
+      conn.socket.ping();
+    }
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -301,8 +331,12 @@ export class Hub {
       agentProfile: null,
       apiUrl: requestOrigin(request),
       queue: Promise.resolve(),
+      alive: true,
     };
     this.connections.add(conn);
+    socket.on("pong", () => {
+      conn.alive = true;
+    });
 
     socket.on("message", (raw) => {
       let event: ClientEvent;
@@ -1219,6 +1253,7 @@ export class Hub {
 
   /** Close the WebSocket server and sever every active connection. */
   async close(): Promise<void> {
+    clearInterval(this.heartbeat);
     // Let in-flight message handlers finish before we yank the sockets, so
     // queued dispatches don't trip over a closed DB connection.
     await Promise.all([...this.connections].map((conn) => conn.queue.catch(() => {})));

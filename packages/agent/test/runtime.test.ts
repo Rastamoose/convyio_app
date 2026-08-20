@@ -52,6 +52,19 @@ describe("paired runner readiness", () => {
     assert.deepEqual(applied, [4]);
     assert.equal(maximumActive, 1);
   });
+
+  test("reset re-applies the current revision so a reconnect re-announces readiness", async () => {
+    const applied: number[] = [];
+    const queue = new ProfileUpdateQueue(async (profile) => { applied.push(profile.configRevision); });
+
+    await queue.enqueue(profile(3));
+    await queue.enqueue(profile(3));
+    assert.deepEqual(applied, [3], "same revision is deduped while connected");
+
+    queue.reset();
+    await queue.enqueue(profile(3));
+    assert.deepEqual(applied, [3, 3], "reconnect re-applies");
+  });
 });
 
 function profile(configRevision: number): AgentInvite {

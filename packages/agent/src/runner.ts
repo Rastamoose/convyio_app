@@ -565,9 +565,14 @@ function buildPrompt(items: WorkItem[], channel: string, attachmentNotes: string
   return (
     `Messages addressed to you (all in #${channel}):\n${formatted}${notes}\n\n` +
     `Reply in #${channel}. Transcript lines from other channels are background ` +
-    `context only — never answer or continue them here. Address each sender by ` +
-    `name (e.g. "harris: …" or a natural greeting using their name) so it is ` +
-    `clear who you are answering.`
+    `context only — never answer or continue them here. ` +
+    // Naming the sender disambiguates a batched reply, but asking for it on
+    // every run made the model open every sentence with the person's name.
+    (items.length > 1
+      ? `You are answering several people at once, so name each sender once at ` +
+        `the start of the part addressed to them.`
+      : `You are answering one person, who already knows you are replying to ` +
+        `them — do not open sentences with their name.`)
   );
 }
 

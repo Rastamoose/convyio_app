@@ -17,7 +17,16 @@ import { AgentSocket } from "./socket";
 import { LocalMcpBridge } from "./mcpBridge";
 import { TOOL_DECLARATIONS } from "./tools";
 
-const PLATFORM_POLICY = "You are a Convyio workspace agent. Treat the current board or an explicit server-issued chat grant as the only authority for mutating work. Use Convyio project tools for shared folders; never use native filesystem or shell tools to mutate. Discover project ids with project_list, request missing access with project_request_access, and let the server enforce assignment, folder policy, scope, capability, and human approval.";
+/**
+ * The system prompt holds only what must survive a failed envelope fetch: the
+ * mutation boundary, and the pointer to the policy block that carries
+ * everything else. How to operate — classification, proportionality, reading
+ * discipline, reply shape — lives in
+ * `packages/server/assets/policy/agent-workflow.json`, which reaches the model
+ * through the prompt envelope in its context. Deliberately no overlap between
+ * the two: duplicated policy is policy that drifts.
+ */
+const PLATFORM_POLICY = "You are a Convyio workspace agent. Treat the current board or an explicit server-issued chat grant as the only authority for mutating work; never use native filesystem or shell tools to mutate. The <policy> block in your context governs how you operate — follow it. If no <policy> block is present, do not mutate anything: answer, or say you are not ready.";
 
 type LegacyConfiguration = {
   mode: "legacy";
@@ -68,6 +77,7 @@ export async function runAgent(
   );
   const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";
+  let selfId: string | null = null;
 
   const profileUpdates = new ProfileUpdateQueue(async (profile, isCurrent) => {
     const revision = profile.configRevision;
@@ -115,6 +125,7 @@ export async function runAgent(
     switch (event.type) {
       case "welcome":
         runner.onWelcome(event.channelInfos);
+        selfId = event.self.id;
         presence.setSelf(event.self.id);
         memory.seed(event.history);
         console.log(`[agent] joined as ${event.self.name} (${event.self.id})`);
@@ -124,6 +135,10 @@ export async function runAgent(
           presence.refresh();
         });
         if (configuration.mode === "installation") {
+          // The server resets runner state to "checking" on every join, so a
+          // reconnect must re-announce readiness at the *same* revision or the
+          // agent stays unavailable forever and is silently never sent work.
+          profileUpdates.reset();
           void profileUpdates.enqueue(event.agentConfig ?? configuration.installation.agent);
         } else {
           reportLegacyReady(socket, event.agentConfig?.configRevision ?? 1, local.harness, local.options, local.effectiveModel);
@@ -133,8 +148,12 @@ export async function runAgent(
         void profileUpdates.enqueue(event.profile);
         break;
       case "message":
+        // Every broadcast lands here for context, but only mentions are ours
+        // to act on — logging the rest read like the agent was picking them up.
         memory.append(event.message);
-        console.log(`[agent] got message from ${event.message.authorName} (${event.message.authorKind}): ${event.message.content.slice(0, 80)}`);
+        if (selfId && event.message.mentions?.includes(selfId)) {
+          console.log(`[agent] got message from ${event.message.authorName} (${event.message.authorKind}): ${event.message.content.slice(0, 80)}`);
+        }
         break;
       case "work_available":
         if (ready) runner.claimAvailable(event.requestIds);
@@ -249,6 +268,11 @@ export class ProfileUpdateQueue {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly apply: (profile: AgentInvite, isCurrent: () => boolean) => Promise<void>) {}
+
+  /** Forget what has been applied so the current revision re-applies (reconnect). */
+  reset(): void {
+    this.latestRevision = 0;
+  }
 
   enqueue(profile: AgentInvite): Promise<void> {
     if (profile.configRevision <= this.latestRevision) return Promise.resolve();
