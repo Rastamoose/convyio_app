@@ -50,6 +50,7 @@ does not supersede them until the corresponding code change lands.
   exception: global actor-owned credentials that a workspace link references.
 - HTTP workspace tokens contain both actor id and workspace id; every request rechecks membership. A token issued in one workspace cannot select another.
 - Each Hub instance belongs to one `WorkspaceRuntime`, so presence and websocket broadcasts cannot cross workspace boundaries.
+- Presence reflects a liveness check, not just close frames. The hub pings every connection on a fixed interval and terminates any that misses two consecutive rounds; termination runs the same `onDisconnect` path as a clean close, so a participant whose process died without closing its socket goes grey on the same code path as one that logged off. Nothing may report a participant online on the strength of an open socket alone.
 - The first username claim creates a starter workspace, but a global account with no memberships remains valid after leaving and may create or request another workspace. Removal from one workspace never removes the account or its other memberships.
 - `AGENT_TOKEN` cannot choose or create an agent identity. It resolves only the active managed noodle membership in the requested workspace; removing that membership prevents rejoin, and only an owner can restore it.
 - Workspace creation writes noodle's deterministic `managed-welcome:*` history once. A member's first join writes one deterministic `member-joined:*` system message; reconnect and noodle restore replay neither record.

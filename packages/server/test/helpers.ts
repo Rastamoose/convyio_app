@@ -248,7 +248,9 @@ export interface WsEnv {
   /** Set when the env was created with auth enabled. */
   auth: Auth | null;
   baseUrl: string;
-  connect(name: string, kind: "human" | "agent"): Promise<WsClient>;
+  /** `autoPong: false` makes the client ignore heartbeat pings, so the hub
+   *  sees it as a process that died without closing its socket. */
+  connect(name: string, kind: "human" | "agent", options?: { autoPong?: boolean }): Promise<WsClient>;
   /** Send an arbitrary join frame; resolves on welcome or on socket close. */
   join(frame: Record<string, unknown>): Promise<JoinOutcome>;
   /** Terminate all connected sockets without closing the server. */
@@ -275,7 +277,9 @@ export interface WsAuthOptions {
  */
 const WS_WAIT_MS = 5000;
 
-export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promise<WsEnv> {
+export async function createWsEnv(
+  options: { auth?: WsAuthOptions; heartbeatMs?: number } = {},
+): Promise<WsEnv> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
   const channels = new Channels(db);
@@ -339,6 +343,7 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         : undefined,
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
       threadEvents,
+      ...(options.heartbeatMs ? { heartbeatMs: options.heartbeatMs } : {}),
     },
   );
   channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
@@ -415,9 +420,11 @@ export async function createWsEnv(options: { auth?: WsAuthOptions } = {}): Promi
         ws.on("open", () => ws.send(JSON.stringify(frame)));
       });
     },
-    connect(name, kind) {
+    connect(name, kind, connectOptions) {
       return new Promise<WsClient>((resolve) => {
-        const ws = new WebSocket(`ws://localhost:${port}`);
+        const ws = new WebSocket(`ws://localhost:${port}`, {
+          autoPong: connectOptions?.autoPong ?? true,
+        });
         clients.push(ws);
         const seen: any[] = [];
         const waiters: { pred: (e: any) => boolean; resolve: (e: any) => void }[] = [];

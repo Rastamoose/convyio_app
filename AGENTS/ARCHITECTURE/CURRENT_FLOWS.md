@@ -63,6 +63,15 @@ The envelope is compiled from the current snapshot on join and again before
 each run. The actor cursor is not yet advanced when a runner acknowledges an
 envelope.
 
+The `<policy>` block inside that envelope is the agent's operating rulebook —
+how to classify work, how much to read before acting, and how to shape a reply
+— compiled from `packages/server/assets/policy/*.json` and hashed per run. It
+is deliberately the *only* home for that guidance: the agent's system prompt
+(`PLATFORM_POLICY`) carries just the mutation boundary, because
+`refreshEnvelope` swallows fetch failures and `summary()` then renders no
+`<policy>` block at all. An agent that finds no `<policy>` block is instructed
+to refuse mutation rather than proceed unguided.
+
 ## Toolman folder sharing and collaboration
 
 1. A human creates a one-time Toolman pairing in Resources. The local CLI

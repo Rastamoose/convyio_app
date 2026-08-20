@@ -6,8 +6,13 @@ import { Roster } from "../src/roster";
 import { createWsEnv } from "./helpers";
 import { createTestDb } from "./pgSchema";
 
-describe("human presence persistence", async () => {
-  const env = await createWsEnv();
+describe("presence", async () => {
+  // One env for the whole file: each createWsEnv opens its own schema and
+  // connection pool, and an extra one tips the suite into the pooler's
+  // "too many clients" limit. The fast heartbeat lets the liveness test run
+  // without waiting out two real 30s rounds; it is harmless to the rest,
+  // which pong automatically.
+  const env = await createWsEnv({ heartbeatMs: 60 });
   after(() => env.close());
 
   test("a human's last disconnect leaves them in the roster as offline; rejoining flips them back online", async () => {
@@ -31,6 +36,27 @@ describe("human presence persistence", async () => {
     const back = rejoined.welcome.participants.filter((p: any) => p.name === "dana");
     assert.equal(back.length, 1);
     assert.equal(back[0].online, true);
+  });
+
+  test("an agent that stops answering pings goes grey without ever closing its socket", async () => {
+    const watcher = await env.connect("watcher", "human");
+    const zombie = await env.connect("zombie", "agent", { autoPong: false });
+    assert.equal(
+      zombie.welcome.participants.find((p: any) => p.name === "zombie")?.online,
+      true,
+    );
+
+    // No close() and no terminate() here: the socket stays open at both ends
+    // and simply never pongs, which is what a killed process looks like.
+    const sync = await watcher.next(
+      (e) =>
+        e.type === "presence_sync" &&
+        e.participants.some((p: any) => p.name === "zombie" && p.online === false),
+    );
+
+    const dead = sync.participants.find((p: any) => p.name === "zombie");
+    assert.equal(dead.id, zombie.welcome.self.id);
+    assert.equal(dead.kind, "agent");
   });
 });
 
