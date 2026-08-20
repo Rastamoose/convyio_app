@@ -85,24 +85,21 @@ export async function saveInstallation(installation: StoredToolman, env: NodeJS.
 export async function loadInstallation(
   ref?: string,
   env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
 ): Promise<StoredToolman> {
   const installations = await listInstallations(env);
   if (installations.length === 0) throw new Error("No paired Toolman node found. Run `convyio-toolman pair` first.");
-  if (!ref) {
-    if (installations.length === 1) return installations[0]!;
-    throw new Error(`More than one paired Toolman node. Choose one:\n${formatInstallations(installations)}`);
-  }
+  if (!ref) return pickInstallation(installations, undefined, fetcher);
   const exact = installations.find((item) => item.node.id === ref);
   if (exact) return exact;
   const lowered = ref.toLowerCase();
   const matches = installations.filter(
     (item) => item.node.name.toLowerCase() === lowered || item.workspace.name.toLowerCase() === lowered,
   );
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) {
-    throw new Error(`More than one paired Toolman node matches ${JSON.stringify(ref)}. Use its id:\n${formatInstallations(matches)}`);
+  if (matches.length === 0) {
+    throw new Error(`No paired Toolman node matches ${JSON.stringify(ref)}.\n${formatInstallations(installations)}`);
   }
-  throw new Error(`No paired Toolman node matches ${JSON.stringify(ref)}.\n${formatInstallations(installations)}`);
+  return pickInstallation(matches, ref, fetcher);
 }
 
 export async function listInstallations(env: NodeJS.ProcessEnv = process.env): Promise<StoredToolman[]> {
@@ -126,8 +123,18 @@ export async function savePairedInstallation(
   installation: StoredToolman,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const previous = (await listInstallations(env)).find((item) => item.node.id === installation.node.id);
-  return saveInstallation({ ...installation, mounts: previous?.mounts ?? installation.mounts }, env);
+  const previous = await listInstallations(env);
+  const sameId = previous.find((item) => item.node.id === installation.node.id);
+  const destination = await saveInstallation({ ...installation, mounts: sameId?.mounts ?? installation.mounts }, env);
+  await Promise.all(previous
+    .filter((item) => (
+      item.node.id !== installation.node.id
+      && item.node.name === installation.node.name
+      && item.workspace.id === installation.workspace.id
+      && item.serverOrigin === installation.serverOrigin
+    ))
+    .map((item) => fs.unlink(path.join(configRoot(env), `${safeSegment(item.node.id)}.json`)).catch(() => undefined)));
+  return destination;
 }
 
 export interface InstallationStatus {
@@ -205,6 +212,29 @@ export async function clearInstallations(env: NodeJS.ProcessEnv = process.env, f
     names.push(installation.node.name);
   }
   return names;
+}
+
+async function pickInstallation(
+  candidates: StoredToolman[],
+  ref: string | undefined,
+  fetcher: typeof fetch,
+): Promise<StoredToolman> {
+  const live: StoredToolman[] = [];
+  for (const [index, health] of (await Promise.all(candidates.map((item) => installationHealth(item, fetcher)))).entries()) {
+    if (health !== "revoked") live.push(candidates[index]!);
+  }
+  if (live.length === 1) return live[0]!;
+  if (live.length === 0) {
+    throw new Error(
+      "Local Toolman pairing was revoked or deleted. Create a new pairing in Resources, then run the pair command again.",
+    );
+  }
+  const listed = formatInstallations(live);
+  throw new Error(
+    ref
+      ? `More than one paired Toolman node matches ${JSON.stringify(ref)}. Use its id:\n${listed}`
+      : `More than one paired Toolman node. Choose one:\n${listed}`,
+  );
 }
 
 function formatInstallations(installations: StoredToolman[]): string {
