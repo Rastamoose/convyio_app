@@ -1487,13 +1487,13 @@ async function authenticate(
 ): Promise<{ actor: Actor; runtime: WorkspaceRuntime | null }> {
   const token = bearerToken(req);
   const session = token ? sessions.resolve(token) : null;
-  if (!session) throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+  if (!session) throw new ApiError(401, "UNAUTHENTICATED", "workspace session expired; refresh the page and try again");
   if (registry) {
     if (!session.workspaceId) throw new ApiError(401, "UNAUTHENTICATED", "workspace session required");
     const runtime = await registry.get(session.workspaceId);
     const actor = runtime ? await runtime.db.getActor(session.actorId) : null;
     if (!runtime || !actor || !(await runtime.db.isMember(actor.id))) {
-      throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+      throw new ApiError(401, "UNAUTHENTICATED", "workspace session expired; refresh the page and try again");
     }
     return { actor, runtime };
   }
@@ -1502,7 +1502,7 @@ async function authenticate(
   }
   const actor = await db.getActor(session.actorId);
   if (!actor || (session.workspaceId && !(await db.isMember(actor.id)))) {
-    throw new ApiError(401, "UNAUTHENTICATED", "missing or invalid token");
+    throw new ApiError(401, "UNAUTHENTICATED", "workspace session expired; refresh the page and try again");
   }
   return { actor, runtime: null };
 }

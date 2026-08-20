@@ -51,7 +51,8 @@ over the shared websocket and HTTP protocols.
   ToolmanGateway, GitRepositories
 - `BoardService` — every ticket transition, each with its audit row in one
   transaction, fanned out after commit. Tickets start proposed and require an
-  accepted plan.  → WorkspaceDb, PlanService
+  accepted plan. A ticket that omits `impactMap` inherits the accepted
+  plan's map.  → WorkspaceDb, PlanService
 - `PlanService` — persistent megaplan records. Acceptance is human-only and
   grants no mutating authority. Plans carry an origin channel/event, optional
   proposed owner/resource, and an attributed change log. Constraint appends
@@ -204,7 +205,8 @@ over the shared websocket and HTTP protocols.
   `@anthropic-ai/claude-agent-sdk`; subscription-authenticated (`claude
   login`), no API key path.
 - `AcpBrain` — the Agent Client Protocol implementation of `Brain`; spawns
-  the Claude ACP harness and denies any non-read tool call.
+  the Claude ACP harness, denies native mutation kinds, and allows
+  classified board/project tools from the local MCP bridge.
 - `cli.ts` — the `convyio-agent` entry point: pair, run, status.
   Deliberately never imports `config.ts`, so a paired agent cannot inherit
   the repo-root `.env`.
@@ -213,6 +215,8 @@ over the shared websocket and HTTP protocols.
 - `runtime.ts` — resolves a stored profile into an effective local
   configuration, reports runner health, and binds ACP's local MCP bridge to
   the current run's conversation-scoped tool executor.
+- `mcpBridge.ts` — localhost Streamable HTTP MCP server that exposes
+  `TOOL_DECLARATIONS` to the ACP harness. Not a `/tools`/`/call` stub.
 - `BoardClient` — the agent's HTTP/websocket view of board authority and shared
   projects; loads the Prompt Envelope plus assignment/request state and exposes
   project discovery and access requests to provider-neutral tools.

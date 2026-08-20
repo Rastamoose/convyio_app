@@ -164,9 +164,11 @@ export class GitRepositories {
     `;
     const account = await this.github.account(actor.id);
     if (!account) throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "connect GitHub first");
-    if (existing[0] && !existing[0].unlinked_at) return this.toRepository(existing[0]);
+    if (existing[0] && !existing[0].unlinked_at) {
+      if (existing[0].state === "ready" || existing[0].linked_by !== actor.id) return this.toRepository(existing[0]);
+      return this.retry(actor, existing[0].project_id);
+    }
     if (existing[0]) {
-      if (existing[0].linked_by !== actor.id) throw new ApiError(403, "OWNER_ONLY", "only the original repository owner can relink it");
       const now = Date.now();
       await this.store.transaction(async (sql) => {
         await sql`UPDATE projects SET archived_at = NULL WHERE id = ${existing[0].project_id} AND workspace_id = ${this.store.workspaceId}`;
@@ -175,7 +177,7 @@ export class GitRepositories {
             connection_id = ${account.id}, owner_name = ${remote.owner}, repository_name = ${remote.name},
             full_name = ${remote.fullName}, description = ${remote.description}, private = ${remote.private},
             default_branch = ${remote.defaultBranch}, html_url = ${remote.htmlUrl}, clone_url = ${remote.cloneUrl},
-            state = 'cloning', last_error = NULL, linked_at = ${now}, unlinked_at = NULL
+            state = 'cloning', last_error = NULL, linked_by = ${actor.id}, linked_at = ${now}, unlinked_at = NULL
           WHERE project_id = ${existing[0].project_id} AND workspace_id = ${this.store.workspaceId}
         `;
         await this.events.append(sql, {
@@ -227,7 +229,8 @@ export class GitRepositories {
   }
 
   async retry(actor: Actor, projectId: string): Promise<GitRepository> {
-    const row = await this.requireOwned(actor, projectId);
+    this.assertHuman(actor);
+    const row = await this.requireRow(projectId);
     if (row.state === "ready") return this.toRepository(row);
     await this.setState(projectId, "cloning", null);
     await this.clone(projectId).catch(async (error: unknown) => {
@@ -612,7 +615,7 @@ export class GitRepositories {
       await this.withCredential(row, async (env) => {
         const result = await runProcess(
           "git",
-          [...credentialGitOptions(row.clone_url), "clone", "--origin", "origin", "--no-tags", "--filter=blob:none", row.clone_url, target],
+          [...credentialGitOptions(), "clone", "--origin", "origin", "--no-tags", "--filter=blob:none", row.clone_url, target],
           this.root,
           env,
         );
@@ -631,7 +634,7 @@ export class GitRepositories {
       await this.withCredential(row, async (env) => {
         const result = await runProcess(
           "git",
-          [...credentialGitOptions(row.clone_url), "fetch", "--prune", row.clone_url, "+refs/heads/*:refs/remotes/origin/*"],
+          [...credentialGitOptions(), "fetch", "--prune", row.clone_url, "+refs/heads/*:refs/remotes/origin/*"],
           root,
           env,
         );
@@ -642,7 +645,7 @@ export class GitRepositories {
       await this.withCredential(row, async (env) => {
         const result = await runProcess(
           "git",
-          [...credentialGitOptions(row.clone_url), "push", row.clone_url, `${branch}:refs/heads/${branch}`],
+          [...credentialGitOptions(), "push", row.clone_url, `${branch}:refs/heads/${branch}`],
           root,
           env,
         );
@@ -680,7 +683,7 @@ export class GitRepositories {
       await this.withCredential(row, async (env) => {
         const pushed = await runProcess(
           "git",
-          [...credentialGitOptions(row.clone_url), "push", row.clone_url, `${name}:refs/heads/${name}`],
+          [...credentialGitOptions(), "push", row.clone_url, `${name}:refs/heads/${name}`],
           root,
           env,
         );
@@ -757,7 +760,7 @@ export class GitRepositories {
     await this.withCredential(row, async (env) => {
       const deleted = await runProcess(
         "git",
-        [...credentialGitOptions(row.clone_url), "push", row.clone_url, `:refs/heads/${branch}`],
+        [...credentialGitOptions(), "push", row.clone_url, `:refs/heads/${branch}`],
         root,
         env,
       );
@@ -925,7 +928,7 @@ export class GitRepositories {
   private async requireOwned(actor: Actor, projectId: string): Promise<RepositoryRow> {
     this.assertHuman(actor);
     const row = await this.requireRow(projectId);
-    if (row.linked_by !== actor.id) throw new ApiError(403, "OWNER_ONLY", "only the repository owner can change its Git state");
+    if (row.linked_by !== actor.id) throw new ApiError(403, "OWNER_ONLY", "only the person who linked this repository can change its Git state");
     return row;
   }
 
@@ -948,18 +951,12 @@ export class GitRepositories {
   private async withCredential<T>(row: RepositoryRow, action: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
     const token = await this.github.tokenForConnection(row.connection_id);
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "convyio-git-"));
-    const askpass = path.join(temporary, "askpass.sh");
-    await fs.writeFile(path.join(temporary, "token"), token, { mode: 0o600 });
-    await fs.writeFile(
-      askpass,
-      "#!/bin/sh\ncase \"$1\" in *Username*) printf '%s\\n' x-access-token ;; *Password*) cat \"$(dirname \"$0\")/token\" ;; esac\n",
-      { mode: 0o700 },
-    );
+    const configPath = path.join(temporary, "gitconfig");
+    await fs.writeFile(configPath, installationGitConfig(token), { mode: 0o600 });
     try {
       return await action({
         ...minimalEnv(temporary),
-        GIT_ASKPASS: askpass,
-        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_GLOBAL: configPath,
       });
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
@@ -1034,14 +1031,18 @@ function branchChannelName(repository: string, projectId: string, branch: string
   return `${readable.slice(0, 25).replace(/-+$/g, "")}-${suffix}`;
 }
 
-function credentialGitOptions(remoteUrl: string): string[] {
+function credentialGitOptions(): string[] {
   return [
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=false",
     "-c", "credential.helper=",
     "-c", "http.sslVerify=true",
-    "-c", `url.${remoteUrl}.insteadOf=${remoteUrl}`,
   ];
+}
+
+export function installationGitConfig(token: string): string {
+  const authorization = `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+  return `[http "https://github.com/"]\n\textraHeader = ${authorization}\n`;
 }
 
 function minimalEnv(home: string): NodeJS.ProcessEnv {

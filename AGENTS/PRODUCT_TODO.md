@@ -435,6 +435,13 @@ Do not add an analytics vendor solely for onboarding if current durable records 
 
 # P0 — Dogfood Convyio from inside Convyio
 
+Live pressure-test note (2026-08-19, local `test_space`): paired Toolman
+`livetest` plus instantiated `cc` completed the conversation loop on
+`#billing-loop` — Plan filed/constrained/accepted, Ticket approved, file
+edit through Toolman, ResultCard evidence on the origin thread. Remaining
+dogfood work is still a real Convyio product change reviewed by a second
+human, not this isolated billing fixture.
+
 - [ ] Select one bounded Convyio product change suitable for the canonical workflow.
 - [ ] Start its discussion in a Convyio thread.
 - [ ] Create/refine the inline PlanCard in that thread.

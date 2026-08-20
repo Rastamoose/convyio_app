@@ -10,7 +10,7 @@ import type { Actor } from "@workspace/shared";
 import { Channels } from "../src/chat/Channels";
 import { ThreadEventStore } from "../src/chat/ThreadEventStore";
 import { GitHub, type GitHubConfig } from "../src/projects/GitHub";
-import { GitRepositories } from "../src/projects/GitRepositories";
+import { GitRepositories, installationGitConfig } from "../src/projects/GitRepositories";
 import { ProjectStore } from "../src/projects/ProjectStore";
 import { createTestDb } from "./pgSchema";
 
@@ -149,6 +149,21 @@ describe("GitHub repository integration", () => {
       () => github.repository(owner.id, "acme/demo"),
       (error: unknown) => error instanceof Error && error.message.includes("unsafe repository URL"),
     );
+  });
+
+  test("normalizes GitHub clone URLs and always authenticates HTTPS", async () => {
+    const account = await github.account(owner.id);
+    assert.ok(account);
+    const listed = await github.repositories(owner.id);
+    assert.equal(listed[0]?.cloneUrl, "https://github.com/acme/selected.git");
+    assert.equal(listed[0]?.htmlUrl, "https://github.com/acme/selected");
+    const config = installationGitConfig("installation-secret");
+    assert.match(config, /\[http "https:\/\/github.com\/"\]/);
+    assert.match(config, /extraHeader = Authorization: Basic /);
+    const encoded = config.match(/Authorization: Basic ([A-Za-z0-9+/=]+)/)?.[1];
+    assert.equal(Buffer.from(encoded ?? "", "base64").toString(), "x-access-token:installation-secret");
+    const header = await readGitHttpHeader(config, "https://github.com/acme/selected.git/");
+    assert.equal(header, `Authorization: Basic ${encoded}`);
   });
 
   test("links, clones, assigns, edits, commits, and pushes one managed repository", async () => {
@@ -290,8 +305,8 @@ function fakeGitHub(remoteUrl: string): typeof fetch {
         description: "Selected repository",
         private: true,
         default_branch: "main",
-        html_url: "https://github.com/acme/selected",
-        clone_url: "https://github.com/acme/selected.git",
+        html_url: "https://github.com/acme/selected/",
+        clone_url: "https://github.com/acme/selected.git/",
         updated_at: "2026-08-18T00:00:00Z",
         owner: { login: "acme" },
       }] });
@@ -320,4 +335,24 @@ function jsonResponse(body: unknown, headers?: HeadersInit): Response {
     status: 200,
     headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+async function readGitHttpHeader(config: string, remoteUrl: string): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "convyio-git-auth-"));
+  const configPath = path.join(root, "gitconfig");
+  await fs.writeFile(configPath, config);
+  try {
+    const { stdout } = await execFileAsync("git", ["config", "--get-urlmatch", "http.extraHeader", remoteUrl], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: configPath,
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    });
+    return stdout.trim();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }

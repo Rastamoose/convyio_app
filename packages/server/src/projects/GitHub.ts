@@ -435,8 +435,8 @@ function toRemoteRepository(repository: GitHubRepositoryResponse): GitRemoteRepo
     description: repository.description,
     private: repository.private,
     defaultBranch: repository.default_branch,
-    htmlUrl: githubUrl(repository.html_url),
-    cloneUrl: githubUrl(repository.clone_url),
+    htmlUrl: githubHtmlUrl(repository.html_url),
+    cloneUrl: githubCloneUrl(repository.clone_url),
     updatedAt: Date.parse(repository.updated_at),
   };
 }
@@ -455,7 +455,17 @@ function validatedOrigin(value: string): string {
   return url.origin;
 }
 
-function githubUrl(value: string): string {
+function githubHtmlUrl(value: string): string {
+  const { owner, name } = githubRepoPath(value);
+  return `https://github.com/${owner}/${name}`;
+}
+
+function githubCloneUrl(value: string): string {
+  const { owner, name } = githubRepoPath(value);
+  return `https://github.com/${owner}/${name}.git`;
+}
+
+function githubRepoPath(value: string): { owner: string; name: string } {
   let url: URL;
   try {
     url = new URL(value);
@@ -463,10 +473,15 @@ function githubUrl(value: string): string {
     if (error instanceof TypeError) throw new ApiError(502, "GITHUB_RESPONSE_INVALID", "GitHub returned an invalid repository URL");
     throw error;
   }
-  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password) {
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search || url.hash) {
     throw new ApiError(502, "GITHUB_RESPONSE_INVALID", "GitHub returned an unsafe repository URL");
   }
-  return url.toString();
+  const parts = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+  if (parts.length !== 2) throw new ApiError(502, "GITHUB_RESPONSE_INVALID", "GitHub returned an invalid repository URL");
+  const owner = parts[0];
+  const name = parts[1].replace(/\.git$/i, "");
+  if (!owner || !name) throw new ApiError(502, "GITHUB_RESPONSE_INVALID", "GitHub returned an invalid repository URL");
+  return { owner, name };
 }
 
 function encodeRepo(fullName: string): string {

@@ -55,6 +55,9 @@ whose owner is an agent queues a durable run request for that owner.
    file an owner-targeted access request; neither action grants access.
 5. `Memory` is a rolling fifty-message transcript stored by the runner.
 6. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
+   Paired ACP (`convyio-agent`) exposes board/project tools through a
+   localhost Streamable HTTP MCP server; classified MCP tools are allowed,
+   native Write/Bash stay denied.
 
 The envelope is compiled from the current snapshot on join and again before
 each run. The actor cursor is not yet advanced when a runner acknowledges an
@@ -141,7 +144,9 @@ envelope.
 2. The next ticket is created against that accepted plan. Every ticket starts
    proposed, including human-created ones.
 3. A human approves the ticket with an owner, acceptance criteria and a
-   complete impact map. The server then queues work for an agent owner.
+   complete impact map. If the ticket omitted `impactMap`, create inherits
+   the accepted plan's map; approval still refuses an incomplete map. The
+   server then queues work for an agent owner.
 4. For each world action, the agent sends `action_request` with a board item
    reference, or without one for an explicit chat grant.
 5. `Hub` asks Toolman whether the action is authorized. A ticket mutation

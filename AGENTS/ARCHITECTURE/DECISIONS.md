@@ -184,3 +184,15 @@ why. Current behavior is documented in the current-state pages.
   constraint appends change the same Plan plus an attributed context entry.
   Consequence: a reviewer can follow context, Plan, Ticket, work and result
   in one thread without a parallel onboarding model.
+- 2026-08-19 — Paired ACP agents receive classified board/project tools over
+  a localhost Streamable HTTP MCP server (`LocalMcpBridge`). The previous
+  `/tools`/`/call` HTTP stub was not MCP, so `board_propose_plan` and
+  `project_*` never appeared to Claude. ACP still denies native Write/Bash;
+  classified MCP tool names (including `mcp__convyio-toolman__…`) are
+  allowed. Consequence: a live paired `convyio-agent` can file Plans and
+  Tickets and mutate only through Toolman.
+- 2026-08-19 — Ticket create inherits the accepted plan's impact map when
+  the ticket omits one. `board_propose` still has no `impact_map` argument,
+  and approval still requires a complete map. Consequence: an agent-filed
+  ticket is approvable without the model inventing an ecosystem assessment;
+  an explicit incomplete map still fails closed.

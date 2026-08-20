@@ -61,3 +61,6 @@ lifecycles, scope enforcement, session expiry and the Postgres stores.
   host a sovereign Git remote.
 - Path and capability enforcement bounds authority but cannot judge whether
   written content matches a ticket's intent — that remains human review.
+- Incomplete GitHub App env (`GITHUB_CLIENT_*` without the rest of the App
+  set) makes `npm run dev` fail at boot. Unset the incomplete vars or set
+  the full set; see `AGENTS/DEPLOY.md`.

@@ -54,6 +54,8 @@ Health: `curl http://localhost:3001/api/health` → `{"ok":true}`.
 
 Local test login for pairing and conversation-loop work: `test@test.com` /
 `testuser` (username `test`, workspace `test_space`). Details in `AGENTS.md`.
+If only some GitHub App vars are set, the server refuses to start; unset
+them all for a no-GitHub local stack, or set the full five together.
 
 ## Quick start — bare metal
 

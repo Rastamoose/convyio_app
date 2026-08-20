@@ -9,7 +9,8 @@ does not supersede them until the corresponding code change lands.
   Hub has settled that decision plus assignment, consent and permission mode,
   then route to ToolmanGateway or GitRepositories. `ClaudeBrain` enables only
   read-only native tools, so native Claude Code execution cannot mutate around
-  this boundary.
+  this boundary. ACP denies native mutation kinds the same way, but allows
+  classified board/project tools from the local Streamable HTTP MCP bridge.
 - Authorization starts with the hard ceiling: identity, sandbox, classified
   tool, and either a workable owned ticket or explicit bounded chat grant.
   Project actions then add assignment/checkout and owner-consent policy. The
@@ -18,8 +19,10 @@ does not supersede them until the corresponding code change lands.
   answers that action and avoids a duplicate mode prompt. Plan mode refuses
   mutations before any executor.
 - Every ticket starts proposed. Approval is human-only and requires an owner,
-  acceptance criteria and a complete impact map. Only the assigned owner may
-  start, mutate, block, unblock or complete. Completion requires evidence.
+  acceptance criteria and a complete impact map. A ticket that omits
+  `impactMap` inherits the accepted plan's map; approval still refuses an
+  incomplete map. Only the assigned owner may start, mutate, block, unblock
+  or complete. Completion requires evidence.
 - An accepted Plan may have at most one live ticket. Plan acceptance grants
   no mutating authority. Plans and tickets remember an origin channel and
   origin thread event; later Plan/Ticket events reuse that channel so the
@@ -83,7 +86,9 @@ does not supersede them until the corresponding code change lands.
 - Agents discover shared projects and their assignment/request state through
   provider-neutral tools. Claude and ACP use the current run's scoped Toolman
   executor for every mutation; their native filesystem and shell paths remain
-  read-only.
+  read-only. Paired ACP agents receive those tools only over Streamable HTTP
+  MCP (`LocalMcpBridge`); a `/tools`/`/call` HTTP stub is not MCP and is not
+  sufficient.
 - Toolman reconnects with bounded backoff and a connection timeout. One node
   has one live authenticated socket; unpair or revocation evicts the previous
   socket, revoked mounts cannot execute, unauthenticated result frames are

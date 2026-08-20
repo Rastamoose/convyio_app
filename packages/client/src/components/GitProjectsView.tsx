@@ -106,7 +106,10 @@ export function GitProjectsView({ onOpenChannel }: { onOpenChannel?: (channel: s
 
   const connect = async () => {
     const request = apiFetch("/api/git/github/authorize", { method: "POST" });
-    if (!request) return;
+    if (!request) {
+      setError("workspace session expired; refresh the page and try again");
+      return;
+    }
     setBusy("connect");
     try {
       const response = await request;
@@ -140,7 +143,10 @@ export function GitProjectsView({ onOpenChannel }: { onOpenChannel?: (channel: s
       method: "POST",
       body: JSON.stringify({ fullName: remote.fullName }),
     });
-    if (!request) return;
+    if (!request) {
+      setError("workspace session expired; refresh the page and try again");
+      return;
+    }
     setBusy(remote.providerId);
     try {
       const response = await request;
