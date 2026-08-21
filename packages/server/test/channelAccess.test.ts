@@ -25,7 +25,15 @@ describe("agent channel confidentiality", () => {
       channel: channel.name,
       content: "@channel-agent confirm you can help",
     }));
-    const available = await agent.next((event) => event.type === "work_available", 1000);
+    const occupancy = await human.next(
+      (event) =>
+        event.type === "message" &&
+        event.message.authorKind === "agent" &&
+        event.message.content.includes("waiting for a decision"),
+      2000,
+    );
+    assert.match(occupancy.message.content, /#private-agent-room/);
+    await assert.rejects(agent.next((event) => event.type === "work_available", 200), /timeout/);
     await assert.rejects(
       agent.next((event) => event.type === "message" && event.message.content.includes("confirm you can help"), 100),
       /timeout/,
@@ -34,10 +42,6 @@ describe("agent channel confidentiality", () => {
       headers: { Authorization: `Bearer ${agent.token}` },
     });
     assert.equal(deniedHistory.status, 403);
-
-    agent.ws.send(JSON.stringify({ type: "work_claim", requestIds: available.requestIds }));
-    const assigned = await agent.next((event) => event.type === "work_assigned", 1000);
-    assert.match(assigned.assignments[0].trigger.content, /confirm you can help/);
 
     const agentActor: Actor = {
       id: agent.welcome.self.id,
@@ -63,6 +67,16 @@ describe("agent channel confidentiality", () => {
     const historyBody = await grantedHistory.json();
     assert.equal(historyBody.messages.some((message: { content: string }) => message.content === "private history"), true);
 
+    human.ws.send(JSON.stringify({
+      type: "message",
+      channel: channel.name,
+      content: "@channel-agent confirm you can help",
+    }));
+    const available = await agent.next((event) => event.type === "work_available", 2000);
+    agent.ws.send(JSON.stringify({ type: "work_claim", requestIds: available.requestIds }));
+    const assigned = await agent.next((event) => event.type === "work_assigned", 1000);
+    assert.match(assigned.assignments[0].trigger.content, /confirm you can help/);
+
     human.ws.send(JSON.stringify({ type: "message", channel: channel.name, content: "visible after grant" }));
     const visible = await agent.next(
       (event) => event.type === "message" && event.message.content === "visible after grant",
@@ -71,7 +85,7 @@ describe("agent channel confidentiality", () => {
     assert.equal(visible.message.channelId, channel.id);
   });
 
-  test("first mention requests durable access to that channel without blocking the run", async () => {
+  test("first mention requests durable access and does not start a run", async () => {
     const human = await env.connect("mention-human", "human");
     const agent = await env.connect("mention-agent", "agent");
     const general = await env.channels.get("general");
@@ -82,8 +96,15 @@ describe("agent channel confidentiality", () => {
       channel: "general",
       content: "@mention-agent hello",
     }));
-    const available = await agent.next((event) => event.type === "work_available", 2000);
-    assert.ok(available.requestIds.length > 0);
+    const occupancy = await human.next(
+      (event) =>
+        event.type === "message" &&
+        event.message.authorKind === "agent" &&
+        event.message.content.includes("waiting for a decision"),
+      2000,
+    );
+    assert.match(occupancy.message.content, /#general/);
+    await assert.rejects(agent.next((event) => event.type === "work_available", 200), /timeout/);
 
     const requests = (await env.resourceAccess.requestsForAgent(agent.welcome.self.id))
       .filter((request) => request.status === "pending");

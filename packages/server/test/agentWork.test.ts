@@ -35,6 +35,7 @@ async function claimMention(
   human: WsClient,
   content: string,
 ): Promise<any> {
+  await env.grantChannel(agent.welcome.self.id, human.welcome.self.id);
   human.ws.send(JSON.stringify({ type: "message", content }));
   await human.next((event) => event.type === "message" && event.message.content === content);
   const available = await agent.next((event) => event.type === "work_available");
@@ -47,6 +48,7 @@ describe("durable mention delivery", () => {
   test("only a human's bounded roster mention queues offline work with authoritative ids", async () => {
     const agent = await env.connect("n.oodle", "agent");
     const human = await env.connect("dana", "human");
+    await env.grantChannel(agent.welcome.self.id, human.welcome.self.id);
     await takeAgentOffline(agent, human);
 
     human.ws.send(JSON.stringify({ type: "message", content: "email@n.oodle is ordinary text" }));
@@ -89,9 +91,11 @@ describe("durable mention delivery", () => {
   test("agent/message dedupe shares one conversation per stable channel and splits channels", async () => {
     const agent = await env.connect("noodle", "agent");
     const human = await env.connect("dana", "human");
+    await env.grantChannel(agent.welcome.self.id, human.welcome.self.id);
     await takeAgentOffline(agent, human);
     const actor = (await env.db.getActor(human.welcome.self.id))!;
     const secondChannel = await env.channels.create(actor, "second");
+    await env.grantChannel(agent.welcome.self.id, human.welcome.self.id, secondChannel.name);
 
     const post = async (content: string, channel?: string) => {
       human.ws.send(JSON.stringify({ type: "message", content, channel }));
@@ -144,6 +148,7 @@ describe("durable mention delivery", () => {
     const target = await env.connect("noodle", "agent");
     const other = await env.connect("other", "agent");
     const human = await env.connect("dana", "human");
+    await env.grantChannel(target.welcome.self.id, human.welcome.self.id);
 
     human.ws.send(JSON.stringify({ type: "message", content: "@noodle handle this" }));
     const trigger = await human.next(
@@ -225,6 +230,7 @@ describe("durable mention delivery", () => {
   test("an agent reconnect requeues only its stale claim and advertises it again", async () => {
     const agent = await env.connect("noodle", "agent");
     const human = await env.connect("dana", "human");
+    await env.grantChannel(agent.welcome.self.id, human.welcome.self.id);
     human.ws.send(JSON.stringify({ type: "message", content: "@noodle reconnect test" }));
     const available = await agent.next((event) => event.type === "work_available");
     const requestId = available.requestIds[0];

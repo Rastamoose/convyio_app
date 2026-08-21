@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -289,6 +290,8 @@ export interface WsEnv {
   /** Truncate workspace data and clear in-memory state so the next test
    *  can reuse this env without leaking from the previous one. */
   reset(): Promise<void>;
+  /** Test-only durable channel grant so mention-driven work can start. */
+  grantChannel(agentId: string, grantedById: string, channelName?: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -506,6 +509,20 @@ export async function createWsEnv(
       });
     },
     closeClients,
+    async grantChannel(agentId, grantedById, channelName = "general") {
+      const channel = await channels.get(channelName);
+      if (!channel) throw new Error(`unknown channel: ${channelName}`);
+      if (await resourceAccess.has(agentId, "channel", channel.id)) return;
+      await db.sql`
+        INSERT INTO agent_resource_grants (
+          id, workspace_id, agent_id, resource_kind, resource_id, capability,
+          granted_by, reason, created_at, revoked_by, revoked_at
+        ) VALUES (
+          ${randomUUID()}, ${db.workspaceId}, ${agentId}, 'channel', ${channel.id},
+          'content_read', ${grantedById}, 'test grant', ${Date.now()}, NULL, NULL
+        )
+      `;
+    },
     async reset() {
       // A local function, not `this`: inside an object literal being returned
       // as a promise, `this` widens to include the PromiseLike form.

@@ -85,7 +85,8 @@ function status(client: WsClient, configRevision: number, health = "ready"): voi
   );
 }
 
-async function postMention(human: WsClient, agentName: string, suffix: string): Promise<any> {
+async function postMention(human: WsClient, agentName: string, suffix: string, agentId?: string): Promise<any> {
+  if (agentId) await env.grantChannel(agentId, human.welcome.self.id);
   const content = `@${agentName} ${suffix}`;
   human.ws.send(JSON.stringify({ type: "message", content }));
   return human.next((event) => event.type === "message" && event.message.content === content);
@@ -101,7 +102,7 @@ describe("installation runner readiness", () => {
       if (event.type === "work_available") workFrames.push(event);
     });
 
-    await postMention(human, "checking-agent", "wait for readiness");
+    await postMention(human, "checking-agent", "wait for readiness", installation.actorId);
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(workFrames.length, 0);
     assert.equal(env.runnerRuntime.summary(installation.actorId, 1).health, "checking");
@@ -138,7 +139,7 @@ describe("installation runner readiness", () => {
     assert.equal(config.profile.requestedModel, "claude-opus");
     assert.equal(env.runnerRuntime.summary(installation.actorId, 2).health, "checking");
 
-    const message = await postMention(human, "patch-agent", "new revision");
+    const message = await postMention(human, "patch-agent", "new revision", installation.actorId);
     const [request] = await env.db.sql<{ id: string }[]>`
       SELECT id FROM agent_run_requests WHERE message_id = ${message.message.id}
     `;
@@ -159,7 +160,7 @@ describe("installation runner readiness", () => {
   test("protocol and harness mismatches remain incompatible and cannot claim", async () => {
     const human = await connectHuman("human-mismatch", "mismatch-human");
     const installation = await connectInstallation(human.welcome.self.id, "mismatch-agent");
-    const message = await postMention(human, "mismatch-agent", "must not run");
+    const message = await postMention(human, "mismatch-agent", "must not run", installation.actorId);
     const [request] = await env.db.sql<{ id: string }[]>`
       SELECT id FROM agent_run_requests WHERE message_id = ${message.message.id}
     `;
@@ -233,7 +234,7 @@ describe("installation runner readiness", () => {
       authToken: "global-agent-token",
     });
     assert.ok(joined.client);
-    await postMention(human, "noodle", "legacy compatibility");
+    await postMention(human, "noodle", "legacy compatibility", joined.welcome.self.id);
     const available = await joined.client.next((event) => event.type === "work_available");
     assert.equal(available.requestIds.length, 1);
   });
@@ -280,7 +281,7 @@ describe("agent invite mention access", () => {
     `;
     assert.equal(deniedCount, 0);
 
-    const allowed = await postMention(selected, "selected-agent", "authorized work");
+    const allowed = await postMention(selected, "selected-agent", "authorized work", installation.actorId);
     assert.deepEqual(allowed.message.mentions, [installation.actorId]);
     const [{ count: allowedCount }] = await env.db.sql<{ count: number }[]>`
       SELECT count(*)::int AS count FROM agent_run_requests WHERE message_id = ${allowed.message.id}

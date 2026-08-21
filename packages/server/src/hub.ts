@@ -244,7 +244,7 @@ export class Hub {
     if (occupancy) {
       const reply = this.buildOccupancyReply(owner, occupancy, channel, Date.now());
       await this.messages.append(reply);
-      this.broadcast({ type: "message", message: reply });
+      await this.broadcastMessage({ type: "message", message: reply });
       this.onMessagePosted?.(reply);
       return;
     }
@@ -348,25 +348,30 @@ export class Hub {
       const occupancy = await this.checkAgentOccupancy(agent.id, channelInfo.id);
       if (occupancy) {
         occupiedAgents.push({ agent, occupancy });
-      } else {
-        allowedAgents.push(agent);
+        continue;
       }
-    }
-
-    // First mention in a channel asks for durable read access before the
-    // agent can see history. The current trigger still queues; later
-    // mentions in other channels see the pending request as occupancy.
-    if (this.options.resourceAccess) {
-      await Promise.all(
-        allowedAgents.map((agent) =>
-          this.options.resourceAccess!.requestIfNeeded(this.toActor(agent), {
+      if (this.options.resourceAccess) {
+        const hasAccess = await this.options.resourceAccess.has(agent.id, "channel", channelInfo.id);
+        if (!hasAccess) {
+          await this.options.resourceAccess.requestIfNeeded(this.toActor(agent), {
             resourceKind: "channel",
             resourceId: channelInfo.id,
             reason: `Mentioned in #${channelInfo.name}`,
             originChannelId: channelInfo.id,
-          }),
-        ),
-      );
+          });
+          occupiedAgents.push({
+            agent,
+            occupancy: {
+              kind: "waiting",
+              location: "this channel",
+              target: `#${channelInfo.name}`,
+              reason: `waiting for access approval to #${channelInfo.name}`,
+            },
+          });
+          continue;
+        }
+      }
+      allowedAgents.push(agent);
     }
 
     const message: ChatMessage = {
@@ -396,7 +401,7 @@ export class Hub {
       nonce === undefined ? { type: "message", message } : { type: "message", message, nonce },
     );
     for (const reply of replies) {
-      this.broadcast({ type: "message", message: reply });
+      await this.broadcastMessage({ type: "message", message: reply });
       this.onMessagePosted?.(reply);
     }
     for (const agent of allowedAgents) {
@@ -436,11 +441,10 @@ export class Hub {
       if (request) {
         const originName = await this.lookupChannelName(request.originChannelId);
         const target = this.formatAccessTarget(request);
-        const originId = request.originChannelId ?? request.resourceId;
         return {
           kind: "waiting",
           location: this.formatChannelLocation(currentChannelId, request.originChannelId, originName),
-          ...(originId !== request.resourceId ? { target } : {}),
+          target,
           reason: `waiting for access approval to ${target}`,
         };
       }
@@ -486,28 +490,19 @@ export class Hub {
   }
 
   /**
-   * A first-mention request for the channel the user is speaking in is not
-   * occupancy — the agent can keep working there while that grant is pending.
-   * Anything else (another resource, or a grant requested from another
-   * thread) occupies the agent globally.
+   * Pending access occupies the agent globally. Prefer a request for a
+   * different resource than the current channel so a later foreign request
+   * is not hidden behind a first-mention grant for this room.
    */
   private chooseOccupyingResourceRequest(
     requests: AgentResourceAccessRequest[],
     currentChannelId: string,
   ): AgentResourceAccessRequest | null {
-    const occupying = requests.filter((request) => {
-      const originId = request.originChannelId ?? request.resourceId;
-      const currentChannelGrant =
-        request.resourceKind === "channel" &&
-        request.resourceId === currentChannelId &&
-        originId === currentChannelId;
-      return !currentChannelGrant;
-    });
-    if (occupying.length === 0) return null;
-    const foreign = occupying.filter(
+    if (requests.length === 0) return null;
+    const foreign = requests.filter(
       (request) => request.resourceKind !== "channel" || request.resourceId !== currentChannelId,
     );
-    const pool = foreign.length > 0 ? foreign : occupying;
+    const pool = foreign.length > 0 ? foreign : requests;
     return pool[pool.length - 1] ?? null;
   }
 
@@ -564,11 +559,11 @@ export class Hub {
   }
 
   /** Clear one channel's messages (or all) and tell clients. */
-  async clearChannel(actorId: string, channelName?: string): Promise<void> {
+  async clearChannel(actorId: string, channelName?: string, work = false): Promise<void> {
     const channel = channelName ? await this.channels.get(channelName) : undefined;
     if (channelName && !channel) throw new Error(`unknown channel: ${channelName}`);
     await this.messages.clear(actorId, channel ?? undefined);
-    this.broadcast(channel ? { type: "clear", channel: channel.name } : { type: "clear" });
+    this.broadcast(channel ? { type: "clear", channel: channel.name, ...(work ? { work: true } : {}) } : { type: "clear" });
   }
 
   broadcastPresence(): void {
@@ -1078,7 +1073,7 @@ export class Hub {
       : "default";
     const capability = ACTION_CAPABILITY[event.action.kind];
     if (mode === "plan" && capability) {
-      return this.send(conn, {
+      return this.sendToParticipant(p.id, {
         type: "action_result",
         requestId: event.requestId,
         ok: false,
@@ -1094,7 +1089,7 @@ export class Hub {
       { chatGrant },
     );
     if (!authz.allow) {
-      return this.send(conn, {
+      return this.sendToParticipant(p.id, {
         type: "action_result",
         requestId: event.requestId,
         ok: false,
@@ -1105,32 +1100,32 @@ export class Hub {
     if (isProjectAction(event.action)) {
       const folderGate = await this.gateFolderAccess(actor, event, event.action);
       if (folderGate.result) {
-        return this.send(conn, { type: "action_result", requestId: event.requestId, ...folderGate.result });
+        return this.sendToParticipant(p.id, { type: "action_result", requestId: event.requestId, ...folderGate.result });
       }
       if (!folderGate.ownerPromptApproved) {
         const gate = await this.gateByMode(actor, event, mode, capability);
         if (gate) {
-          return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+          return this.sendToParticipant(p.id, { type: "action_result", requestId: event.requestId, ...gate });
         }
       }
     } else {
       const gate = await this.gateByMode(actor, event, mode, capability);
       if (gate) {
-        return this.send(conn, { type: "action_result", requestId: event.requestId, ...gate });
+        return this.sendToParticipant(p.id, { type: "action_result", requestId: event.requestId, ...gate });
       }
     }
     const result = isProjectAction(event.action)
       ? await this.executeProjectAction(actor, event.action, event.boardItemRef ?? null, conversationId, event.requestId)
       : await this.toolman.execute(actor, event.action, event.boardItemRef ?? null, { chatGrant });
     if (isReadOnlyToolmanAction(event.action.kind) && result.ok && (result.output?.length ?? 0) > MAX_CONTEXT_READ_CHARS) {
-      return this.send(conn, {
+      return this.sendToParticipant(p.id, {
         type: "action_result",
         requestId: event.requestId,
         ok: false,
         error: "CONTEXT_BUDGET_EXCEEDED: narrow the search or read a smaller resource",
       });
     }
-    this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
+    this.sendToParticipant(p.id, { type: "action_result", requestId: event.requestId, ...result });
   }
 
   /**
@@ -1553,6 +1548,18 @@ export class Hub {
   private send(conn: Connection, event: ServerEvent): void {
     if (conn.socket.readyState === WebSocket.OPEN) {
       conn.socket.send(JSON.stringify(event));
+    }
+  }
+
+  /** Send to every connection currently belonging to a participant.
+   *  Used for action_result frames because the agent may reconnect while
+   *  a mutation is paused on human approval. */
+  private sendToParticipant(participantId: string, event: ServerEvent): void {
+    const payload = JSON.stringify(event);
+    for (const conn of this.connections) {
+      if (conn.participant?.id === participantId && conn.socket.readyState === WebSocket.OPEN) {
+        conn.socket.send(payload);
+      }
     }
   }
 
