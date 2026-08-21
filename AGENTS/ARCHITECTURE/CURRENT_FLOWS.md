@@ -53,7 +53,7 @@ whose owner is an agent queues a durable run request for that owner.
 4. `BoardClient` also loads the agent's project catalogue, assignment and
    pending-request projection. Provider-neutral tools can list projects and
    file an owner-targeted access request; neither action grants access.
-5. `Memory` is a rolling fifty-message transcript stored by the runner.
+5. `Memory` is a rolling fifty-message transcript stored by the runner. Each run injects only the addressed channel’s transcript and Plan/Ticket/channel context; workspace-scoped context remains global.
 6. The selected `Brain` calls Gemini, Claude SDK or the ACP harness locally.
    Paired ACP (`convyio-agent`) exposes board/project tools through a
    localhost Streamable HTTP MCP server; classified MCP tools are allowed,

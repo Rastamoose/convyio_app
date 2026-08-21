@@ -1,2 +1,0 @@
-board proposals - currenrly board acts as 100% human privilege, 0% agent. lower level human priv perms - maybe this is enterprise only; consider icp
-actual agent usage - do they work -> application needs to wrok as far as the demo. demo done by weekend
