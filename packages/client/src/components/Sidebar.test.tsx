@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AgentInvite, BoardItem, Participant } from "@workspace/shared";
+import type { AgentInvite, BoardItem, ChannelInfo, ChannelSection, Participant } from "@workspace/shared";
 import { Sidebar } from "./Sidebar";
 
 // Sidebar (and the MemberCard it opens) read from the workspace context;
@@ -10,14 +10,18 @@ let participants: Participant[] = [];
 let board: BoardItem[] = [];
 let unreadsByChannel: Record<string, number> = {};
 let channels = ["general", "design"];
+let channelInfos: ChannelInfo[] = [];
 let archivedChannels: string[] = [];
 let pinnedChannels: string[] = [];
+let channelSections: ChannelSection[] = [];
 let agentInvites: AgentInvite[] = [];
 const createChannel = vi.fn();
+const createChannelSection = vi.fn();
 const renameChannel = vi.fn();
 const archiveChannel = vi.fn();
 const pinChannel = vi.fn();
 const deleteChannel = vi.fn();
+const moveChannel = vi.fn();
 const markRead = vi.fn();
 const revokeAgent = vi.fn();
 const removeMember = vi.fn();
@@ -27,8 +31,10 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     participants,
     self: participants[0] ?? null,
     channels,
+    channelInfos,
     archivedChannels,
     pinnedChannels,
+    channelSections,
     board,
     plans: [],
     activeRuns: [],
@@ -36,10 +42,12 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     setStatus: vi.fn(),
     signOut: null,
     createChannel,
+    createChannelSection,
     renameChannel,
     archiveChannel,
     pinChannel,
     deleteChannel,
+    moveChannel,
     unreadCount: (channel: string) => unreadsByChannel[channel] ?? 0,
     markRead,
     agentInvites,
@@ -104,8 +112,10 @@ describe("Sidebar", () => {
     board = [];
     unreadsByChannel = {};
     channels = ["general", "design"];
+    channelInfos = channels.map((name) => ({ id: name, name, sectionId: null }));
     archivedChannels = [];
     pinnedChannels = [];
+    channelSections = [];
     agentInvites = [];
   });
 
@@ -166,7 +176,7 @@ describe("Sidebar", () => {
     await user.click(screen.getByRole("button", { name: "Create a room" }));
     await user.type(screen.getByLabelText("New room name"), "war-room{Enter}");
 
-    expect(createChannel).toHaveBeenCalledWith("war-room");
+    expect(createChannel).toHaveBeenCalledWith("war-room", null);
     await waitFor(() => expect(onSelectChannel).toHaveBeenCalledWith("war-room"));
   });
 
@@ -372,5 +382,71 @@ describe("Sidebar", () => {
 
     await user.click(screen.getByText("Archived — 1"));
     expect(screen.getByRole("tab", { name: /old-room/ })).toBeInTheDocument();
+  });
+
+  it("keeps ungrouped rooms under Rooms and custom sections in their own lists", () => {
+    channelSections = [{ id: "sec-notes", name: "notes" }];
+    channels = ["general", "design", "scratch"];
+    channelInfos = [
+      { id: "general", name: "general", sectionId: null },
+      { id: "design", name: "design", sectionId: "sec-notes" },
+      { id: "scratch", name: "scratch", sectionId: "sec-notes" },
+    ];
+    renderSidebar();
+
+    expect(within(screen.getByRole("tablist", { name: "Rooms" })).getByRole("tab", { name: /general/ })).toBeInTheDocument();
+    expect(within(screen.getByRole("tablist", { name: "Rooms" })).queryByRole("tab", { name: /design/ })).not.toBeInTheDocument();
+    const notes = screen.getByRole("tablist", { name: "notes" });
+    expect(within(notes).getByRole("tab", { name: /design/ })).toBeInTheDocument();
+    expect(within(notes).getByRole("tab", { name: /scratch/ })).toBeInTheDocument();
+  });
+
+  it("section + creates a room already in that section", async () => {
+    const user = userEvent.setup();
+    const onSelectChannel = vi.fn();
+    channelSections = [{ id: "sec-notes", name: "notes" }];
+    createChannel.mockResolvedValue("scratch");
+    renderSidebar(onSelectChannel);
+
+    await user.click(screen.getByRole("button", { name: "Create a room in notes" }));
+    await user.type(screen.getByLabelText("New room name in notes"), "scratch{Enter}");
+
+    expect(createChannel).toHaveBeenCalledWith("scratch", "sec-notes");
+    await waitFor(() => expect(onSelectChannel).toHaveBeenCalledWith("scratch"));
+  });
+
+  it("submits a new section with Enter", async () => {
+    const user = userEvent.setup();
+    createChannelSection.mockResolvedValue({ id: "sec-1", name: "notes" });
+    renderSidebar();
+
+    await user.click(screen.getByRole("button", { name: "Create a section" }));
+    await user.type(screen.getByLabelText("New section name"), "notes{Enter}");
+
+    expect(createChannelSection).toHaveBeenCalledWith("notes");
+  });
+
+  it("Move submenu offers other sections and calls moveChannel", async () => {
+    const user = userEvent.setup();
+    channelSections = [{ id: "sec-notes", name: "notes" }];
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /design/ }));
+    await user.click(screen.getByText("Move ▸"));
+    await user.click(within(screen.getByRole("menu")).getByText("notes"));
+
+    expect(moveChannel).toHaveBeenCalledWith("design", "sec-notes");
+  });
+
+  it("dropping a room onto a section header moves it", () => {
+    channelSections = [{ id: "sec-notes", name: "notes" }];
+    renderSidebar();
+
+    const dataTransfer = { getData: () => "design", setData: vi.fn(), effectAllowed: "" };
+    fireEvent.dragStart(screen.getByRole("tab", { name: /design/ }), { dataTransfer });
+    fireEvent.drop(screen.getByRole("tablist", { name: "notes" }).parentElement!, {
+      dataTransfer,
+    });
+    expect(moveChannel).toHaveBeenCalledWith("design", "sec-notes");
   });
 });

@@ -1,6 +1,14 @@
 export interface ChannelInfo {
   id: string;
   name: string;
+  /** Custom sidebar section; null means the default Rooms bucket. */
+  sectionId: string | null;
+}
+
+/** A named, workspace-shared grouping of channels in the sidebar. */
+export interface ChannelSection {
+  id: string;
+  name: string;
 }
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -78,6 +86,12 @@ export type ThreadEventKind =
   | "context.created"
   | "context.superseded"
   | "context.cursor.acknowledged"
+  | "note.created"
+  | "note.superseded"
+  | "resource.access.requested"
+  | "resource.access.granted"
+  | "resource.access.denied"
+  | "resource.access.revoked"
   | "project.created"
   | "project.updated"
   | "project.archived"

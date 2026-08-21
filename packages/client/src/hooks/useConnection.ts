@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { ClientEvent, Participant, ServerEvent, WorkspaceInfo } from "@workspace/shared";
+import type {
+  ChannelInfo,
+  ChannelSection,
+  ClientEvent,
+  Participant,
+  ServerEvent,
+  WorkspaceInfo,
+} from "@workspace/shared";
 import { WorkspaceSocket, type JoinCredentials } from "../ws";
 
 /**
@@ -21,8 +28,10 @@ export function useConnection(
   const [self, setSelf] = useState<Participant | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
+  const [channelInfos, setChannelInfos] = useState<ChannelInfo[]>([]);
   const [archivedChannels, setArchivedChannels] = useState<string[]>([]);
   const [pinnedChannels, setPinnedChannels] = useState<string[]>([]);
+  const [channelSections, setChannelSections] = useState<ChannelSection[]>([]);
   const [demoChannels, setDemoChannels] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
 
@@ -37,8 +46,10 @@ export function useConnection(
           setSelf(event.self);
           setParticipants(event.participants);
           setChannels(event.channels);
+          setChannelInfos(event.channelInfos ?? event.channels.map((name) => ({ id: name, name, sectionId: null })));
           setArchivedChannels(event.archivedChannels ?? []);
           setPinnedChannels(event.pinnedChannels ?? []);
+          setChannelSections(event.channelSections ?? []);
           setDemoChannels(event.demoChannels);
           setConnected(true);
           break;
@@ -49,9 +60,17 @@ export function useConnection(
           setChannels((prev) =>
             prev.includes(event.channel) ? prev : [...prev, event.channel],
           );
+          setChannelInfos((prev) =>
+            prev.some((c) => c.name === event.channel)
+              ? prev
+              : [...prev, { id: event.channelInfo.id, name: event.channel, sectionId: event.channelInfo.sectionId ?? null }],
+          );
           break;
         case "channel_renamed":
           setChannels((prev) => prev.map((c) => (c === event.oldName ? event.newName : c)));
+          setChannelInfos((prev) =>
+            prev.map((c) => (c.name === event.oldName ? { ...c, name: event.newName } : c)),
+          );
           setArchivedChannels((prev) =>
             prev.map((c) => (c === event.oldName ? event.newName : c)),
           );
@@ -85,8 +104,19 @@ export function useConnection(
           break;
         case "channel_deleted":
           setChannels((prev) => prev.filter((c) => c !== event.channel));
+          setChannelInfos((prev) => prev.filter((c) => c.name !== event.channel));
           setArchivedChannels((prev) => prev.filter((c) => c !== event.channel));
           setPinnedChannels((prev) => prev.filter((c) => c !== event.channel));
+          break;
+        case "channel_section_created":
+          setChannelSections((prev) =>
+            prev.some((section) => section.id === event.section.id) ? prev : [...prev, event.section],
+          );
+          break;
+        case "channel_moved":
+          setChannelInfos((prev) =>
+            prev.map((c) => (c.name === event.channel ? { ...c, sectionId: event.sectionId } : c)),
+          );
           break;
       }
       onEventRef.current(event);
@@ -110,8 +140,10 @@ export function useConnection(
     self,
     participants,
     channels,
+    channelInfos,
     archivedChannels,
     pinnedChannels,
+    channelSections,
     demoChannels,
     connected,
     /** Sends a frame; returns false (without throwing) when the socket isn't usable. */

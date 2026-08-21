@@ -236,7 +236,7 @@ describe("channels on the websocket", async () => {
     assert.equal(res.status, 201);
     const frame = await human.next((e) => e.type === "channel_created");
     assert.equal(frame.channel, "design");
-    assert.deepEqual(frame.channelInfo, { id: frame.channelInfo.id, name: "design" });
+    assert.deepEqual(frame.channelInfo, { id: frame.channelInfo.id, name: "design", sectionId: null });
 
     // Messages to the new channel now land with the stable id.
     human.ws.send(JSON.stringify({ type: "message", content: "hi", channel: "design" }));
@@ -284,6 +284,117 @@ describe("channels on the websocket", async () => {
     });
     const deleted = await human.next((e) => e.type === "channel_deleted");
     assert.deepEqual(deleted, { type: "channel_deleted", channel: "designs" });
+
+    await env.close();
+  });
+
+  test("welcome includes an empty channelSections list by default", async () => {
+    const env = await createWsEnv();
+    const human = await env.connect("dana", "human");
+    assert.deepEqual(human.welcome.channelSections, []);
+    assert.equal(human.welcome.channelInfos[0].sectionId, null);
+    await env.close();
+  });
+});
+
+describe("channel sections over the API", async () => {
+  const env = await createEnv();
+  const human = await env.actor("human", "dana");
+  const agent = await env.actor("agent", "noodle");
+  after(() => env.close());
+
+  test("human create → 201 and ungrouped channels stay in Rooms", async () => {
+    const res = await env.api("POST", "/api/channel-sections", human.token, { name: "Notes" });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.section.name, "notes");
+    assert.ok(res.body.section.id);
+    const listed = await env.channels.listSections();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].name, "notes");
+    const general = await env.channels.get("general");
+    assert.equal(general?.sectionId, null);
+  });
+
+  test("duplicate section name → 409, and rooms is reserved", async () => {
+    const dup = await env.api("POST", "/api/channel-sections", human.token, { name: "NOTES" });
+    assert.equal(dup.status, 409);
+    assert.equal(dup.body.error, "SECTION_EXISTS");
+    const reserved = await env.api("POST", "/api/channel-sections", human.token, { name: "rooms" });
+    assert.equal(reserved.status, 409);
+    assert.equal(reserved.body.error, "SECTION_EXISTS");
+  });
+
+  test("agent cannot create a section", async () => {
+    const res = await env.api("POST", "/api/channel-sections", agent.token, { name: "secret" });
+    assert.equal(res.status, 403);
+  });
+
+  test("move a channel into a section and back to Rooms", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "scratch" });
+    const sections = await env.channels.listSections();
+    const notes = sections.find((section) => section.name === "notes")!;
+    const moved = await env.api("PATCH", "/api/channels/scratch", human.token, { sectionId: notes.id });
+    assert.equal(moved.status, 200);
+    assert.equal((await env.channels.get("scratch"))?.sectionId, notes.id);
+
+    const back = await env.api("PATCH", "/api/channels/scratch", human.token, { sectionId: null });
+    assert.equal(back.status, 200);
+    assert.equal((await env.channels.get("scratch"))?.sectionId, null);
+  });
+
+  test("create a channel already inside a section", async () => {
+    const sections = await env.channels.listSections();
+    const notes = sections.find((section) => section.name === "notes")!;
+    const res = await env.api("POST", "/api/channels", human.token, {
+      name: "inside-notes",
+      sectionId: notes.id,
+    });
+    assert.equal(res.status, 201);
+    assert.equal((await env.channels.get("inside-notes"))?.sectionId, notes.id);
+  });
+
+  test("unknown section → 404", async () => {
+    await env.api("POST", "/api/channels", human.token, { name: "orphan" });
+    const res = await env.api("PATCH", "/api/channels/orphan", human.token, {
+      sectionId: "00000000-0000-0000-0000-000000000000",
+    });
+    assert.equal(res.status, 404);
+    assert.equal(res.body.error, "NOT_FOUND");
+  });
+});
+
+describe("channel sections on the websocket", async () => {
+  test("create and move fan out to connected clients", async () => {
+    const env = await createWsEnv();
+    const human = await env.connect("dana", "human");
+    await fetch(`${env.baseUrl}/api/channels`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${human.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "scratch" }),
+    });
+    await human.next((e) => e.type === "channel_created");
+
+    const created = await fetch(`${env.baseUrl}/api/channel-sections`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${human.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "notes" }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as { section: { id: string; name: string } };
+    const sectionFrame = await human.next((e) => e.type === "channel_section_created");
+    assert.deepEqual(sectionFrame.section, createdBody.section);
+
+    await fetch(`${env.baseUrl}/api/channels/scratch`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${human.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sectionId: createdBody.section.id }),
+    });
+    const moved = await human.next((e) => e.type === "channel_moved");
+    assert.deepEqual(moved, {
+      type: "channel_moved",
+      channel: "scratch",
+      sectionId: createdBody.section.id,
+    });
 
     await env.close();
   });

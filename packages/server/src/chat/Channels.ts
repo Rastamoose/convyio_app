@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { Actor, ChannelInfo } from "@workspace/shared";
+import type { Actor, ChannelInfo, ChannelSection } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
 import type { WorkspaceDb } from "../db";
 
 const NAME_PATTERN = /^[a-z0-9-]{1,32}$/;
+const SECTION_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const MAX_CHANNELS = 100;
+const MAX_SECTIONS = 40;
 
 /**
  * Owns the set of chat channels: seeds defaults, validates names, records
@@ -18,6 +20,8 @@ export class Channels {
   onArchived: ((name: string, archived: boolean) => void) | null = null;
   onPinned: ((name: string, pinned: boolean) => void) | null = null;
   onDeleted: ((name: string) => void) | null = null;
+  onSectionCreated: ((section: ChannelSection) => void) | null = null;
+  onMoved: ((name: string, sectionId: string | null) => void) | null = null;
 
   constructor(private store: WorkspaceDb) {}
 
@@ -40,12 +44,22 @@ export class Channels {
 
   /** Active channels with stable ids, in the same display order as list(). */
   async listInfo(): Promise<ChannelInfo[]> {
-    return this.store.sql<ChannelInfo[]>`
-      SELECT id, name FROM channels
+    const rows = await this.store.sql<{ id: string; name: string; section_id: string | null }[]>`
+      SELECT id, name, section_id FROM channels
       WHERE workspace_id = ${this.store.workspaceId} AND archived_at IS NULL
       ORDER BY pinned_at IS NULL ASC, pinned_at ASC,
                name = 'general' DESC, created_at ASC, seq ASC
     `;
+    return rows.map(toChannelInfo);
+  }
+
+  async listSections(): Promise<ChannelSection[]> {
+    const rows = await this.store.sql<{ id: string; name: string }[]>`
+      SELECT id, name FROM channel_sections
+      WHERE workspace_id = ${this.store.workspaceId}
+      ORDER BY created_at ASC, seq ASC
+    `;
+    return rows;
   }
 
   /** Archived channel names, most recently archived first. */
@@ -69,19 +83,19 @@ export class Channels {
   }
 
   async get(name: string): Promise<ChannelInfo | null> {
-    const [channel] = await this.store.sql<ChannelInfo[]>`
-      SELECT id, name FROM channels
+    const [channel] = await this.store.sql<{ id: string; name: string; section_id: string | null }[]>`
+      SELECT id, name, section_id FROM channels
       WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
     `;
-    return channel ?? null;
+    return channel ? toChannelInfo(channel) : null;
   }
 
   async getById(id: string): Promise<ChannelInfo | null> {
-    const [channel] = await this.store.sql<ChannelInfo[]>`
-      SELECT id, name FROM channels
+    const [channel] = await this.store.sql<{ id: string; name: string; section_id: string | null }[]>`
+      SELECT id, name, section_id FROM channels
       WHERE workspace_id = ${this.store.workspaceId} AND id = ${id}
     `;
-    return channel ?? null;
+    return channel ? toChannelInfo(channel) : null;
   }
 
   async resolve(idOrName?: string | null): Promise<ChannelInfo | null> {
@@ -99,7 +113,7 @@ export class Channels {
   }
 
   /** Normalize and validate a requested name, record it, and fan out. */
-  async create(actor: Actor, rawName: string): Promise<ChannelInfo> {
+  async create(actor: Actor, rawName: string, sectionId: string | null = null): Promise<ChannelInfo> {
     this.requireHuman(actor);
     const name = this.normalize(rawName);
     if (await this.exists(name)) {
@@ -111,13 +125,75 @@ export class Channels {
     if (c >= MAX_CHANNELS) {
       throw new ApiError(409, "CHANNEL_LIMIT", `channel cap of ${MAX_CHANNELS} reached`);
     }
-    const channel = { id: randomUUID(), name };
+    if (sectionId !== null) {
+      const [section] = await this.store.sql<{ id: string }[]>`
+        SELECT id FROM channel_sections
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${sectionId}
+      `;
+      if (!section) throw new ApiError(404, "NOT_FOUND", `no such section: ${sectionId}`);
+    }
+    const channel: ChannelInfo = { id: randomUUID(), name, sectionId };
     await this.store.sql`
-      INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at)
-      VALUES (${channel.id}, ${this.store.workspaceId}, ${channel.name}, ${actor.id}, false, ${Date.now()})
+      INSERT INTO channels (id, workspace_id, name, created_by, is_demo, created_at, section_id)
+      VALUES (${channel.id}, ${this.store.workspaceId}, ${channel.name}, ${actor.id}, false, ${Date.now()}, ${sectionId})
     `;
     this.onCreated?.(channel);
     return channel;
+  }
+
+  async createSection(actor: Actor, rawName: string): Promise<ChannelSection> {
+    this.requireHuman(actor);
+    const name = this.normalizeSection(rawName);
+    if (name === "rooms") {
+      throw new ApiError(409, "SECTION_EXISTS", "rooms is the default section");
+    }
+    const [existing] = await this.store.sql<{ id: string }[]>`
+      SELECT id FROM channel_sections
+      WHERE workspace_id = ${this.store.workspaceId} AND lower(name) = ${name}
+    `;
+    if (existing) {
+      throw new ApiError(409, "SECTION_EXISTS", `section ${name} already exists`);
+    }
+    const [{ c }] = await this.store.sql<{ c: number }[]>`
+      SELECT count(*)::int AS c FROM channel_sections WHERE workspace_id = ${this.store.workspaceId}
+    `;
+    if (c >= MAX_SECTIONS) {
+      throw new ApiError(409, "SECTION_LIMIT", `section cap of ${MAX_SECTIONS} reached`);
+    }
+    const section = { id: randomUUID(), name };
+    try {
+      await this.store.sql`
+        INSERT INTO channel_sections (id, workspace_id, name, created_by, created_at)
+        VALUES (${section.id}, ${this.store.workspaceId}, ${section.name}, ${actor.id}, ${Date.now()})
+      `;
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new ApiError(409, "SECTION_EXISTS", `section ${name} already exists`);
+      }
+      throw err;
+    }
+    this.onSectionCreated?.(section);
+    return section;
+  }
+
+  /** Move an active channel into a custom section, or back to Rooms (`null`). */
+  async move(actor: Actor, name: string, sectionId: string | null): Promise<void> {
+    this.requireHuman(actor);
+    if (!(await this.exists(name))) {
+      throw new ApiError(404, "NOT_FOUND", `no such channel: ${name}`);
+    }
+    if (sectionId !== null) {
+      const [section] = await this.store.sql<{ id: string }[]>`
+        SELECT id FROM channel_sections
+        WHERE workspace_id = ${this.store.workspaceId} AND id = ${sectionId}
+      `;
+      if (!section) throw new ApiError(404, "NOT_FOUND", `no such section: ${sectionId}`);
+    }
+    await this.store.sql`
+      UPDATE channels SET section_id = ${sectionId}
+      WHERE workspace_id = ${this.store.workspaceId} AND name = ${name}
+    `;
+    this.onMoved?.(name, sectionId);
   }
 
   /** Rename a channel; messages keep pointing at it under the new name.
@@ -202,4 +278,24 @@ export class Channels {
     }
     return name;
   }
+
+  private normalizeSection(rawName: string): string {
+    const name = rawName.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!SECTION_NAME_PATTERN.test(name)) {
+      throw new ApiError(
+        400,
+        "BAD_SECTION_NAME",
+        "section names are 1-32 characters of a-z, 0-9, and -, starting with a letter or digit",
+      );
+    }
+    return name;
+  }
+}
+
+function toChannelInfo(row: { id: string; name: string; section_id: string | null }): ChannelInfo {
+  return { id: row.id, name: row.name, sectionId: row.section_id };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code: string }).code === "23505";
 }

@@ -3,7 +3,7 @@ import type { ChatMessage, Participant, TraceChunk } from "./participant";
 import type { AuthzDenyCode, BoardEventEnvelope } from "./board";
 import type { AgentInvite } from "./agent";
 import type { AgentConversation, AgentWorkAssignment, InteractionRequest } from "./agentWork";
-import type { ChannelInfo, ThreadEvent } from "./thread";
+import type { ChannelInfo, ChannelSection, ThreadEvent } from "./thread";
 import type { ContextCursor, PlanEventEnvelope } from "./context";
 import type { Project, ProjectAssignment, ProjectAccessRequest } from "./project";
 import type { ToolExecution, ToolmanNodeSummary } from "./toolman";
@@ -525,6 +525,8 @@ export interface WelcomeEvent {
   archivedChannels: string[];
   /** Subset of `channels` currently pinned to the top of the list. */
   pinnedChannels: string[];
+  /** Custom sidebar sections, in creation order. Ungrouped channels stay in Rooms. */
+  channelSections: ChannelSection[];
   /** Channels that play a scripted demo when demo_start names them. */
   demoChannels: string[];
   /** Bearer token for the HTTP API, bound to this actor identity. */
@@ -726,6 +728,18 @@ export interface ChannelDeletedEvent {
   channel: string;
 }
 
+export interface ChannelSectionCreatedEvent {
+  type: "channel_section_created";
+  section: ChannelSection;
+}
+
+/** A channel moved into a custom section, or back to Rooms (`sectionId` null). */
+export interface ChannelMovedEvent {
+  type: "channel_moved";
+  channel: string;
+  sectionId: string | null;
+}
+
 export interface InterruptBroadcast {
   type: "interrupt";
   authorName: string;
@@ -761,6 +775,8 @@ export type ServerEvent =
   | ChannelArchivedEvent
   | ChannelPinnedEvent
   | ChannelDeletedEvent
+  | ChannelSectionCreatedEvent
+  | ChannelMovedEvent
   | InterruptBroadcast
   | RunEndBroadcast
   | ActionResultEvent

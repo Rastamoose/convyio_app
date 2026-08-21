@@ -91,12 +91,17 @@ const createBodySchema = z.object({
 const approveBodySchema = z.object({ owner: z.string().min(1).max(128).optional() });
 const completeBodySchema = z.object({ evidence: z.string().min(1).max(4000).optional() });
 
-const channelBodySchema = z.object({ name: z.string().min(1).max(64) });
+const channelBodySchema = z.object({
+  name: z.string().min(1).max(64),
+  sectionId: z.string().min(1).max(64).nullable().optional(),
+});
 const channelPatchBodySchema = z.object({
   name: z.string().min(1).max(64).optional(),
   archived: z.boolean().optional(),
   pinned: z.boolean().optional(),
+  sectionId: z.string().min(1).max(64).nullable().optional(),
 });
+const channelSectionBodySchema = z.object({ name: z.string().min(1).max(64) });
 
 // Bounds only; the real username rules (and their error codes) live in Auth.
 const usernameBodySchema = z.object({ username: z.string().max(200) });
@@ -792,11 +797,18 @@ async function route(
   // POST /api/channels — any signed-in human can add a channel.
   if (parts[1] === "channels" && parts.length === 2 && method === "POST") {
     const body = channelBodySchema.parse(await readBody(req));
-    const channel = await channels.create(actor, body.name);
+    const channel = await channels.create(actor, body.name, body.sectionId ?? null);
     return json(res, 201, { channel: { name: channel.name } });
   }
 
-  // PATCH /api/channels/:name — rename and/or archive/pin, one field per call.
+  // POST /api/channel-sections — create a shared sidebar section.
+  if (parts[1] === "channel-sections" && parts.length === 2 && method === "POST") {
+    const body = channelSectionBodySchema.parse(await readBody(req));
+    const section = await channels.createSection(actor, body.name);
+    return json(res, 201, { section });
+  }
+
+  // PATCH /api/channels/:name — rename and/or archive/pin/move, one field per call.
   if (parts[1] === "channels" && parts.length === 3 && method === "PATCH") {
     const name = decodeURIComponent(parts[2]);
     const body = channelPatchBodySchema.parse(await readBody(req));
@@ -804,6 +816,7 @@ async function route(
     if (body.name !== undefined) current = await channels.rename(actor, current, body.name);
     if (body.archived !== undefined) await channels.setArchived(actor, current, body.archived);
     if (body.pinned !== undefined) await channels.setPinned(actor, current, body.pinned);
+    if (body.sectionId !== undefined) await channels.move(actor, current, body.sectionId);
     return json(res, 200, { channel: { name: current } });
   }
 

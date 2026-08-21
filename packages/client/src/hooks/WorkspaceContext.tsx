@@ -6,6 +6,8 @@ import type {
   AgentProvider,
   AgentSummary,
   Attachment,
+  ChannelInfo,
+  ChannelSection,
   BoardItem,
   BoardItemEvent,
   BoardPlan,
@@ -41,8 +43,10 @@ export interface WorkspaceState {
   self: Participant | null;
   participants: Participant[];
   channels: string[];
+  channelInfos: ChannelInfo[];
   archivedChannels: string[];
   pinnedChannels: string[];
+  channelSections: ChannelSection[];
   demoChannels: string[];
   connected: boolean;
   messages: LocalMessage[];
@@ -97,14 +101,18 @@ export interface WorkspaceState {
   signOut: (() => void) | null;
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
-  startDemo: (channel: string) => void;
+  startDemo: (channel: string, mode?: "walkthrough" | "live") => void;
+  demoControl: (channel: string, action: "pause" | "resume" | "skip" | "replay") => void;
+  demoProgress: { channel: string; stage: string; message: string; paused: boolean } | null;
   /** Resolves to the created channel's normalized name, or null on failure. */
-  createChannel: (name: string) => Promise<string | null>;
+  createChannel: (name: string, sectionId?: string | null) => Promise<string | null>;
   /** Resolves to the channel's new normalized name, or null on failure. */
   renameChannel: (name: string, newName: string) => Promise<string | null>;
   archiveChannel: (name: string, archived: boolean) => Promise<boolean>;
   pinChannel: (name: string, pinned: boolean) => Promise<boolean>;
   deleteChannel: (name: string) => Promise<boolean>;
+  createChannelSection: (name: string) => Promise<ChannelSection | null>;
+  moveChannel: (name: string, sectionId: string | null) => Promise<boolean>;
   /** Resolves true when the item landed; false = failure (toast already shown). */
   createBoardItem: (draft: TicketDraft) => Promise<boolean>;
   createPlan: (draft: PlanDraft) => Promise<boolean>;
@@ -182,6 +190,7 @@ export function WorkspaceProvider({
   const chat = useChatMessages();
   const traces = useAgentTraces();
   const [executions, setExecutions] = useState<ToolExecution[]>([]);
+  const [demoProgress, setDemoProgress] = useState<{ channel: string; stage: string; message: string; paused: boolean } | null>(null);
   const interactions = useInteractions();
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
@@ -255,6 +264,9 @@ export function WorkspaceProvider({
           return [...next, event.execution];
         });
         break;
+      case "demo_progress":
+        setDemoProgress({ channel: event.channel, stage: event.stage, message: event.message, paused: event.paused });
+        break;
       case "interaction_request":
         interactions.open(event.request);
         break;
@@ -307,10 +319,10 @@ export function WorkspaceProvider({
     : "convyio";
   const unreads = useUnreads(chat.messages, credentials.workspaceId, baseTitle);
 
-  const createChannel = async (name: string): Promise<string | null> => {
+  const createChannel = async (name: string, sectionId?: string | null): Promise<string | null> => {
     const request = api.fetch("/api/channels", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...(sectionId ? { sectionId } : {}) }),
     });
     if (!request) return null;
     try {
@@ -331,7 +343,7 @@ export function WorkspaceProvider({
    *  request/error shape as createChannel, only the verb+body differ. */
   const patchChannel = async (
     name: string,
-    body: { name?: string; archived?: boolean; pinned?: boolean },
+    body: { name?: string; archived?: boolean; pinned?: boolean; sectionId?: string | null },
     verb: string,
   ): Promise<string | null> => {
     const request = api.fetch(`/api/channels/${encodeURIComponent(name)}`, {
@@ -359,6 +371,28 @@ export function WorkspaceProvider({
     (await patchChannel(name, { archived }, archived ? "archive" : "unarchive")) !== null;
   const pinChannel = async (name: string, pinned: boolean): Promise<boolean> =>
     (await patchChannel(name, { pinned }, pinned ? "pin" : "unpin")) !== null;
+  const moveChannel = async (name: string, sectionId: string | null): Promise<boolean> =>
+    (await patchChannel(name, { sectionId }, "move")) !== null;
+
+  const createChannelSection = async (name: string): Promise<ChannelSection | null> => {
+    const request = api.fetch("/api/channel-sections", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    if (!request) return null;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not create the section: ${await api.errorMessage(res)}`);
+        return null;
+      }
+      const data = (await res.json()) as { section: ChannelSection };
+      return data.section;
+    } catch (err) {
+      pushToast(`Could not create the section: ${String(err)}`);
+      return null;
+    }
+  };
 
   const deleteChannel = async (name: string): Promise<boolean> => {
     const request = api.fetch(`/api/channels/${encodeURIComponent(name)}`, {
@@ -550,14 +584,17 @@ export function WorkspaceProvider({
     self: connection.self,
     participants: connection.participants,
     channels: connection.channels,
+    channelInfos: connection.channelInfos,
     archivedChannels: connection.archivedChannels,
     pinnedChannels: connection.pinnedChannels,
+    channelSections: connection.channelSections,
     demoChannels: connection.demoChannels,
     connected: connection.connected,
     messages: chat.messages,
     activeRuns: traces.activeRuns,
     executions,
     runDurations: traces.runDurations,
+    demoProgress,
     board: board.items,
     plans: board.plans,
     context: board.context,
@@ -632,12 +669,15 @@ export function WorkspaceProvider({
     clearMessages: () => connection.send({ type: "clear" }),
     interrupt: (target, content) =>
       connection.send({ type: "interrupt", target, content }),
-    startDemo: (channel) => connection.send({ type: "demo_start", channel }),
+    startDemo: (channel, mode) => connection.send({ type: "demo_start", channel, mode }),
+    demoControl: (channel, action) => connection.send({ type: "demo_control", channel, action }),
     createChannel,
     renameChannel,
     archiveChannel,
     pinChannel,
     deleteChannel,
+    createChannelSection,
+    moveChannel,
     createBoardItem: board.createItem,
     createPlan: board.createPlan,
     addPlanConstraint: board.addPlanConstraint,

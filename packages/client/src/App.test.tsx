@@ -67,6 +67,7 @@ vi.mock("./ws", () => {
           channels: [...channelsSeed],
           archivedChannels: [],
           pinnedChannels: [],
+          channelSections: [],
           demoChannels: [],
           token: "tok-1",
           apiUrl: "http://api.test",

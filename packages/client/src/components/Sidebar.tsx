@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { BoardItem, Participant } from "@workspace/shared";
+import type { BoardItem, ChannelSection, Participant } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { presenceDot, presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
@@ -36,6 +36,35 @@ function ContextMenuItem({
   );
 }
 
+/** Small chevron after a label. Collapsible sections point right when closed
+ *  (default); dropdown menus flip up when open (`flip`). */
+export function ChevronIcon({
+  open,
+  flip,
+  className,
+}: {
+  open: boolean;
+  flip?: boolean;
+  className?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`${className ?? ""} transition-transform ${
+        flip ? (open ? "rotate-180" : "") : open ? "" : "-rotate-90"
+      }`}
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 /** Right-click menu for a room row, positioned at the cursor. */
 function RoomContextMenu({
   x,
@@ -44,10 +73,12 @@ function RoomContextMenu({
   pinned,
   archived,
   confirmingDelete,
+  moveTargets,
   onMarkRead,
   onTogglePin,
   onRename,
   onToggleArchive,
+  onMove,
   onDelete,
   onClose,
 }: {
@@ -57,15 +88,18 @@ function RoomContextMenu({
   pinned: boolean;
   archived: boolean;
   confirmingDelete: boolean;
+  moveTargets: { id: string | null; name: string }[];
   onMarkRead: () => void;
   onTogglePin: () => void;
   onRename: () => void;
   onToggleArchive: () => void;
+  onMove: (sectionId: string | null) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: y, left: x });
+  const [moveOpen, setMoveOpen] = useState(false);
   // "general" is the fixed default channel messages fall back to; the server
   // refuses to rename/archive/delete it, so those actions aren't offered.
   const isGeneral = channel === "general";
@@ -118,6 +152,25 @@ function RoomContextMenu({
           onClose();
         }}
       />
+      {moveTargets.length > 0 && (
+        <>
+          <ContextMenuItem
+            label={moveOpen ? "Move ▾" : "Move ▸"}
+            onClick={() => setMoveOpen((open) => !open)}
+          />
+          {moveOpen &&
+            moveTargets.map((target) => (
+              <ContextMenuItem
+                key={target.id ?? "rooms"}
+                label={target.name}
+                onClick={() => {
+                  onMove(target.id);
+                  onClose();
+                }}
+              />
+            ))}
+        </>
+      )}
       {!isGeneral && (
         <ContextMenuItem
           label="Rename"
@@ -324,15 +377,19 @@ export function Sidebar({
     participants,
     self,
     channels,
+    channelInfos,
     archivedChannels,
     pinnedChannels,
+    channelSections,
     setStatus,
     signOut,
     createChannel,
+    createChannelSection,
     renameChannel,
     archiveChannel,
     pinChannel,
     deleteChannel,
+    moveChannel,
     unreadCount,
     markRead,
     agentInvites,
@@ -345,9 +402,13 @@ export function Sidebar({
     participantId: string;
     anchor: DOMRect;
   } | null>(null);
-  const [creatingRoom, setCreatingRoom] = useState(false);
+  const [creatingRoomFor, setCreatingRoomFor] = useState<string | null>(null);
   const [roomDraft, setRoomDraft] = useState("");
+  const [creatingSection, setCreatingSection] = useState(false);
+  const [sectionDraft, setSectionDraft] = useState("");
   const [roomsOpen, setRoomsOpen] = useState(true);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     channel: string;
@@ -367,10 +428,30 @@ export function Sidebar({
   const [confirmDeleteChannel, setConfirmDeleteChannel] = useState<string | null>(null);
   const deleteTimerRef = useRef<number | null>(null);
 
-  // Pinned rooms bubble to the top; otherwise the server's display order holds.
-  const sortedChannels = [...channels].sort(
-    (a, b) => Number(pinnedChannels.includes(b)) - Number(pinnedChannels.includes(a)),
+  // Pinned rooms bubble to the top of their section; otherwise the server's order holds.
+  const sortInSection = (names: string[]) =>
+    [...names].sort((a, b) => Number(pinnedChannels.includes(b)) - Number(pinnedChannels.includes(a)));
+  const knownIds = new Set(channelSections.map((section) => section.id));
+  const roomsChannels = sortInSection(
+    channels.filter((name) => {
+      const sectionId = channelInfos.find((info) => info.name === name)?.sectionId ?? null;
+      return !sectionId || !knownIds.has(sectionId);
+    }),
   );
+  const channelsBySection = (section: ChannelSection) =>
+    sortInSection(
+      channels.filter((name) => channelInfos.find((info) => info.name === name)?.sectionId === section.id),
+    );
+  const isSectionOpen = (id: string) => openSections[id] !== false;
+  const moveTargetsFor = (name: string) => {
+    const current = channelInfos.find((info) => info.name === name)?.sectionId ?? null;
+    const targets: { id: string | null; name: string }[] = [];
+    if (current !== null) targets.push({ id: null, name: "Rooms" });
+    for (const section of channelSections) {
+      if (section.id !== current) targets.push({ id: section.id, name: section.name });
+    }
+    return targets;
+  };
 
   const openRoomMenu = (e: React.MouseEvent, name: string) => {
     e.preventDefault();
@@ -432,13 +513,25 @@ export function Sidebar({
     }
     const unreads = unreadCount(c);
     return (
-      <button
+      <div
         key={c}
         role="tab"
+        tabIndex={0}
+        draggable
         aria-selected={c === channel}
         onClick={() => onSelectChannel(c)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelectChannel(c);
+          }
+        }}
         onContextMenu={(e) => openRoomMenu(e, c)}
-        className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm select-none ${
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", c);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        className={`mb-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-[7px] text-left text-sm select-none ${
           c === channel || contextMenu?.channel === c
             ? "bg-input font-semibold text-body"
             : unreads > 0
@@ -456,7 +549,7 @@ export function Sidebar({
             {unreads > 99 ? "99+" : unreads}
           </span>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -487,18 +580,85 @@ export function Sidebar({
 
   const submitRoom = async () => {
     const name = roomDraft.trim();
+    const sectionId = creatingRoomFor === "rooms" ? null : creatingRoomFor;
     if (!name) {
-      setCreatingRoom(false);
+      setCreatingRoomFor(null);
       return;
     }
-    const created = await createChannel(name);
+    const created = await createChannel(name, sectionId);
     // On failure the input stays open with the draft; the toast has the error.
     if (created) {
-      setCreatingRoom(false);
+      setCreatingRoomFor(null);
       setRoomDraft("");
       onSelectChannel(created);
     }
   };
+
+  const roomDraftInput = (sectionId: string) =>
+    creatingRoomFor === sectionId ? (
+      <input
+        autoFocus
+        aria-label={sectionId === "rooms" ? "New room name" : `New room name in ${channelSections.find((section) => section.id === sectionId)?.name ?? "section"}`}
+        value={roomDraft}
+        onChange={(e) => setRoomDraft(e.target.value)}
+        // Blur closes but keeps the draft; Escape closes and discards it.
+        onBlur={() => setCreatingRoomFor(null)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setRoomDraft("");
+            setCreatingRoomFor(null);
+          }
+          if (e.key === "Enter") void submitRoom();
+        }}
+        maxLength={32}
+        placeholder="new-room"
+        className="mb-0.5 w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
+      />
+    ) : null;
+
+  const submitSection = async () => {
+    const name = sectionDraft.trim();
+    if (!name) {
+      setCreatingSection(false);
+      return;
+    }
+    const created = await createChannelSection(name);
+    if (created) {
+      setCreatingSection(false);
+      setSectionDraft("");
+      setOpenSections((prev) => ({ ...prev, [created.id]: true }));
+    }
+  };
+
+  const dropOnSection = (sectionId: string | null) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(null);
+    const name = e.dataTransfer.getData("text/plain");
+    if (!name) return;
+    const current = channelInfos.find((info) => info.name === name)?.sectionId ?? null;
+    if (current === sectionId) return;
+    void moveChannel(name, sectionId);
+  };
+
+  const allowDrop = (sectionId: string | null) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget(sectionId ?? "rooms");
+  };
+
+  const leaveDrop = (sectionId: string | null) => (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDropTarget((current) => (current === (sectionId ?? "rooms") ? null : current));
+  };
+
+  const sectionDropProps = (sectionId: string | null) => ({
+    onDragOver: allowDrop(sectionId),
+    onDragEnter: allowDrop(sectionId),
+    onDragLeave: leaveDrop(sectionId),
+    onDrop: dropOnSection(sectionId),
+  });
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-divider">
@@ -544,58 +704,109 @@ export function Sidebar({
         )}
       </section>
 
-      {/* Rooms */}
+      {/* Rooms and custom sections */}
       <section className="min-h-0 flex-1 overflow-y-auto border-t border-divider px-2 pt-3">
-        <div className="mb-1 flex items-center justify-between px-2">
+        <div className="group mb-1 flex items-center justify-between px-2">
           <button
             onClick={() => setRoomsOpen((o) => !o)}
-            className="flex cursor-pointer items-center gap-1 text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
+            className="flex cursor-pointer items-center gap-0.5 text-[11px] font-semibold tracking-wider text-muted uppercase select-none hover:text-body"
           >
-            <span className="w-2.5 shrink-0">{roomsOpen ? "▾" : "▸"}</span>
             Rooms
+            <ChevronIcon open={roomsOpen} className="h-3 w-3" />
           </button>
           <button
             aria-label="Create a room"
-            onClick={() => setCreatingRoom(true)}
-            className="cursor-pointer rounded px-1 text-sm leading-none text-muted select-none hover:text-body"
+            onClick={() => {
+              setRoomsOpen(true);
+              setCreatingRoomFor("rooms");
+            }}
+            className="cursor-pointer rounded px-1 text-sm leading-none text-muted opacity-0 transition-opacity select-none group-hover:opacity-100 hover:text-body focus-visible:opacity-100"
           >
             +
           </button>
         </div>
-        {creatingRoom && (
-          <input
-            autoFocus
-            aria-label="New room name"
-            value={roomDraft}
-            onChange={(e) => setRoomDraft(e.target.value)}
-            // Blur closes but keeps the draft; Escape closes and discards it.
-            onBlur={() => setCreatingRoom(false)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setRoomDraft("");
-                setCreatingRoom(false);
-              }
-              if (e.key === "Enter") void submitRoom();
-            }}
-            maxLength={32}
-            placeholder="new-room"
-            className="mb-0.5 w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
-          />
-        )}
+        {roomDraftInput("rooms")}
+        <div
+          {...sectionDropProps(null)}
+          className={`rounded-md ${dropTarget === "rooms" ? "bg-input" : ""}`}
+        >
         {roomsOpen && (
-          <div role="tablist" aria-label="Rooms">
-            {sortedChannels.map(renderRoom)}
+          <div role="tablist" aria-label="Rooms" className="min-h-6">
+            {roomsChannels.map(renderRoom)}
           </div>
         )}
+        </div>
+        {channelSections.map((section) => (
+          <div
+            key={section.id}
+            className={`mt-5 rounded-md ${dropTarget === section.id ? "bg-input" : ""}`}
+            {...sectionDropProps(section.id)}
+          >
+            <div className="group mb-1 flex items-center justify-between px-2">
+              <button
+                aria-label={`${section.name} section`}
+                onClick={() =>
+                  setOpenSections((prev) => ({ ...prev, [section.id]: !isSectionOpen(section.id) }))
+                }
+                className="flex cursor-pointer items-center gap-0.5 text-[11px] font-semibold tracking-wider text-muted uppercase select-none hover:text-body"
+              >
+                {section.name}
+                <ChevronIcon open={isSectionOpen(section.id)} className="h-3 w-3" />
+              </button>
+              <button
+                aria-label={`Create a room in ${section.name}`}
+                onClick={() => {
+                  setOpenSections((prev) => ({ ...prev, [section.id]: true }));
+                  setCreatingRoomFor(section.id);
+                }}
+                className="cursor-pointer rounded px-1 text-sm leading-none text-muted opacity-0 transition-opacity select-none group-hover:opacity-100 hover:text-body focus-visible:opacity-100"
+              >
+                +
+              </button>
+            </div>
+            {roomDraftInput(section.id)}
+            {isSectionOpen(section.id) && (
+              <div role="tablist" aria-label={section.name} className="min-h-6">
+                {channelsBySection(section).map(renderRoom)}
+              </div>
+            )}
+          </div>
+        ))}
+        {creatingSection && (
+          <input
+            autoFocus
+            aria-label="New section name"
+            value={sectionDraft}
+            onChange={(e) => setSectionDraft(e.target.value)}
+            onBlur={() => setCreatingSection(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSectionDraft("");
+                setCreatingSection(false);
+              }
+              if (e.key === "Enter") void submitSection();
+            }}
+            maxLength={32}
+            placeholder="new-section"
+            className="mt-2 mb-0.5 w-full rounded-md bg-input px-2 py-1.5 text-sm text-body outline-none placeholder:text-faint"
+          />
+        )}
+        <button
+          aria-label="Create a section"
+          onClick={() => setCreatingSection(true)}
+          className="mt-5 mb-1 flex w-full cursor-pointer items-center gap-1.5 px-2 text-[11px] font-semibold tracking-wider text-muted uppercase select-none hover:text-body"
+        >
+          + Add section
+        </button>
 
         {archivedChannels.length > 0 && (
           <>
             <button
               onClick={() => setArchivedOpen((o) => !o)}
-              className="mt-2 mb-1 flex items-center gap-1 px-2 text-[10px] font-bold tracking-wider text-muted uppercase select-none hover:text-body"
+              className="mt-5 mb-1 flex items-center gap-0.5 px-2 text-[11px] font-semibold tracking-wider text-muted uppercase select-none hover:text-body"
             >
-              <span className="w-2.5 shrink-0">{archivedOpen ? "▾" : "▸"}</span>
               Archived — {archivedChannels.length}
+              <ChevronIcon open={archivedOpen} className="h-3 w-3" />
             </button>
             {archivedOpen && (
               <div role="tablist" aria-label="Archived rooms">
@@ -680,6 +891,7 @@ export function Sidebar({
           pinned={pinnedChannels.includes(contextMenu.channel)}
           archived={archivedChannels.includes(contextMenu.channel)}
           confirmingDelete={confirmDeleteChannel === contextMenu.channel}
+          moveTargets={moveTargetsFor(contextMenu.channel)}
           onMarkRead={() => markRead(contextMenu.channel)}
           onTogglePin={() =>
             void pinChannel(contextMenu.channel, !pinnedChannels.includes(contextMenu.channel))
@@ -691,6 +903,7 @@ export function Sidebar({
               !archivedChannels.includes(contextMenu.channel),
             )
           }
+          onMove={(sectionId) => void moveChannel(contextMenu.channel, sectionId)}
           onDelete={() => handleDeleteClick(contextMenu.channel)}
           onClose={() => setContextMenu(null)}
         />

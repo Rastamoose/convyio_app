@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceSummary } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
+import { ChevronIcon } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 
 export type WorkspaceView = "chat" | "board" | "projects" | "resources";
@@ -84,10 +85,14 @@ export function AppBar({
           onClick={() => setWorkspaceMenuOpen((open) => !open)}
           aria-haspopup="menu"
           aria-expanded={workspaceMenuOpen}
-          className="flex max-w-64 items-center gap-2 rounded-md px-1.5 py-0.5 text-base font-bold tracking-wider text-body uppercase hover:bg-subtle select-none"
+          className="group flex max-w-64 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-base font-bold tracking-wider text-body uppercase transition-colors select-none hover:bg-subtle"
         >
           <span className="truncate">{activeWorkspace?.name ?? workspace?.name}</span>
-          <span aria-hidden="true" className="text-xs text-muted">▾</span>
+          <ChevronIcon
+            open={workspaceMenuOpen}
+            flip
+            className="h-3 w-3 shrink-0 text-muted transition-colors group-hover:text-body"
+          />
         </button>
         {workspaceMenuOpen && (
           <div role="menu" aria-label="Switch workspace" className="elevated absolute top-full left-0 z-50 mt-1 w-64 rounded-lg p-1.5">

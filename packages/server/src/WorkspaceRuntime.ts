@@ -173,6 +173,8 @@ export class WorkspaceRuntime {
     channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
     channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
     channels.onDeleted = (name) => hub.broadcastChannelDeleted(name);
+    channels.onSectionCreated = (section) => hub.broadcastChannelSectionCreated(section);
+    channels.onMoved = (name, sectionId) => hub.broadcastChannelMoved(name, sectionId);
     await interactions.expireStale(db.workspaceId).catch((error: unknown) => {
       console.warn(
         `[workspace ${db.workspaceId}] could not expire stale permission prompts:`,

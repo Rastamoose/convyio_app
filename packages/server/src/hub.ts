@@ -14,6 +14,7 @@ import {
   type BoardEventEnvelope,
   type PlanEventEnvelope,
   type ChannelInfo,
+  type ChannelSection,
   type ChatMessage,
   type ClientEvent,
   type ConversationModeSetEvent,
@@ -248,6 +249,14 @@ export class Hub {
 
   broadcastChannelDeleted(name: string): void {
     this.broadcast({ type: "channel_deleted", channel: name });
+  }
+
+  broadcastChannelSectionCreated(section: ChannelSection): void {
+    this.broadcast({ type: "channel_section_created", section });
+  }
+
+  broadcastChannelMoved(name: string, sectionId: string | null): void {
+    this.broadcast({ type: "channel_moved", channel: name, sectionId });
   }
 
   /**
@@ -564,10 +573,11 @@ export class Hub {
     // Older messages page in via GET /api/messages.
     const channelInfos = await this.channels.listInfo();
     const channelList = channelInfos.map((channel) => channel.name);
-    const [history, archivedChannels, pinnedChannels, snapshotSeq, contextCursor] = await Promise.all([
+    const [history, archivedChannels, pinnedChannels, channelSections, snapshotSeq, contextCursor] = await Promise.all([
       this.messages.recentByChannel(channelList, DEFAULT_HISTORY_LIMIT),
       this.channels.listArchived(),
       this.channels.pinned(),
+      this.channels.listSections(),
       this.options.threadEvents
         ? this.options.threadEvents.latestSeq(this.options.workspace.id)
         : Promise.resolve(0),
@@ -585,6 +595,7 @@ export class Hub {
       channelInfos,
       archivedChannels,
       pinnedChannels,
+      channelSections,
       demoChannels: this.options.demoChannels,
       token: this.sessions.issue(
         participant.id,

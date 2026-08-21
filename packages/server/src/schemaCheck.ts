@@ -23,6 +23,8 @@ const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "workspace_members", column: "role" },
   { table: "channels" },
   { table: "channels", column: "workspace_id" },
+  { table: "channels", column: "section_id" },
+  { table: "channel_sections" },
   { table: "messages", column: "channel_id" },
   { table: "messages", column: "workspace_id" },
   { table: "message_reactions" },

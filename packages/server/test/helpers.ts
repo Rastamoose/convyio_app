@@ -351,6 +351,8 @@ export async function createWsEnv(
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
   channels.onPinned = (name, pinned) => hub.broadcastChannelPinned(name, pinned);
   channels.onDeleted = (name) => hub.broadcastChannelDeleted(name);
+  channels.onSectionCreated = (section) => hub.broadcastChannelSectionCreated(section);
+  channels.onMoved = (name, sectionId) => hub.broadcastChannelMoved(name, sectionId);
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
   const clients: WebSocket[] = [];

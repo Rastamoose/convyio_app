@@ -505,7 +505,7 @@ export class BoardService {
       if (resolved) return resolved;
     }
     if (!fallbackId) return null;
-    return { id: fallbackId, name: "general" };
+    return { id: fallbackId, name: "general", sectionId: null };
   }
 
   private async requireMember(actorId: string): Promise<void> {
