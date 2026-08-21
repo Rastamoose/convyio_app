@@ -708,6 +708,9 @@ export class Hub {
       case "interrupt":
         await this.handleInterrupt(conn, event.target, event.content);
         break;
+      case "agent_activate":
+        this.handleAgentActivate(conn, event.target, event.active);
+        break;
       case "status_set":
         participant.status = event.status;
         this.broadcastPresence();
@@ -857,6 +860,11 @@ export class Hub {
       ...(contextCursor ? { contextCursor } : {}),
       agentConfig: conn.agentProfile ?? undefined,
     });
+    // A runner that was awake before it dropped comes back awake, so a crash
+    // restart or a machine re-login is invisible instead of looking like death.
+    if (kind === "agent" && this.runnerRuntime.isActivated(participant.id)) {
+      this.send(conn, { type: "agent_activation", active: true });
+    }
     if (this.options.executions) {
       const recent = await this.options.executions.listRecent();
       for (const execution of recent) {
@@ -973,6 +981,31 @@ export class Hub {
         content,
       });
     }
+  }
+
+  /**
+   * Wake or sleep a paired runner's local harness. Starting a harness runs
+   * code with filesystem access on the creator's own machine, so this is
+   * deliberately narrower than /interrupt: only the human who created the
+   * agent may flip it, and the check reads createdBy off the target's own
+   * connection rather than anything the caller supplied.
+   */
+  private handleAgentActivate(conn: Connection, target: string, active: boolean): void {
+    const participant = conn.participant!;
+    const targetConn = [...this.connections].find((c) => c.participant?.id === target);
+    // No live connection means the machine is off or the runner was never
+    // started — there is nothing to wake, and no createdBy to authorize against.
+    if (!targetConn?.agentProfile) {
+      this.send(conn, { type: "error", error: "agent is offline" });
+      return;
+    }
+    if (participant.kind !== "human" || targetConn.agentProfile.createdBy !== participant.id) {
+      this.send(conn, { type: "error", error: "only the agent's creator can activate it" });
+      return;
+    }
+    this.runnerRuntime.setActivated(target, active);
+    this.send(targetConn, { type: "agent_activation", active });
+    this.broadcastPresence();
   }
 
   private async handleWorkClaim(conn: Connection, event: WorkClaimEvent): Promise<void> {
@@ -1637,7 +1670,7 @@ export class Hub {
       }
     }
     this.roster.removeAgent(actorId);
-    this.runnerRuntime.clear(actorId);
+    this.runnerRuntime.forget(actorId);
     this.sessions.revokeFor(
       actorId,
       this.options.authorizeJoin ? this.options.workspace.id : undefined,

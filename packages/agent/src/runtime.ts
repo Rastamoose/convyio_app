@@ -52,7 +52,8 @@ export async function runAgent(
   const socket = new AgentSocket(local.wsUrl);
   const boardClient = new BoardClient(socket);
   const bridge = local.acp ? new LocalMcpBridge() : null;
-  if (local.acp && bridge) {
+  const startBridge = async (): Promise<void> => {
+    if (!local.acp || !bridge) return;
     const listened = await bridge.listen(TOOL_DECLARATIONS);
     local.acp.setMcpServers([{
       type: "http",
@@ -60,7 +61,7 @@ export async function runAgent(
       url: listened.url,
       headers: [{ name: "Authorization", value: `Bearer ${listened.token}` }],
     }]);
-  }
+  };
   const memory = await Memory.load(local.dataDir);
   const conversationSessions = await ConversationSessions.load(local.dataDir);
   const presence = new Presence(socket, boardClient);
@@ -79,6 +80,12 @@ export async function runAgent(
   const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";
   let selfId: string | null = null;
+  // A paired runner joins asleep: connected and visible, but with no harness
+  // process, no tool bridge and no filesystem reach until its creator says so
+  // from the web. Legacy/hosted runners have no such switch and start awake.
+  let activated = configuration.mode === "legacy";
+  // Held so activation can apply the profile that arrived while asleep.
+  let latestProfile: AgentInvite | null = null;
 
   const profileUpdates = new ProfileUpdateQueue(async (profile, isCurrent) => {
     const revision = profile.configRevision;
@@ -141,13 +148,49 @@ export async function runAgent(
           // reconnect must re-announce readiness at the *same* revision or the
           // agent stays unavailable forever and is silently never sent work.
           profileUpdates.reset();
-          void profileUpdates.enqueue(event.agentConfig ?? configuration.installation.agent);
+          latestProfile = event.agentConfig ?? configuration.installation.agent;
+          // While asleep the profile is only recorded. Announcing readiness
+          // would advertise a harness that is not running and start pulling
+          // work the agent cannot do.
+          if (activated) void profileUpdates.enqueue(latestProfile);
+          else console.log("[agent] asleep — waiting for its creator to activate it from Convyio.");
         } else {
           reportLegacyReady(socket, event.agentConfig?.configRevision ?? 1, local.harness, local.options, local.effectiveModel);
         }
         break;
       case "agent_config":
-        void profileUpdates.enqueue(event.profile);
+        latestProfile = event.profile;
+        if (activated) void profileUpdates.enqueue(event.profile);
+        break;
+      case "agent_activation":
+        if (event.active === activated) break;
+        activated = event.active;
+        if (activated) {
+          console.log("[agent] activated — starting local harness.");
+          void (async () => {
+            try {
+              await startBridge();
+            } catch (error) {
+              // Rolling back matters: staying "activated" with no tool bridge
+              // would leave the agent claiming readiness it cannot deliver,
+              // and the creator with a button that looks like it worked.
+              activated = false;
+              bridge?.close();
+              reportFailure(socket, latestProfile?.configRevision ?? 1, "misconfigured", "TOOL_BRIDGE_UNAVAILABLE");
+              console.error("[agent] could not start the tool bridge:", error instanceof Error ? error.message : error);
+              return;
+            }
+            profileUpdates.reset();
+            if (latestProfile) await profileUpdates.enqueue(latestProfile);
+          })();
+        } else {
+          console.log("[agent] deactivated — stopping local harness.");
+          ready = false;
+          runner.abortAll();
+          local.acp?.close();
+          bridge?.close();
+          socket.send({ type: "status_update", status: "", runState: "idle", taskId: null });
+        }
         break;
       case "message":
         // Every broadcast lands here for context, but only mentions are ours

@@ -147,6 +147,15 @@ export class AgentRunner {
     this.enqueue(work);
   }
 
+  /** Halt everything in flight and drop the backlog — the harness behind this
+   *  runner is about to be torn down (deactivation). */
+  abortAll(): void {
+    this.abortController?.abort();
+    this.board.cancelLastAction?.();
+    this.cancelQueued(this.queue);
+    this.queue.length = 0;
+  }
+
   /** Halt the current run if it executes against the given board item (I4). */
   abortIfWorkingOn(itemId: string): boolean {
     if (this.activeTask?.id !== itemId) return false;

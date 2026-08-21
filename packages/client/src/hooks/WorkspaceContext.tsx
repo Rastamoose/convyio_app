@@ -155,6 +155,8 @@ export interface WorkspaceState {
   repairAgent: (id: string) => Promise<string | null>;
   /** Revoke a user-added agent. */
   revokeAgent: (id: string) => Promise<boolean>;
+  /** Wake or sleep a paired runner's local harness. Creator-only, enforced server-side. */
+  setAgentActive: (actorId: string, active: boolean) => void;
   /** Re-fetch the agent list (and its runtime state) from the server. */
   refreshAgents: () => Promise<void>;
   /** Remove a human from the workspace (humans only; not self). */
@@ -767,6 +769,8 @@ export function WorkspaceProvider({
     updateAgent,
     repairAgent,
     revokeAgent,
+    setAgentActive: (actorId, active) =>
+      connection.send({ type: "agent_activate", target: actorId, active }),
     restoreNoodle,
     refreshAgents,
     removeMember,

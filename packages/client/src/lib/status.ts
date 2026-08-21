@@ -61,6 +61,7 @@ const RUNNER_HEALTH_LABEL: Record<RunnerHealth, string> = {
   auth_required: "Needs sign-in",
   misconfigured: "Misconfigured",
   incompatible: "Incompatible",
+  dormant: "Asleep",
 };
 
 const RUNNER_HEALTH_DOT: Record<RunnerHealth, string> = {
@@ -70,6 +71,8 @@ const RUNNER_HEALTH_DOT: Record<RunnerHealth, string> = {
   auth_required: "bg-dead",
   misconfigured: "bg-dead",
   incompatible: "bg-dead",
+  // Asleep is a resting state the creator chose, not a fault.
+  dormant: "bg-offline",
 };
 
 /** A runner that has never connected is neither healthy nor unhealthy — offline. */

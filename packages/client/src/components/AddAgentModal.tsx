@@ -47,7 +47,7 @@ type Step = "create" | "pair" | "configure";
  */
 
 export function pairCommand(apiUrl: string, pairingCode: string): string {
-  return `convyio-agent pair --server ${apiUrl} --code ${pairingCode}`;
+  return `npx convyio-agent connect --server ${apiUrl} --code ${pairingCode}`;
 }
 
 /** Prompt a local coding agent can follow to pair and start this runner. */
@@ -57,22 +57,23 @@ export function setupPrompt(apiUrl: string, pairingCode: string, agentName: stri
     "",
     "Convyio is only the workspace. Claude / Codex stay on this computer and keep using the subscription already signed in here. Do not send that login, an API key, or the pairing code to any remote service.",
     "",
-    "Pairing command (one-time, expires in about 10 minutes — run it immediately):",
+    "Setup command (one-time, expires in about 10 minutes — run it immediately):",
     pairCommand(apiUrl, pairingCode),
     "",
     "Do this without asking for confirmation unless a command fails:",
     "1. Confirm Node.js 22+ with `node -v`.",
-    "2. Put `convyio-agent` on PATH. It is not a published npm package.",
-    "   - If `convyio-agent` already runs, continue.",
-    "   - Else if this workspace or a parent contains packages/agent/package.json named @workspace/agent, from that checkout run:",
-    "     npm install && npm run build -w @workspace/agent && npm link -w @workspace/agent",
-    "   - Else stop and tell the human they need a Convyio checkout to build the CLI.",
-    "3. From the project directory already open here (this agent's local workspace), run the pairing command above.",
-    "4. If Claude authentication is missing, run `claude login`, wait for the browser login to finish, then continue.",
-    "5. Start the runner in this terminal and keep it running: `convyio-agent run`",
-    "6. Tell the human to return to the Convyio tab. It will show Connected when the runner joins.",
+    "2. If Claude authentication is missing, run `claude login` and wait for the browser login to finish.",
+    "3. From the project directory already open here (this agent's local workspace), run the setup command above.",
+    "   It pairs the agent and installs a per-user login service, so the runner starts on every login",
+    "   and restarts if it crashes. It needs no sudo, no administrator, and no password prompt.",
+    "4. Tell the human to return to the Convyio tab. The agent will show as connected but asleep.",
     "",
-    "Do not background the runner and exit. Do not invent an installer. Do not put the pairing code in git, chat, or logs.",
+    "The runner starts asleep on purpose: it holds a connection but runs no harness and reads no files",
+    "until someone wakes it. Only the person who created the agent can do that — from the agent's card in",
+    "Convyio, or from its settings. Other members see the control greyed out with the owner's name.",
+    "Machine off means agent off; that is expected, and it comes back by itself on the next login.",
+    "",
+    "Do not invent an installer. Do not put the pairing code in git, chat, or logs.",
   ].join("\n");
 }
 
@@ -93,6 +94,8 @@ export function AddAgentModal({
     revokeAgent,
     refreshAgents,
     participants,
+    self,
+    setAgentActive,
   } = useWorkspace();
 
   const [step, setStep] = useState<Step>("create");
@@ -252,6 +255,8 @@ export function AddAgentModal({
               onSave={(fields) => updateAgent(activeAgent.id, fields)}
               onRepair={() => void repair()}
               onRevoke={() => void revoke()}
+              canActivate={self?.id === activeAgent.createdBy}
+              onSetActive={(active) => setAgentActive(activeAgent.actorId, active)}
             />
           )}
 
@@ -444,6 +449,11 @@ function PairStep({
   if (!agent.runtime.connected) {
     statusText = "Waiting for the agent to connect…";
     statusClass = "border-away text-muted";
+  } else if (agent.runtime.health === "dormant") {
+    // Pairing succeeded; the harness just has not been woken yet. Showing this
+    // as a fault would make a correct first-run look broken.
+    statusText = "Paired and connected — asleep until you activate it.";
+    statusClass = "border-away text-muted";
   } else if (agent.runtime.health === "checking") {
     statusText = "Connected — running preflight checks…";
     statusClass = "border-away text-muted";
@@ -509,6 +519,8 @@ function ConfigureStep({
   onSave,
   onRepair,
   onRevoke,
+  canActivate,
+  onSetActive,
 }: {
   agent: AgentSummary;
   participants: Participant[];
@@ -520,6 +532,8 @@ function ConfigureStep({
   }) => Promise<boolean>;
   onRepair: () => void;
   onRevoke: () => void;
+  canActivate: boolean;
+  onSetActive: (active: boolean) => void;
 }) {
   const [instructions, setInstructions] = useState(agent.instructions);
   const [model, setModel] = useState(agent.requestedModel ?? "");
@@ -596,6 +610,7 @@ function ConfigureStep({
   };
 
   const diagnostic = diagnosticMessage(agent.runtime.diagnosticCode);
+  const asleep = agent.runtime.health === "dormant";
 
   return (
     <>
@@ -612,13 +627,31 @@ function ConfigureStep({
             {diagnostic && <span className="text-faint">— {diagnostic}</span>}
           </div>
         </div>
-        <button
-          onClick={onRepair}
-          className="shrink-0 cursor-pointer text-xs font-medium text-accent hover:underline"
-        >
-          Re-pair
-        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          {canActivate && agent.runtime.connected && (
+            <button
+              onClick={() => onSetActive(asleep)}
+              className="cursor-pointer rounded-md border border-subtle px-2.5 py-1 text-xs font-medium text-body hover:bg-subtle"
+            >
+              {asleep ? "Activate" : "Put to sleep"}
+            </button>
+          )}
+          <button
+            onClick={onRepair}
+            className="cursor-pointer text-xs font-medium text-accent hover:underline"
+          >
+            Re-pair
+          </button>
+        </div>
       </div>
+
+      {asleep && (
+        <p className="mb-4 rounded-md border-l-4 border-away bg-subtle px-3 py-2 text-sm text-muted">
+          {canActivate
+            ? "This agent is connected but its local harness is not running. Activate it to start working."
+            : "This agent is asleep. Only the person who created it can activate it."}
+        </p>
+      )}
 
       <InstructionsField id="agent-instructions-edit" value={instructions} onChange={setInstructions} />
 

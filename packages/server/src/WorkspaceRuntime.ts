@@ -107,9 +107,7 @@ export class WorkspaceRuntime {
       projects,
       options.github,
       channels,
-      path.join(workspaceDir, "repositories"),
     );
-    await gitRepositories.init();
     const toolmanNodes = new ToolmanNodes(db, threadEvents);
     const snapshot = new WorkspaceSnapshotBuilder(db, board, plans, context, projects);
     const envelope = new PromptEnvelopeBuilder(

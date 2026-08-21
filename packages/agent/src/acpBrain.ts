@@ -293,6 +293,11 @@ export class AcpBrain implements Brain {
     this.connection = null;
     this.context = null;
     this.startup = null;
+    // Sessions belong to the process that opened them. Keeping them would hand
+    // a restarted harness session ids it has never heard of — which the
+    // deactivate/reactivate cycle would hit every single time.
+    this.spareSession = null;
+    this.sessions.clear();
   }
 }
 

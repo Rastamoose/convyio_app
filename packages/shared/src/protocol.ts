@@ -113,6 +113,14 @@ export const interruptEventSchema = z.object({
   content: z.string().min(1).max(4000),
 });
 
+/** Wake or sleep a paired runner's local harness. Creator-only; the server
+ *  enforces that against the invite's createdBy, never the client. */
+export const agentActivateEventSchema = z.object({
+  type: z.literal("agent_activate"),
+  target: z.string().min(1).max(64),
+  active: z.boolean(),
+});
+
 export const demoStartEventSchema = z.object({
   type: z.literal("demo_start"),
   channel: z.string().max(64).default("demo"),
@@ -317,6 +325,9 @@ export const runnerStatusEventSchema = z.object({
     "auth_required",
     "misconfigured",
     "incompatible",
+    // Connected and paired, but the local harness has not been started. Only
+    // the agent's creator can lift it out of this state (see agent_activate).
+    "dormant",
   ]),
   effectiveModel: z.string().min(1).max(200).optional(),
   diagnosticCode: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/).optional(),
@@ -482,6 +493,7 @@ export const clientEventSchema = z
     actionCancelEventSchema,
     interactionResolveEventSchema,
     conversationModeSetEventSchema,
+    agentActivateEventSchema,
   ])
   .refine((event) => event.type !== "message" || messageHasSubstance(event), {
     message: "message needs content or attachments",
@@ -524,6 +536,7 @@ export type ActionRequestEvent = z.infer<typeof actionRequestEventSchema>;
 export type ActionCancelEvent = z.infer<typeof actionCancelEventSchema>;
 export type InteractionResolveEvent = z.infer<typeof interactionResolveEventSchema>;
 export type ConversationModeSetEvent = z.infer<typeof conversationModeSetEventSchema>;
+export type AgentActivateEvent = z.infer<typeof agentActivateEventSchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 
 // ---------------------------------------------------------------------------
@@ -789,6 +802,14 @@ export interface InterruptBroadcast {
   content: string;
 }
 
+/** Sent only to the targeted runner: start (or tear down) its local harness.
+ *  Also replayed on welcome so a crash-restart returns to the state its
+ *  creator last chose instead of silently going back to sleep. */
+export interface AgentActivationEvent {
+  type: "agent_activation";
+  active: boolean;
+}
+
 export interface RunEndBroadcast {
   type: "run_end";
   runId: string;
@@ -832,6 +853,7 @@ export type ServerEvent =
   | ChannelSectionCreatedEvent
   | ChannelMovedEvent
   | InterruptBroadcast
+  | AgentActivationEvent
   | RunEndBroadcast
   | DemoProgressEvent
   | ActionResultEvent

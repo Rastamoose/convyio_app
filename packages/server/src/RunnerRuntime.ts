@@ -14,16 +14,45 @@ interface RuntimeState extends AgentRuntimeSummary {
 
 export class RunnerRuntime {
   private states = new Map<string, RuntimeState>();
+  /** Creators who have woken their runner. Deliberately outlives `clear()`
+   *  so a crash-restart or a laptop re-login comes back in the state its
+   *  creator chose, rather than silently falling asleep again.
+   *  ponytail: in-memory, so a *server* restart drops everyone to dormant —
+   *  move to a column on agent_invites if that turns out to matter. */
+  private activated = new Set<string>();
 
   connect(profile: AgentInvite): void {
     this.states.set(profile.actorId, {
       connected: true,
-      health: "checking",
+      health: this.activated.has(profile.actorId) ? "checking" : "dormant",
       configRevision: profile.configRevision,
       options: [],
       expectedHarness: profile.provider,
       helloCompatible: false,
     });
+  }
+
+  /** True once the creator has activated this runner and not put it back to sleep. */
+  isActivated(actorId: string): boolean {
+    return this.activated.has(actorId);
+  }
+
+  setActivated(actorId: string, active: boolean): void {
+    if (active) this.activated.add(actorId);
+    else this.activated.delete(actorId);
+    const state = this.states.get(actorId);
+    if (!state) return;
+    // Reflect the intent immediately so the roster stops advertising a
+    // just-slept runner as available before its status frame lands.
+    state.health = active ? "checking" : "dormant";
+    state.diagnosticCode = undefined;
+    if (!active) state.workSentRevision = undefined;
+  }
+
+  /** Drop activation intent for an agent that is gone for good (revoked/removed). */
+  forget(actorId: string): void {
+    this.activated.delete(actorId);
+    this.states.delete(actorId);
   }
 
   hello(actorId: string, event: RunnerHelloEvent): void {
@@ -48,6 +77,10 @@ export class RunnerRuntime {
   status(actorId: string, event: RunnerStatusEvent): boolean {
     const state = this.states.get(actorId);
     if (!state || event.configRevision !== state.configRevision || !state.helloCompatible) return false;
+    // Activation is a permission barrier, not a hint: without this a runner
+    // that was never woken could announce itself ready and start taking work,
+    // leaving the creator's approval advisory.
+    if (!this.activated.has(actorId)) return false;
     state.health = event.health;
     state.effectiveModel = event.effectiveModel;
     state.diagnosticCode = event.diagnosticCode;
@@ -97,5 +130,6 @@ export class RunnerRuntime {
 
   clearAll(): void {
     this.states.clear();
+    this.activated.clear();
   }
 }

@@ -21,6 +21,7 @@ describe("GitHub repository integration", () => {
   let drop: () => Promise<void>;
   let root: string;
   let remoteUrl: string;
+  let bareDir: string;
   let owner: Actor;
   let agent: Actor;
   let github: GitHub;
@@ -33,6 +34,7 @@ describe("GitHub repository integration", () => {
     ({ db, drop } = await createTestDb());
     root = await fs.mkdtemp(path.join(os.tmpdir(), "convyio-git-integration-"));
     remoteUrl = await createRemote(root);
+    bareDir = new URL(remoteUrl).pathname;
     owner = await db.upsertActor("human", "git-owner");
     agent = await db.upsertActor("agent", "git-agent");
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -74,15 +76,21 @@ describe("GitHub repository integration", () => {
         updatedAt: Date.parse("2026-08-18T00:00:00Z"),
       }),
       tokenForConnection: async () => "installation-secret",
-      requestForConnection: async (_connectionId: string, requestPath: string) => {
-        if (requestPath.includes("/pulls?")) return [];
-        throw new Error(`unexpected provider request: ${requestPath}`);
+      requestForConnection: async (_connectionId: string, requestPath: string, init: RequestInit = {}) => {
+        const { status, body } = await routeGitHubDataApi(bareDir, requestPath, init);
+        if (status >= 200 && status < 300) return body;
+        throw new Error((body as { message?: string })?.message ?? `GitHub returned ${status}`);
+      },
+      requestForConnectionOptional: async (_connectionId: string, requestPath: string, init: RequestInit = {}) => {
+        const { status, body } = await routeGitHubDataApi(bareDir, requestPath, init);
+        if (status === 404) return null;
+        if (status >= 200 && status < 300) return body;
+        throw new Error((body as { message?: string })?.message ?? `GitHub returned ${status}`);
       },
     } as unknown as GitHub;
     const channels = new Channels(db);
     await channels.seed([{ name: "general", isDemo: false }]);
-    repositories = new GitRepositories(db, events, projects, localProvider, channels, path.join(root, "checkouts"));
-    await repositories.init();
+    repositories = new GitRepositories(db, events, projects, localProvider, channels);
   });
 
   after(async () => {
@@ -221,8 +229,14 @@ describe("GitHub repository integration", () => {
     })).output ?? "{}") as { aheadCount: number };
     assert.equal(status.aheadCount, 1);
 
-    const pushed = await repositories.execute(agent, { kind: "project_git_push", projectId: linked.projectId });
-    assert.equal(pushed.ok, true, pushed.error);
+    const agentPush = await repositories.execute(agent, { kind: "project_git_push", projectId: linked.projectId });
+    assert.equal(agentPush.ok, false);
+    assert.equal(agentPush.code, "HUMAN_ONLY");
+    const stillAhead = await repositories.find(linked.projectId);
+    assert.equal(stillAhead?.sync?.aheadCount, 1);
+
+    const pushedRepository = await repositories.sync(owner, linked.projectId, "push");
+    assert.equal(pushedRepository.sync?.aheadCount, 0);
     const afterPush = await repositories.find(linked.projectId);
     assert.equal(afterPush?.sync?.aheadCount, 0);
     const subjects = await db.sql<{ kind: string }[]>`
@@ -269,6 +283,207 @@ async function createRemote(root: string): Promise<string> {
   await execFileAsync("git", ["push", "-u", "origin", "main"], { cwd: seed });
   await execFileAsync("git", ["symbolic-ref", "HEAD", "refs/heads/main"], { cwd: remote });
   return new URL(`file://${remote}`).toString();
+}
+
+// A minimal GitHub Contents/Data API, backed by the same bare repo the test's
+// "remote" points at — GitRepositories no longer shells out to `git` for
+// managed-repo reads/writes/commits, so the fake provider has to answer for
+// the endpoints it now calls (contents, refs, blobs, trees, commits).
+async function routeGitHubDataApi(
+  bareDir: string,
+  requestPath: string,
+  init: RequestInit,
+): Promise<{ status: number; body: unknown }> {
+  const [pathname, query] = requestPath.split("?");
+  const params = new URLSearchParams(query ?? "");
+  const method = init.method ?? "GET";
+  const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+
+  const contentsMatch = pathname!.match(/^\/repos\/acme\/demo\/contents(?:\/(.*))?$/);
+  if (contentsMatch && method === "GET") {
+    const filePath = contentsMatch[1] ? decodeURIComponent(contentsMatch[1]) : "";
+    const entry = await githubContents(bareDir, params.get("ref") ?? "main", filePath);
+    return entry === null ? { status: 404, body: { message: "Not Found" } } : { status: 200, body: entry };
+  }
+
+  const refHeadMatch = pathname!.match(/^\/repos\/acme\/demo\/git\/ref\/heads\/(.+)$/);
+  if (refHeadMatch && method === "GET") {
+    const sha = await refSha(bareDir, `refs/heads/${decodeURIComponent(refHeadMatch[1]!)}`);
+    return sha === null ? { status: 404, body: { message: "Not Found" } } : { status: 200, body: { object: { sha } } };
+  }
+
+  if (pathname === "/repos/acme/demo/git/commits" && method === "POST") {
+    const payload = body as { message: string; tree: string; parents: string[]; author: { name: string; email: string; date: string } };
+    const sha = await createCommit(bareDir, payload.tree, payload.parents[0]!, payload.message, payload.author);
+    return { status: 201, body: { sha } };
+  }
+  const commitMatch = pathname!.match(/^\/repos\/acme\/demo\/git\/commits\/([0-9a-f]+)$/);
+  if (commitMatch && method === "GET") {
+    const sha = commitMatch[1]!;
+    return { status: 200, body: { sha, tree: { sha: await commitTreeSha(bareDir, sha) } } };
+  }
+
+  if (pathname === "/repos/acme/demo/git/blobs" && method === "POST") {
+    const sha = await createBlob(bareDir, String((body as { content: string }).content));
+    return { status: 201, body: { sha } };
+  }
+
+  if (pathname === "/repos/acme/demo/git/trees" && method === "POST") {
+    const payload = body as { base_tree: string; tree: { path: string; mode: string; type: string; sha: string | null }[] };
+    const sha = await createTree(bareDir, payload.base_tree, payload.tree);
+    return { status: 201, body: { sha } };
+  }
+
+  if (pathname === "/repos/acme/demo/git/refs" && method === "POST") {
+    const payload = body as { ref: string; sha: string };
+    if (await refSha(bareDir, payload.ref)) return { status: 422, body: { message: "Reference already exists" } };
+    await gitBare(bareDir, ["update-ref", payload.ref, payload.sha]);
+    return { status: 201, body: { ref: payload.ref, object: { sha: payload.sha } } };
+  }
+
+  const refHeadsMatch = pathname!.match(/^\/repos\/acme\/demo\/git\/refs\/heads\/(.+)$/);
+  if (refHeadsMatch && method === "DELETE") {
+    await gitBare(bareDir, ["update-ref", "-d", `refs/heads/${decodeURIComponent(refHeadsMatch[1]!)}`]);
+    return { status: 204, body: {} };
+  }
+  if (refHeadsMatch && method === "PATCH") {
+    const branchRef = `refs/heads/${decodeURIComponent(refHeadsMatch[1]!)}`;
+    const payload = body as { sha: string; force?: boolean };
+    const current = await refSha(bareDir, branchRef);
+    if (!current) return { status: 404, body: { message: "Not Found" } };
+    if (!payload.force) {
+      try {
+        await gitBare(bareDir, ["merge-base", "--is-ancestor", current, payload.sha]);
+      } catch {
+        return { status: 422, body: { message: "Update is not a fast forward" } };
+      }
+    }
+    await gitBare(bareDir, ["update-ref", branchRef, payload.sha]);
+    return { status: 200, body: { object: { sha: payload.sha } } };
+  }
+
+  if (pathname === "/repos/acme/demo/pulls" && method === "GET") return { status: 200, body: [] };
+
+  throw new Error(`unexpected provider request: ${method} ${requestPath}`);
+}
+
+function gitBare(bareDir: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    childExecFile("git", ["--git-dir", bareDir, ...args], { maxBuffer: 10_000_000 }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr || error.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+function gitBareWithStdin(bareDir: string, args: string[], input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = childExecFile("git", ["--git-dir", bareDir, ...args], { maxBuffer: 10_000_000 }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr || error.message));
+      else resolve(stdout);
+    });
+    child.stdin!.write(input);
+    child.stdin!.end();
+  });
+}
+
+async function refSha(bareDir: string, ref: string): Promise<string | null> {
+  try {
+    return (await gitBare(bareDir, ["rev-parse", "--verify", ref])).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function commitTreeSha(bareDir: string, commitSha: string): Promise<string> {
+  return (await gitBare(bareDir, ["rev-parse", `${commitSha}^{tree}`])).trim();
+}
+
+async function createBlob(bareDir: string, content: string): Promise<string> {
+  return (await gitBareWithStdin(bareDir, ["hash-object", "-w", "--stdin"], content)).trim();
+}
+
+// Flat (single-directory-level) trees only — matches how this test's fixtures are shaped.
+async function createTree(
+  bareDir: string,
+  baseTreeSha: string,
+  entries: { path: string; mode: string; type: string; sha: string | null }[],
+): Promise<string> {
+  const baseListing = await gitBare(bareDir, ["ls-tree", baseTreeSha]);
+  const lines = new Map<string, string>();
+  for (const line of baseListing.split("\n").filter(Boolean)) {
+    lines.set(line.slice(line.indexOf("\t") + 1), line);
+  }
+  for (const entry of entries) {
+    if (entry.path.includes("/")) throw new Error("test fake only supports flat trees");
+    if (entry.sha === null) lines.delete(entry.path);
+    else lines.set(entry.path, `${entry.mode} ${entry.type} ${entry.sha}\t${entry.path}`);
+  }
+  return (await gitBareWithStdin(bareDir, ["mktree"], `${[...lines.values()].join("\n")}\n`)).trim();
+}
+
+function createCommit(
+  bareDir: string,
+  treeSha: string,
+  parentSha: string,
+  message: string,
+  author: { name: string; email: string; date: string },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email, GIT_AUTHOR_DATE: author.date,
+      GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email, GIT_COMMITTER_DATE: author.date,
+    };
+    childExecFile(
+      "git",
+      ["--git-dir", bareDir, "commit-tree", treeSha, "-p", parentSha, "-m", message],
+      { env },
+      (error, stdout, stderr) => {
+        if (error) reject(new Error(stderr || error.message));
+        else resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+async function githubContents(bareDir: string, ref: string, filePath: string): Promise<unknown> {
+  const treeish = filePath ? `${ref}:${filePath}` : `${ref}:`;
+  let kind: string;
+  try {
+    kind = (await gitBare(bareDir, ["cat-file", "-t", treeish])).trim();
+  } catch {
+    return null;
+  }
+  if (kind === "tree") {
+    const listing = await gitBare(bareDir, ["ls-tree", treeish]);
+    return listing
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        const [mode, entryKind, sha] = line.slice(0, tab).trim().split(/\s+/);
+        const name = line.slice(tab + 1);
+        return {
+          type: entryKind === "tree" ? "dir" : "file",
+          name,
+          path: filePath ? `${filePath}/${name}` : name,
+          sha,
+          size: 0,
+        };
+      });
+  }
+  const content = await gitBare(bareDir, ["cat-file", "-p", treeish]);
+  const sha = (await gitBare(bareDir, ["rev-parse", treeish])).trim();
+  return {
+    type: "file",
+    name: filePath.split("/").pop() ?? filePath,
+    path: filePath,
+    sha,
+    size: Buffer.byteLength(content, "utf8"),
+    content: Buffer.from(content, "utf8").toString("base64"),
+    encoding: "base64",
+  };
 }
 
 function fakeGitHub(remoteUrl: string): typeof fetch {

@@ -474,6 +474,8 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
   APPROVAL_DENIED: "A human declined this action. Do not retry it; ask what they would prefer.",
   APPROVAL_UNAVAILABLE:
     "The permission could not be recorded, so nothing ran. Report this and stop — do not retry mutations.",
+  HUMAN_ONLY:
+    "Only a human can push to the real branch. Use project_git_commit to queue the change, then ask a human to push it.",
 };
 
 export interface ToolHooks {

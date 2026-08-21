@@ -262,6 +262,22 @@ export class GitHub {
     return this.request<T>(await this.requireConnection(connectionId), path, init);
   }
 
+  /** Like requestForConnection, but a 404 means "does not exist" (returns null) rather than an auth failure. */
+  async requestForConnectionOptional<T>(connectionId: string, path: string, init: RequestInit = {}): Promise<T | null> {
+    const connection = await this.requireConnection(connectionId);
+    const token = (await this.installationToken(connection)).token;
+    const response = await this.githubFetch(token, path, init);
+    if (response.status === 404) return null;
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(409, "GITHUB_AUTH_REQUIRED", "GitHub App access changed; reconnect or update the installation");
+    }
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { message?: string };
+      throw new ApiError(502, "GITHUB_REQUEST_FAILED", body.message ?? `GitHub returned ${response.status}`);
+    }
+    return (await response.json()) as T;
+  }
+
   async tokenForConnection(connectionId: string): Promise<string> {
     return (await this.installationToken(await this.requireConnection(connectionId))).token;
   }

@@ -111,7 +111,13 @@ describe("AddAgentModal", () => {
     expect(prompt).toContain("keep using the subscription already signed in here");
     expect(prompt).toContain("Do not send that login, an API key, or the pairing code to any remote service");
     expect(prompt).toContain("claude login");
-    expect(prompt).toContain("convyio-agent run");
+    // `connect` installs a login service, so the prompt must not send anyone
+    // back to a terminal they have to keep open.
+    expect(prompt).toContain("login service");
+    expect(prompt).not.toContain("keep it running");
+    // The runner joins asleep, and only its creator can change that.
+    expect(prompt).toContain("asleep");
+    expect(prompt).toContain("Only the person who created the agent");
   });
 
   it("disables the model select until the runner reports a model option", async () => {

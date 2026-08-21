@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_FILE_BYTES } from "@workspace/shared";
 
-const SENSITIVE_NAMES = new Set([
+export const SENSITIVE_NAMES = new Set([
   ".git",
   ".env",
   ".env.local",
@@ -14,7 +14,7 @@ const SENSITIVE_NAMES = new Set([
   "credentials",
   "credentials.json",
 ]);
-const SENSITIVE_BASENAME = /^(id_rsa|id_ed25519|id_ecdsa|.*\.(pem|key|p12|pfx))$/i;
+export const SENSITIVE_BASENAME = /^(id_rsa|id_ed25519|id_ecdsa|.*\.(pem|key|p12|pfx))$/i;
 
 export async function resolveManagedPath(root: string, relative: string): Promise<string> {
   if (!relative || relative.startsWith("/") || relative.includes("\0")) throw new Error("path must be relative to the checkout");

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { clearInstallations, exchangePairing, listInstallationMetadata, loadInstallation, saveInstallation } from "./installation";
 
 export async function runCli(
@@ -14,6 +15,12 @@ export async function runCli(
     switch (command) {
       case "pair":
         await pair(args, io.out);
+        return 0;
+      case "connect":
+        await connect(args, io.out);
+        return 0;
+      case "service":
+        await service(args, io.out);
         return 0;
       case "run": {
         if (args[0]?.startsWith("-")) throw new Error("Usage: convyio-agent run [name]");
@@ -51,6 +58,70 @@ async function pair(args: string[], out: (message: string) => void): Promise<voi
   await saveInstallation(installation);
   out(`Paired ${installation.agent.name} (${installation.agent.id}) with ${installation.workspace.name}.`);
   out(`Start it with: convyio-agent run ${/\s/.test(installation.agent.name) ? `"${installation.agent.name}"` : installation.agent.name}`);
+}
+
+/**
+ * The one-command path: pair, then hand the runner to the OS supervisor so it
+ * is simply *there* on every login instead of something to remember to start.
+ * It joins asleep — activation is the creator's call, from the web.
+ */
+async function connect(args: string[], out: (message: string) => void): Promise<void> {
+  const options = parsePairArgs(args);
+  const installation = await exchangePairing(options.server, options.code, options.workspace);
+  await saveInstallation(installation);
+  const name = installation.agent.name;
+  out(`Paired ${name} (${installation.agent.id}) with ${installation.workspace.name}.`);
+
+  const { installService, serviceStatusCommand } = await import("./service");
+  try {
+    const location = await installService({ name, script: cliEntrypoint(), node: process.execPath });
+    out(`Installed a login service for ${name} (${location}).`);
+    out(`It now starts on login and restarts on crash. Logs: ${serviceStatusCommand(name)}`);
+  } catch (error) {
+    // Pairing already succeeded and is worth keeping; only the convenience
+    // layer failed, and `run` still works by hand.
+    out(`Paired, but the login service could not be installed: ${error instanceof Error ? error.message : String(error)}`);
+    out(`Start it manually with: convyio-agent run ${quoted(name)}`);
+    return;
+  }
+  out("Open Convyio and press Wake up on the agent to start it. Only you can, as its creator.");
+}
+
+async function service(args: string[], out: (message: string) => void): Promise<void> {
+  const [action, ...rest] = args;
+  const name = rest.length === 0 ? undefined : rest.join(" ");
+  if (action === "install") {
+    const installation = await loadInstallation(name);
+    const { installService, serviceStatusCommand } = await import("./service");
+    const location = await installService({
+      name: installation.agent.name,
+      script: cliEntrypoint(),
+      node: process.execPath,
+    });
+    out(`Installed a login service for ${installation.agent.name} (${location}).`);
+    out(`Logs: ${serviceStatusCommand(installation.agent.name)}`);
+    return;
+  }
+  if (action === "uninstall") {
+    const installation = await loadInstallation(name);
+    const { uninstallService } = await import("./service");
+    await uninstallService(installation.agent.name);
+    out(`Removed the login service for ${installation.agent.name}. The pairing is untouched.`);
+    return;
+  }
+  throw new Error("Usage: convyio-agent service install|uninstall [name]");
+}
+
+/** Resolve the real bundle path: a global install puts a symlink on PATH, and
+ *  a supervisor started years later must not depend on that link surviving. */
+function cliEntrypoint(): string {
+  const entry = process.argv[1];
+  if (!entry) throw new Error("could not determine the convyio-agent entrypoint");
+  return realpathSync(entry);
+}
+
+function quoted(name: string): string {
+  return /\s/.test(name) ? `"${name}"` : name;
 }
 
 async function status(out: (message: string) => void): Promise<void> {
@@ -96,8 +167,11 @@ function parsePairArgs(args: string[]): { server: string; code: string; workspac
 function usage(): string {
   return [
     "Usage:",
+    "  convyio-agent connect --server <https-origin> --code <one-time-code> [--workspace <path>]",
+    "      Pair, then install a login service so the runner is always there.",
     "  convyio-agent pair --server <https-origin> --code <one-time-code> [--workspace <path>]",
     "  convyio-agent run [name]",
+    "  convyio-agent service install|uninstall [name]",
     "  convyio-agent status",
     "  convyio-agent unpair",
   ].join("\n");

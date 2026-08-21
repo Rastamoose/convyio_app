@@ -180,7 +180,8 @@ export type AuthzDenyCode =
   | "UNKNOWN_ACTION" // action is not classified and therefore ungrantable
   | "PLAN_MODE" // conversation is in plan mode; nothing may mutate
   | "APPROVAL_DENIED" // a human declined the permission request
-  | "APPROVAL_UNAVAILABLE"; // approval could not be recorded — fail closed
+  | "APPROVAL_UNAVAILABLE" // approval could not be recorded — fail closed
+  | "HUMAN_ONLY"; // this class of action is structurally human-only, regardless of granted capability
 
 export type AuthzResult =
   | { allow: true; item?: BoardItem }

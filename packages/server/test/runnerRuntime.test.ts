@@ -96,6 +96,9 @@ describe("installation runner readiness", () => {
   test("checking gates queued work until current ready status", async () => {
     const human = await connectHuman("human-checking", "checking-human");
     const installation = await connectInstallation(human.welcome.self.id, "checking-agent");
+    // Runners now join asleep; this test is about the readiness gate that
+    // follows activation, so wake it and leave the rest of the flow unchanged.
+    env.runnerRuntime.setActivated(installation.actorId, true);
     const workFrames: any[] = [];
     installation.client.ws.on("message", (raw) => {
       const event = JSON.parse(raw.toString());
@@ -120,6 +123,7 @@ describe("installation runner readiness", () => {
   test("stale revisions cannot re-enable work after a config patch", async () => {
     const human = await connectHuman("human-patch", "patch-human");
     const installation = await connectInstallation(human.welcome.self.id, "patch-agent");
+    env.runnerRuntime.setActivated(installation.actorId, true);
     hello(installation.client);
     status(installation.client, 1);
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -190,6 +194,7 @@ describe("installation runner readiness", () => {
   test("disconnect and revoke clear runtime facts and API summaries expose no local or secret fields", async () => {
     const human = await connectHuman("human-runtime", "runtime-human");
     const installation = await connectInstallation(human.welcome.self.id, "runtime-agent");
+    env.runnerRuntime.setActivated(installation.actorId, true);
     hello(installation.client);
     status(installation.client, 1);
     await new Promise((resolve) => setTimeout(resolve, 25));

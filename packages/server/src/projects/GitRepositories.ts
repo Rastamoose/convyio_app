@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_FILE_BYTES } from "@workspace/shared";
 import type {
   Actor,
   GitBranch,
@@ -23,15 +24,7 @@ import type { ThreadEventStore } from "../chat/ThreadEventStore";
 import type { WorkspaceDb } from "../db";
 import type { ProjectStore } from "./ProjectStore";
 import type { GitHub } from "./GitHub";
-import {
-  deleteManagedFile,
-  editManagedFile,
-  listManagedFiles,
-  moveManagedFile,
-  readManagedFile,
-  resolveManagedPath,
-  writeManagedFile,
-} from "./ManagedProjectFiles";
+import { SENSITIVE_BASENAME, SENSITIVE_NAMES } from "./ManagedProjectFiles";
 
 const PROCESS_TIMEOUT_MS = 120_000;
 const PROCESS_MAX_BYTES = 10_485_760;
@@ -49,6 +42,7 @@ interface RepositoryRow {
   description: string | null;
   private: boolean;
   default_branch: string;
+  working_branch: string;
   html_url: string;
   clone_url: string;
   state: "cloning" | "ready" | "error";
@@ -57,6 +51,23 @@ interface RepositoryRow {
   linked_by: string;
   linked_at: number;
   unlinked_at: number | null;
+}
+
+interface PendingCommitRow {
+  id: string;
+  project_id: string;
+  branch: string;
+  message: string;
+  author_id: string;
+  commit_sha: string;
+  parent_sha: string;
+  created_at: number;
+}
+
+interface StagedChangeRow {
+  path: string;
+  kind: "upsert" | "delete";
+  content: string | null;
 }
 
 interface GitHubBranchResponse {
@@ -112,6 +123,37 @@ interface GitHubIssueResponse {
   pull_request?: unknown;
 }
 
+interface GitHubContentsEntry {
+  type: "file" | "dir" | "symlink" | "submodule";
+  name: string;
+  path: string;
+  sha: string;
+  size: number;
+  content?: string;
+  encoding?: string;
+}
+
+interface GitHubRefResponse {
+  object: { sha: string };
+}
+
+interface GitHubCommitObjectResponse {
+  sha: string;
+  tree: { sha: string };
+}
+
+interface GitHubBlobCreateResponse {
+  sha: string;
+}
+
+interface GitHubTreeCreateResponse {
+  sha: string;
+}
+
+interface GitHubCommitCreateResponse {
+  sha: string;
+}
+
 interface ProcessResult {
   ok: boolean;
   stdout: string;
@@ -128,12 +170,7 @@ export class GitRepositories {
     private projects: ProjectStore,
     private github: GitHub,
     private channels: Channels,
-    private root: string,
   ) {}
-
-  async init(): Promise<void> {
-    await fs.mkdir(this.root, { recursive: true });
-  }
 
   async list(): Promise<GitRepository[]> {
     const rows = await this.store.sql<RepositoryRow[]>`
@@ -176,7 +213,8 @@ export class GitRepositories {
           UPDATE git_repositories SET
             connection_id = ${account.id}, owner_name = ${remote.owner}, repository_name = ${remote.name},
             full_name = ${remote.fullName}, description = ${remote.description}, private = ${remote.private},
-            default_branch = ${remote.defaultBranch}, html_url = ${remote.htmlUrl}, clone_url = ${remote.cloneUrl},
+            default_branch = ${remote.defaultBranch}, working_branch = ${remote.defaultBranch},
+            html_url = ${remote.htmlUrl}, clone_url = ${remote.cloneUrl},
             state = 'cloning', last_error = NULL, linked_by = ${actor.id}, linked_at = ${now}, unlinked_at = NULL
           WHERE project_id = ${existing[0].project_id} AND workspace_id = ${this.store.workspaceId}
         `;
@@ -189,7 +227,7 @@ export class GitRepositories {
           createdAt: now,
         });
       });
-      await this.clone(existing[0].project_id).catch(async (error: unknown) => {
+      await this.verifyAccess(existing[0].project_id).catch(async (error: unknown) => {
         await this.setState(existing[0].project_id, "error", error instanceof Error ? error.message : String(error));
       });
       return (await this.find(existing[0].project_id))!;
@@ -205,12 +243,12 @@ export class GitRepositories {
       await sql`
         INSERT INTO git_repositories (
           project_id, workspace_id, connection_id, provider, provider_repository_id,
-          owner_name, repository_name, full_name, description, private, default_branch,
+          owner_name, repository_name, full_name, description, private, default_branch, working_branch,
           html_url, clone_url, state, linked_by, linked_at
         ) VALUES (
           ${project.id}, ${this.store.workspaceId}, ${account.id}, 'github', ${remote.providerId},
           ${remote.owner}, ${remote.name}, ${remote.fullName}, ${remote.description}, ${remote.private},
-          ${remote.defaultBranch}, ${remote.htmlUrl}, ${remote.cloneUrl}, 'cloning', ${actor.id}, ${now}
+          ${remote.defaultBranch}, ${remote.defaultBranch}, ${remote.htmlUrl}, ${remote.cloneUrl}, 'cloning', ${actor.id}, ${now}
         )
       `;
       await this.events.append(sql, {
@@ -222,7 +260,7 @@ export class GitRepositories {
         createdAt: now,
       });
     });
-    await this.clone(project.id).catch(async (error: unknown) => {
+    await this.verifyAccess(project.id).catch(async (error: unknown) => {
       await this.setState(project.id, "error", error instanceof Error ? error.message : String(error));
     });
     return (await this.find(project.id))!;
@@ -233,7 +271,7 @@ export class GitRepositories {
     const row = await this.requireRow(projectId);
     if (row.state === "ready") return this.toRepository(row);
     await this.setState(projectId, "cloning", null);
-    await this.clone(projectId).catch(async (error: unknown) => {
+    await this.verifyAccess(projectId).catch(async (error: unknown) => {
       await this.setState(projectId, "error", error instanceof Error ? error.message : String(error));
     });
     return (await this.find(projectId))!;
@@ -250,6 +288,8 @@ export class GitRepositories {
     const now = Date.now();
     await this.store.transaction(async (sql) => {
       await sql`DELETE FROM project_assignments WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM git_pending_commits WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM git_changes WHERE project_id = ${projectId} AND pending_commit_id IS NULL`;
       await sql`UPDATE projects SET archived_at = ${now} WHERE id = ${projectId} AND workspace_id = ${this.store.workspaceId}`;
       await sql`UPDATE git_repositories SET unlinked_at = ${now} WHERE project_id = ${projectId} AND workspace_id = ${this.store.workspaceId}`;
       await sql`UPDATE git_branch_channels SET archived_at = ${now} WHERE project_id = ${projectId} AND archived_at IS NULL`;
@@ -269,9 +309,6 @@ export class GitRepositories {
         payload: { projectId, fullName: row.full_name },
         createdAt: now,
       });
-    });
-    await fs.rm(this.checkoutPath(projectId), { recursive: true, force: true }).catch((error: unknown) => {
-      console.warn("[git] repository unlinked but its checkout could not be removed:", error instanceof Error ? error.message : error);
     });
   }
 
@@ -300,12 +337,17 @@ export class GitRepositories {
       throw new ApiError(409, "BRANCH_HAS_PULL", "close or merge the branch's pull request before deleting it");
     }
     await this.locked(projectId, async () => {
-      const root = this.checkoutPath(projectId);
-      if (await this.currentBranch(root) === branchName) {
-        await this.git(root, ["-c", "core.hooksPath=/dev/null", "switch", row.default_branch]);
+      if (row.working_branch === branchName && (await this.hasStagedChanges(projectId))) {
+        throw new ApiError(409, "UNCOMMITTED_CHANGES", "commit or discard staged changes before deleting this branch");
       }
-      await this.deleteRemoteBranch(row, root, branchName);
-      await runProcess("git", ["branch", "-D", branchName], root, minimalEnv(root));
+      await this.deleteRemoteBranch(row, branchName);
+      if (row.working_branch === branchName) {
+        await this.store.sql`
+          UPDATE git_repositories SET working_branch = ${row.default_branch}
+          WHERE project_id = ${projectId} AND workspace_id = ${this.store.workspaceId}
+        `;
+      }
+      await this.store.sql`DELETE FROM git_pending_commits WHERE project_id = ${projectId} AND branch = ${branchName}`;
       let channelArchived = true;
       try {
         await this.archiveBranchChannel(row, branchName);
@@ -366,26 +408,10 @@ export class GitRepositories {
   ): Promise<GitTreeEntry[]> {
     const row = await this.requireReadyRow(projectId);
     const selectedPath = directory ? validGitPath(directory) : "";
-    if (source === "local") return this.workingTree(projectId, selectedPath);
-    const selectedRef = validRef(ref ?? row.default_branch);
-    const treeish = selectedPath ? `${selectedRef}:${selectedPath}` : selectedRef;
-    const result = await this.git(this.checkoutPath(projectId), ["ls-tree", "-l", treeish]);
-    return result.stdout
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const tab = line.indexOf("\t");
-        const metadata = line.slice(0, tab).trim().split(/\s+/);
-        const name = line.slice(tab + 1);
-        const kind = metadata[1] === "tree" ? "directory" : "file";
-        return {
-          path: selectedPath ? `${selectedPath}/${name}` : name,
-          name,
-          kind,
-          sha: metadata[2] ?? "",
-          size: kind === "file" && metadata[3] !== "-" ? Number(metadata[3]) : null,
-        } as GitTreeEntry;
-      });
+    const targetRef = source === "local" ? row.working_branch : validRef(ref ?? row.default_branch);
+    const entries = await this.contentsList(row, targetRef, selectedPath);
+    if (source !== "local") return entries;
+    return this.overlayTree(projectId, selectedPath, entries);
   }
 
   async file(
@@ -395,10 +421,12 @@ export class GitRepositories {
     source: "remote" | "local" = "remote",
   ): Promise<string> {
     const row = await this.requireReadyRow(projectId);
-    if (source === "local") return readManagedFile(this.checkoutPath(projectId), validGitPath(filePath));
-    const result = await this.git(this.checkoutPath(projectId), ["show", `${validRef(ref ?? row.default_branch)}:${validGitPath(filePath)}`]);
-    if (Buffer.byteLength(result.stdout, "utf8") > 1_048_576) throw new ApiError(413, "FILE_TOO_LARGE", "file exceeds 1 MiB");
-    return result.stdout;
+    const target = validGitPath(filePath);
+    const content = source === "local"
+      ? await this.effectiveFileContent(projectId, row, target)
+      : await this.githubFileContent(row, validRef(ref ?? row.default_branch), target);
+    if (content === null) throw new ApiError(404, "NOT_FOUND", "file not found");
+    return content;
   }
 
   async pulls(projectId: string, state: "open" | "closed" | "all" = "open"): Promise<GitPullRequest[]> {
@@ -540,29 +568,63 @@ export class GitRepositories {
   async execute(actor: Actor, action: ProjectAction): Promise<ToolmanResult> {
     try {
       const row = await this.requireReadyRow(action.projectId);
-      const root = this.checkoutPath(row.project_id);
       switch (action.kind) {
-        case "project_read_file":
-          return { ok: true, output: await readManagedFile(root, action.path) };
-        case "project_list_files":
-          return { ok: true, output: (await listManagedFiles(root, action.path ?? ".")).join("\n") || "(empty)" };
-        case "project_search_files": {
-          const target = action.path ? await this.safeSearchPath(root, action.path) : root;
-          const result = await runProcess("grep", ["-rIn", "--exclude-dir=node_modules", "--exclude-dir=.git", "-m", "100", "-e", action.query, "--", target], root, minimalEnv(root));
-          return { ok: true, output: clip(result.stdout || result.stderr || "(no matches)") };
+        case "project_read_file": {
+          const target = validGitPath(action.path);
+          const content = await this.effectiveFileContent(action.projectId, row, target);
+          if (content === null) throw new ApiError(404, "NOT_FOUND", "file not found");
+          return { ok: true, output: content };
         }
-        case "project_write_file":
-          await writeManagedFile(root, action.path, action.content);
+        case "project_list_files": {
+          const dirPath = action.path && action.path !== "." ? validGitPath(action.path) : "";
+          const base = await this.contentsList(row, row.working_branch, dirPath);
+          const merged = await this.overlayTree(action.projectId, dirPath, base);
+          const listing = merged
+            .map((entry) => (entry.kind === "directory" ? `${entry.name}/` : entry.name))
+            .sort();
+          return { ok: true, output: listing.join("\n") || "(empty)" };
+        }
+        case "project_search_files":
+          return await this.searchFiles(row, action.projectId, action.query, action.path);
+        case "project_write_file": {
+          const target = validGitPath(action.path);
+          this.assertPathAllowed(target);
+          if (Buffer.byteLength(action.content, "utf8") > MAX_FILE_BYTES) {
+            throw new ApiError(413, "FILE_TOO_LARGE", `file exceeds ${MAX_FILE_BYTES} bytes`);
+          }
+          await this.stagePath(action.projectId, target, "upsert", action.content);
           return { ok: true, output: `wrote ${action.content.length} bytes to ${action.path}` };
-        case "project_edit_file":
-          await editManagedFile(root, action.path, action.oldString, action.newString);
+        }
+        case "project_edit_file": {
+          const target = validGitPath(action.path);
+          this.assertPathAllowed(target);
+          const current = await this.effectiveFileContent(action.projectId, row, target);
+          if (current === null) throw new ApiError(404, "NOT_FOUND", "file not found");
+          const count = current.split(action.oldString).length - 1;
+          if (count === 0) throw new ApiError(409, "EDIT_NOT_FOUND", "old_string was not found");
+          if (count > 1) throw new ApiError(409, "EDIT_AMBIGUOUS", "old_string matched more than once");
+          await this.stagePath(action.projectId, target, "upsert", current.replace(action.oldString, action.newString));
           return { ok: true, output: `edited ${action.path}` };
-        case "project_delete_file":
-          await deleteManagedFile(root, action.path);
+        }
+        case "project_delete_file": {
+          const target = validGitPath(action.path);
+          this.assertPathAllowed(target);
+          const current = await this.effectiveFileContent(action.projectId, row, target);
+          if (current === null) throw new ApiError(404, "NOT_FOUND", "file not found");
+          await this.stagePath(action.projectId, target, "delete", null);
           return { ok: true, output: `deleted ${action.path}` };
-        case "project_move_file":
-          await moveManagedFile(root, action.from, action.to);
+        }
+        case "project_move_file": {
+          const from = validGitPath(action.from);
+          const to = validGitPath(action.to);
+          this.assertPathAllowed(from);
+          this.assertPathAllowed(to);
+          const current = await this.effectiveFileContent(action.projectId, row, from);
+          if (current === null) throw new ApiError(404, "NOT_FOUND", "file not found");
+          await this.stagePath(action.projectId, from, "delete", null);
+          await this.stagePath(action.projectId, to, "upsert", current);
           return { ok: true, output: `moved ${action.from} → ${action.to}` };
+        }
         case "project_run_command":
           return {
             ok: false,
@@ -570,92 +632,64 @@ export class GitRepositories {
             error: "commands on managed repositories require a paired local Toolman checkout",
           };
         case "project_git_commit": {
-          await this.git(root, ["-c", "core.hooksPath=/dev/null", "add", "-A"]);
-          const committed = await runProcess(
-            "git",
-            ["-c", "core.hooksPath=/dev/null", "commit", "-m", action.message],
-            root,
-            actorEnv(root, actor),
-          );
-          if (!committed.ok) return { ok: false, error: committed.stderr || committed.stdout || committed.error };
-          const revision = await this.revision(root, "HEAD");
+          const sha = await this.locked(action.projectId, () => this.commit(actor, row, action.message));
           await this.record(actor.id, "git.commit.created", action.projectId, {
             projectId: action.projectId,
-            revision,
+            revision: sha,
             message: action.message,
           });
-          return { ok: true, output: revision ?? "committed" };
+          return { ok: true, output: sha };
         }
         case "project_git_status":
           return { ok: true, output: JSON.stringify(await this.status(row), null, 2) };
         case "project_git_fetch":
-          await this.locked(action.projectId, () => this.syncOperation(actor.id, action.projectId, "fetch"));
-          return { ok: true, output: JSON.stringify(await this.status(await this.requireReadyRow(action.projectId)), null, 2) };
         case "project_git_pull":
-          await this.locked(action.projectId, () => this.syncOperation(actor.id, action.projectId, "pull"));
-          return { ok: true, output: JSON.stringify(await this.status(await this.requireReadyRow(action.projectId)), null, 2) };
         case "project_git_push":
-          await this.locked(action.projectId, () => this.syncOperation(actor.id, action.projectId, "push"));
-          return { ok: true, output: JSON.stringify(await this.status(await this.requireReadyRow(action.projectId)), null, 2) };
+          return {
+            ok: false,
+            code: "HUMAN_ONLY",
+            error: "pushing to the real branch requires a human — use project_git_commit to queue changes, then ask them to push",
+          };
         case "project_git_branch":
           await this.locked(action.projectId, () => this.branch(actor, action.projectId, action.name, action.startPoint));
-          return { ok: true, output: `created and pushed ${action.name}` };
+          return { ok: true, output: `created ${action.name}` };
       }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
-  private async clone(projectId: string): Promise<void> {
+  private async verifyAccess(projectId: string): Promise<void> {
     await this.locked(projectId, async () => {
       const row = await this.requireRow(projectId);
-      const target = this.checkoutPath(projectId);
-      await fs.rm(target, { recursive: true, force: true });
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await this.withCredential(row, async (env) => {
-        const result = await runProcess(
-          "git",
-          [...credentialGitOptions(), "clone", "--origin", "origin", "--no-tags", "--filter=blob:none", row.clone_url, target],
-          this.root,
-          env,
-        );
-        if (!result.ok) throw new Error(result.stderr || result.stdout || result.error || "git clone failed");
-      });
+      await this.branchTipSha(row, row.default_branch);
       await this.setState(projectId, "ready", null);
     });
   }
 
   private async syncOperation(actorId: string, projectId: string, operation: "fetch" | "pull" | "push"): Promise<void> {
     const row = await this.requireReadyRow(projectId);
-    const root = this.checkoutPath(projectId);
-    const branch = await this.currentBranch(root);
-    if (!branch) throw new ApiError(409, "DETACHED_HEAD", "select a branch before syncing");
-    if (operation === "fetch" || operation === "pull") {
-      await this.withCredential(row, async (env) => {
-        const result = await runProcess(
-          "git",
-          [...credentialGitOptions(), "fetch", "--prune", row.clone_url, "+refs/heads/*:refs/remotes/origin/*"],
-          root,
-          env,
-        );
-        if (!result.ok) throw new ApiError(409, "GIT_SYNC_FAILED", result.stderr || result.stdout || result.error || "fetch failed");
-      });
-      if (operation === "pull") await this.git(root, ["-c", "core.hooksPath=/dev/null", "merge", "--ff-only", `refs/remotes/origin/${branch}`]);
-    } else {
-      await this.withCredential(row, async (env) => {
-        const result = await runProcess(
-          "git",
-          [...credentialGitOptions(), "push", row.clone_url, `${branch}:refs/heads/${branch}`],
-          root,
-          env,
-        );
-        if (!result.ok) throw new ApiError(409, "GIT_SYNC_FAILED", result.stderr || result.stdout || result.error || "push failed");
-      });
-      await this.git(root, ["remote", "set-url", "origin", row.clone_url]);
-      await this.git(root, ["update-ref", `refs/remotes/origin/${branch}`, "HEAD"]);
+    if (operation === "fetch") return;
+    if (operation === "pull") {
+      throw new ApiError(409, "GIT_PULL_NOT_APPLICABLE", "reads are always live from GitHub; there is nothing to pull");
+    }
+    const pending = await this.store.sql<PendingCommitRow[]>`
+      SELECT * FROM git_pending_commits WHERE project_id = ${projectId} ORDER BY created_at ASC
+    `;
+    if (pending.length === 0) throw new ApiError(409, "GIT_SYNC_FAILED", "nothing to push");
+    const last = pending[pending.length - 1]!;
+    try {
+      await this.github.requestForConnection(
+        row.connection_id,
+        `/repos/${encodeRepo(row.full_name)}/git/refs/heads/${encodeRefPath(row.working_branch)}`,
+        { method: "PATCH", body: JSON.stringify({ sha: last.commit_sha, force: false }) },
+      );
+    } catch (error) {
+      throw new ApiError(409, "GIT_SYNC_FAILED", error instanceof Error ? error.message : "push was rejected (not a fast-forward)");
     }
     const now = Date.now();
     await this.store.transaction(async (sql) => {
+      await sql`DELETE FROM git_pending_commits WHERE project_id = ${projectId}`;
       await sql`
         UPDATE git_repositories SET last_synced_at = ${now}, last_error = NULL
         WHERE project_id = ${projectId} AND workspace_id = ${this.store.workspaceId}
@@ -663,50 +697,106 @@ export class GitRepositories {
       await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId,
-        kind: operation === "push" ? "git.push.completed" : "git.repository.synced",
+        kind: "git.push.completed",
         subjectId: projectId,
-        payload: { projectId, operation, branch, revision: await this.revision(root, "HEAD") },
+        payload: { projectId, operation: "push", branch: row.working_branch, revision: last.commit_sha },
         createdAt: now,
       });
     });
   }
 
+  private async commit(actor: Actor, row: RepositoryRow, message: string): Promise<string> {
+    const staged = await this.store.sql<StagedChangeRow[]>`
+      SELECT path, kind, content FROM git_changes
+      WHERE project_id = ${row.project_id} AND pending_commit_id IS NULL
+    `;
+    if (staged.length === 0) throw new ApiError(409, "NOTHING_TO_COMMIT", "no staged changes to commit");
+    const [latestPending] = await this.store.sql<PendingCommitRow[]>`
+      SELECT * FROM git_pending_commits WHERE project_id = ${row.project_id} ORDER BY created_at DESC LIMIT 1
+    `;
+    const parentSha = latestPending?.commit_sha ?? (await this.branchTipSha(row, row.working_branch));
+    const parentCommit = await this.github.requestForConnection<GitHubCommitObjectResponse>(
+      row.connection_id,
+      `/repos/${encodeRepo(row.full_name)}/git/commits/${encodeURIComponent(parentSha)}`,
+    );
+    const blobShas = new Map<string, string>();
+    for (const change of staged) {
+      if (change.kind !== "upsert") continue;
+      const blob = await this.github.requestForConnection<GitHubBlobCreateResponse>(
+        row.connection_id,
+        `/repos/${encodeRepo(row.full_name)}/git/blobs`,
+        { method: "POST", body: JSON.stringify({ content: change.content ?? "", encoding: "utf-8" }) },
+      );
+      blobShas.set(change.path, blob.sha);
+    }
+    const tree = await this.github.requestForConnection<GitHubTreeCreateResponse>(
+      row.connection_id,
+      `/repos/${encodeRepo(row.full_name)}/git/trees`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          base_tree: parentCommit.tree.sha,
+          tree: staged.map((change) => ({
+            path: change.path,
+            mode: "100644",
+            type: "blob",
+            sha: change.kind === "upsert" ? blobShas.get(change.path)! : null,
+          })),
+        }),
+      },
+    );
+    const now = new Date();
+    const author = {
+      name: actor.displayName,
+      email: `${actor.id.replace(/[^A-Za-z0-9._-]/g, "-")}@actors.convyio.local`,
+      date: now.toISOString(),
+    };
+    const created = await this.github.requestForConnection<GitHubCommitCreateResponse>(
+      row.connection_id,
+      `/repos/${encodeRepo(row.full_name)}/git/commits`,
+      { method: "POST", body: JSON.stringify({ message, tree: tree.sha, parents: [parentSha], author, committer: author }) },
+    );
+    const pendingId = randomUUID();
+    await this.store.transaction(async (sql) => {
+      await sql`
+        INSERT INTO git_pending_commits (id, project_id, branch, message, author_id, commit_sha, parent_sha, created_at)
+        VALUES (${pendingId}, ${row.project_id}, ${row.working_branch}, ${message}, ${actor.id}, ${created.sha}, ${parentSha}, ${now.getTime()})
+      `;
+      await sql`UPDATE git_changes SET pending_commit_id = ${pendingId} WHERE project_id = ${row.project_id} AND pending_commit_id IS NULL`;
+    });
+    return created.sha;
+  }
+
   private async branch(actor: Actor, projectId: string, name: string, startPoint?: string): Promise<void> {
     const row = await this.requireReadyRow(projectId);
-    const root = this.checkoutPath(projectId);
-    const checked = await runProcess("git", ["check-ref-format", "--branch", name], root, minimalEnv(root));
-    if (!checked.ok) throw new ApiError(400, "BAD_BRANCH", "branch name is invalid");
-    const previous = await this.currentBranch(root);
-    const args = ["-c", "core.hooksPath=/dev/null", "switch", "-c", name, ...(startPoint ? [validRef(startPoint)] : [])];
-    await this.git(root, args);
-    try {
-      await this.withCredential(row, async (env) => {
-        const pushed = await runProcess(
-          "git",
-          [...credentialGitOptions(), "push", row.clone_url, `${name}:refs/heads/${name}`],
-          root,
-          env,
-        );
-        if (!pushed.ok) throw new ApiError(409, "GIT_SYNC_FAILED", pushed.stderr || pushed.stdout || "could not push branch");
-      });
-    } catch (error) {
-      if (previous) {
-        await this.git(root, ["-c", "core.hooksPath=/dev/null", "switch", previous]);
-        await this.git(root, ["branch", "-D", name]);
-      }
-      throw error;
+    const branchName = validRef(name);
+    if (await this.hasStagedChanges(projectId)) {
+      throw new ApiError(409, "UNCOMMITTED_CHANGES", "commit or discard staged changes before creating a new branch");
     }
-    await this.git(root, ["remote", "set-url", "origin", row.clone_url]);
-    await this.git(root, ["update-ref", `refs/remotes/origin/${name}`, "HEAD"]);
+    const previousWorkingBranch = row.working_branch;
+    const startSha = await this.branchTipSha(row, startPoint ? validRef(startPoint) : row.working_branch);
+    try {
+      await this.github.requestForConnection(
+        row.connection_id,
+        `/repos/${encodeRepo(row.full_name)}/git/refs`,
+        { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: startSha }) },
+      );
+    } catch (error) {
+      throw new ApiError(409, "GIT_SYNC_FAILED", error instanceof Error ? error.message : "could not create branch");
+    }
+    await this.store.sql`
+      UPDATE git_repositories SET working_branch = ${branchName}
+      WHERE project_id = ${projectId} AND workspace_id = ${this.store.workspaceId}
+    `;
     let channelName: string;
     try {
-      channelName = await this.bindBranchChannel(row, name, actor);
+      channelName = await this.bindBranchChannel(row, branchName, actor);
     } catch (error) {
-      await this.deleteRemoteBranch(row, root, name);
-      if (previous) {
-        await this.git(root, ["-c", "core.hooksPath=/dev/null", "switch", previous]);
-        await this.git(root, ["branch", "-D", name]);
-      }
+      await this.deleteRemoteBranch(row, branchName);
+      await this.store.sql`
+        UPDATE git_repositories SET working_branch = ${previousWorkingBranch}
+        WHERE project_id = ${projectId} AND workspace_id = ${this.store.workspaceId}
+      `;
       throw error;
     }
     const now = Date.now();
@@ -717,7 +807,7 @@ export class GitRepositories {
         actorId: actor.id,
         kind: "git.branch.created",
         subjectId: projectId,
-        payload: { projectId, branch: name, startPoint: startPoint ?? null, channelName },
+        payload: { projectId, branch: branchName, startPoint: startPoint ?? null, channelName },
         createdAt: now,
       });
     });
@@ -756,17 +846,16 @@ export class GitRepositories {
     return channel.name;
   }
 
-  private async deleteRemoteBranch(row: RepositoryRow, root: string, branch: string): Promise<void> {
-    await this.withCredential(row, async (env) => {
-      const deleted = await runProcess(
-        "git",
-        [...credentialGitOptions(), "push", row.clone_url, `:refs/heads/${branch}`],
-        root,
-        env,
+  private async deleteRemoteBranch(row: RepositoryRow, branch: string): Promise<void> {
+    try {
+      await this.github.requestForConnection(
+        row.connection_id,
+        `/repos/${encodeRepo(row.full_name)}/git/refs/heads/${encodeRefPath(branch)}`,
+        { method: "DELETE" },
       );
-      if (!deleted.ok) throw new ApiError(409, "GIT_SYNC_FAILED", deleted.stderr || deleted.stdout || "could not delete branch");
-    });
-    await runProcess("git", ["update-ref", "-d", `refs/remotes/origin/${branch}`], root, minimalEnv(root));
+    } catch (error) {
+      throw new ApiError(409, "GIT_SYNC_FAILED", error instanceof Error ? error.message : "could not delete branch");
+    }
   }
 
   private async archiveBranchChannel(row: RepositoryRow, branch: string): Promise<void> {
@@ -785,74 +874,178 @@ export class GitRepositories {
     `;
   }
 
-  private async workingTree(projectId: string, directory: string): Promise<GitTreeEntry[]> {
-    const root = this.checkoutPath(projectId);
-    const target = directory ? await resolveManagedPath(root, directory) : root;
-    const entries = await fs.readdir(target, { withFileTypes: true });
-    return Promise.all(
-      entries
-        .filter((entry) => !entry.isSymbolicLink() && entry.name !== ".git")
-        .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name))
-        .map(async (entry) => {
-          const entryPath = directory ? `${directory}/${entry.name}` : entry.name;
-          const stat = entry.isFile() ? await fs.stat(path.join(target, entry.name)) : null;
-          return {
-            path: entryPath,
-            name: entry.name,
-            kind: entry.isDirectory() ? "directory" as const : "file" as const,
-            size: stat?.size ?? null,
-            sha: "",
-          };
-        }),
+  /** Every path any staged-but-uncommitted or pending-but-unpushed change touches, resolved to its latest state. */
+  private async effectiveChanges(projectId: string): Promise<Map<string, StagedChangeRow>> {
+    const rows = await this.store.sql<StagedChangeRow[]>`
+      SELECT DISTINCT ON (c.path) c.path AS path, c.kind AS kind, c.content AS content
+      FROM git_changes c
+      LEFT JOIN git_pending_commits p ON p.id = c.pending_commit_id
+      WHERE c.project_id = ${projectId}
+      ORDER BY c.path, (c.pending_commit_id IS NULL) DESC, p.created_at DESC NULLS LAST, c.id DESC
+    `;
+    return new Map(rows.map((row) => [row.path, row]));
+  }
+
+  private async effectiveFileContent(projectId: string, row: RepositoryRow, target: string): Promise<string | null> {
+    const changes = await this.effectiveChanges(projectId);
+    const change = changes.get(target);
+    if (change) return change.kind === "delete" ? null : change.content;
+    return this.githubFileContent(row, row.working_branch, target);
+  }
+
+  private async overlayTree(projectId: string, dirPath: string, base: GitTreeEntry[]): Promise<GitTreeEntry[]> {
+    const changes = await this.effectiveChanges(projectId);
+    const byPath = new Map(base.map((entry) => [entry.path, entry]));
+    const prefix = dirPath ? `${dirPath}/` : "";
+    for (const [changePath, change] of changes) {
+      if (!changePath.startsWith(prefix)) continue;
+      const rest = changePath.slice(prefix.length);
+      if (!rest || rest.includes("/")) continue;
+      if (change.kind === "delete") {
+        byPath.delete(changePath);
+      } else {
+        byPath.set(changePath, {
+          path: changePath,
+          name: rest,
+          kind: "file",
+          sha: "",
+          size: change.content ? Buffer.byteLength(change.content, "utf8") : 0,
+        });
+      }
+    }
+    return [...byPath.values()].sort(
+      (left, right) => Number(right.kind === "directory") - Number(left.kind === "directory") || left.name.localeCompare(right.name),
     );
   }
 
-  private async status(row: RepositoryRow): Promise<GitSyncStatus> {
-    if (row.state !== "ready") return emptyStatus(row.last_error ?? "checkout is not ready");
-    const root = this.checkoutPath(row.project_id);
+  private async hasStagedChanges(projectId: string): Promise<boolean> {
+    const [row] = await this.store.sql<{ exists: boolean }[]>`
+      SELECT EXISTS(SELECT 1 FROM git_changes WHERE project_id = ${projectId} AND pending_commit_id IS NULL) AS exists
+    `;
+    return row?.exists ?? false;
+  }
+
+  private async stagePath(projectId: string, target: string, kind: "upsert" | "delete", content: string | null): Promise<void> {
+    await this.store.sql`
+      INSERT INTO git_changes (project_id, path, kind, content, created_at)
+      VALUES (${projectId}, ${target}, ${kind}, ${content}, ${Date.now()})
+      ON CONFLICT (project_id, path) WHERE pending_commit_id IS NULL
+      DO UPDATE SET kind = EXCLUDED.kind, content = EXCLUDED.content, created_at = EXCLUDED.created_at
+    `;
+  }
+
+  private assertPathAllowed(target: string): void {
+    for (const part of target.split("/")) {
+      if (SENSITIVE_NAMES.has(part) || SENSITIVE_BASENAME.test(part)) throw new ApiError(400, "BAD_PATH", `${part} is a sensitive file`);
+    }
+  }
+
+  private async contentsList(row: RepositoryRow, ref: string, dirPath: string): Promise<GitTreeEntry[]> {
+    const apiPath = `/repos/${encodeRepo(row.full_name)}/contents${dirPath ? `/${encodeGitPath(dirPath)}` : ""}?ref=${encodeURIComponent(ref)}`;
+    const response = await this.github.requestForConnectionOptional<GitHubContentsEntry | GitHubContentsEntry[]>(row.connection_id, apiPath);
+    if (!response) return [];
+    const list = Array.isArray(response) ? response : [response];
+    return list
+      .filter((entry) => entry.type === "file" || entry.type === "dir")
+      .map((entry) => ({
+        path: entry.path,
+        name: entry.name,
+        kind: entry.type === "dir" ? ("directory" as const) : ("file" as const),
+        sha: entry.sha,
+        size: entry.type === "file" ? entry.size : null,
+      }));
+  }
+
+  private async githubFileContent(row: RepositoryRow, ref: string, target: string): Promise<string | null> {
+    const apiPath = `/repos/${encodeRepo(row.full_name)}/contents/${encodeGitPath(target)}?ref=${encodeURIComponent(ref)}`;
+    const response = await this.github.requestForConnectionOptional<GitHubContentsEntry | GitHubContentsEntry[]>(row.connection_id, apiPath);
+    if (!response || Array.isArray(response) || response.type !== "file") return null;
+    if (response.size > MAX_FILE_BYTES) throw new ApiError(413, "FILE_TOO_LARGE", "file exceeds 1 MiB");
+    if (!response.content) return null;
+    return Buffer.from(response.content, response.encoding === "base64" ? "base64" : "utf8").toString("utf8");
+  }
+
+  private async branchTipSha(row: RepositoryRow, branch: string): Promise<string> {
+    const ref = await this.github.requestForConnection<GitHubRefResponse>(
+      row.connection_id,
+      `/repos/${encodeRepo(row.full_name)}/git/ref/heads/${encodeRefPath(branch)}`,
+    );
+    return ref.object.sha;
+  }
+
+  private async searchFiles(row: RepositoryRow, projectId: string, query: string, dirPath?: string): Promise<ToolmanResult> {
+    const target = dirPath ? validGitPath(dirPath) : "";
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "convyio-search-"));
     try {
-      const branch = await this.currentBranch(root);
-      const localHead = await this.revision(root, "HEAD");
-      const remoteHead = branch ? await this.revision(root, `refs/remotes/origin/${branch}`, true) : null;
-      const porcelain = (await this.git(root, ["status", "--porcelain"])).stdout;
-      const lines = porcelain.split("\n").filter(Boolean);
-      const hasUntrackedFiles = lines.some((line) => line.startsWith("??"));
-      const hasUncommittedChanges = lines.some((line) => !line.startsWith("??"));
-      let aheadCount = 0;
-      let behindCount = 0;
-      if (branch && remoteHead) {
-        const counts = (await this.git(root, ["rev-list", "--left-right", "--count", `HEAD...refs/remotes/origin/${branch}`])).stdout.trim().split(/\s+/);
-        aheadCount = Number(counts[0] ?? 0);
-        behindCount = Number(counts[1] ?? 0);
+      await this.withCredential(row, async (env) => {
+        const cloned = await runProcess(
+          "git",
+          [
+            ...credentialGitOptions(),
+            "clone", "--origin", "origin", "--no-tags", "--depth=1", "--filter=blob:none",
+            "--branch", row.working_branch, row.clone_url, temporary,
+          ],
+          os.tmpdir(),
+          env,
+        );
+        if (!cloned.ok) throw new Error(cloned.stderr || cloned.stdout || cloned.error || "git clone failed");
+      });
+      await this.materializeChanges(projectId, temporary);
+      const searchTarget = target ? path.join(temporary, target) : temporary;
+      const result = await runProcess(
+        "grep",
+        ["-rIn", "--exclude-dir=node_modules", "--exclude-dir=.git", "-m", "100", "-e", query, "--", searchTarget],
+        temporary,
+        minimalEnv(temporary),
+      );
+      return { ok: true, output: clip(result.stdout || result.stderr || "(no matches)") };
+    } finally {
+      await fs.rm(temporary, { recursive: true, force: true });
+    }
+  }
+
+  private async materializeChanges(projectId: string, root: string): Promise<void> {
+    const changes = await this.effectiveChanges(projectId);
+    for (const [changePath, change] of changes) {
+      const target = path.join(root, changePath);
+      if (change.kind === "delete") {
+        await fs.rm(target, { force: true });
+      } else {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, change.content ?? "", "utf8");
       }
-      const pushBlockReason = !branch
-        ? "Detached HEAD"
-        : behindCount > 0
-          ? "Pull remote changes first"
-          : aheadCount === 0
-            ? "Nothing to push"
-            : null;
-      const pullBlockReason = !branch
-        ? "Detached HEAD"
-        : hasUncommittedChanges || hasUntrackedFiles
-          ? "Commit or discard local changes first"
-          : aheadCount > 0
-            ? "Push or reconcile local commits first"
-            : behindCount === 0
-              ? "Already up to date"
-              : null;
+    }
+  }
+
+  private async status(row: RepositoryRow): Promise<GitSyncStatus> {
+    if (row.state !== "ready") return emptyStatus(row.last_error ?? "repository is not ready");
+    try {
+      const remoteHead = await this.branchTipSha(row, row.working_branch);
+      const pending = await this.store.sql<PendingCommitRow[]>`
+        SELECT * FROM git_pending_commits WHERE project_id = ${row.project_id} ORDER BY created_at ASC
+      `;
+      const hasUncommittedChanges = await this.hasStagedChanges(row.project_id);
+      const localHead = pending.length ? pending[pending.length - 1]!.commit_sha : remoteHead;
+      const drifted = pending.length > 0 && pending[0]!.parent_sha !== remoteHead;
+      const aheadCount = pending.length;
+      const behindCount = drifted ? 1 : 0;
+      const pushBlockReason = drifted
+        ? "The branch moved on GitHub since these commits were queued"
+        : aheadCount === 0
+          ? "Nothing to push"
+          : null;
       return {
-        branch,
+        branch: row.working_branch,
         localHead,
         remoteHead,
         aheadCount,
         behindCount,
         hasUncommittedChanges,
-        hasUntrackedFiles,
+        hasUntrackedFiles: false,
         canPush: pushBlockReason === null,
         pushBlockReason,
-        canPull: pullBlockReason === null,
-        pullBlockReason,
+        canPull: false,
+        pullBlockReason: "reads are always live from GitHub; there is nothing to pull",
       };
     } catch (error) {
       return emptyStatus(error instanceof Error ? error.message : String(error));
@@ -944,10 +1137,6 @@ export class GitRepositories {
     return `${ownerName.slice(0, 71)}-${createHash("sha256").update(`${owner}/${name}`).digest("hex").slice(0, 8)}`;
   }
 
-  private checkoutPath(projectId: string): string {
-    return path.join(this.root, createHash("sha256").update(projectId).digest("hex"));
-  }
-
   private async withCredential<T>(row: RepositoryRow, action: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
     const token = await this.github.tokenForConnection(row.connection_id);
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "convyio-git-"));
@@ -961,30 +1150,6 @@ export class GitRepositories {
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }
-  }
-
-  private async git(cwd: string, args: string[]): Promise<ProcessResult> {
-    const result = await runProcess("git", args, cwd, minimalEnv(cwd));
-    if (!result.ok) throw new ApiError(409, "GIT_COMMAND_FAILED", result.stderr || result.stdout || result.error || "git command failed");
-    return result;
-  }
-
-  private async currentBranch(root: string): Promise<string | null> {
-    const result = await runProcess("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], root, minimalEnv(root));
-    return result.ok ? result.stdout.trim() || null : null;
-  }
-
-  private async revision(root: string, ref: string, optional = false): Promise<string | null> {
-    const result = await runProcess("git", ["rev-parse", "--verify", ref], root, minimalEnv(root));
-    if (!result.ok) {
-      if (optional) return null;
-      throw new ApiError(409, "GIT_COMMAND_FAILED", result.stderr || result.error || `no revision ${ref}`);
-    }
-    return result.stdout.trim();
-  }
-
-  private safeSearchPath(root: string, relative: string): Promise<string> {
-    return resolveManagedPath(root, relative);
   }
 
   private async locked<T>(projectId: string, action: () => Promise<T>): Promise<T> {
@@ -1056,17 +1221,6 @@ function minimalEnv(home: string): NodeJS.ProcessEnv {
   };
 }
 
-function actorEnv(home: string, actor: Actor): NodeJS.ProcessEnv {
-  const email = `${actor.id.replace(/[^A-Za-z0-9._-]/g, "-")}@actors.convyio.local`;
-  return {
-    ...minimalEnv(home),
-    GIT_AUTHOR_NAME: actor.displayName,
-    GIT_AUTHOR_EMAIL: email,
-    GIT_COMMITTER_NAME: actor.displayName,
-    GIT_COMMITTER_EMAIL: email,
-  };
-}
-
 function emptyStatus(reason: string): GitSyncStatus {
   return {
     branch: null,
@@ -1096,6 +1250,15 @@ function validGitPath(value: string): string {
     throw new ApiError(400, "BAD_PATH", "path must stay inside the repository");
   }
   return normalized;
+}
+
+function encodeGitPath(value: string): string {
+  return value.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+}
+
+/** Encodes a ref/branch name for use in a URL path, keeping "/" literal — branch names like "feature/x" span segments. */
+function encodeRefPath(value: string): string {
+  return value.split("/").map(encodeURIComponent).join("/");
 }
 
 function encodeRepo(fullName: string): string {

@@ -36,7 +36,17 @@ export function MemberCard({
   onPrefill: (text: string) => void;
   onClose: () => void;
 }) {
-  const { board, activeRuns, messages, setPermissionMode } = useWorkspace();
+  const {
+    board,
+    activeRuns,
+    messages,
+    setPermissionMode,
+    agentInvites,
+    participants,
+    self,
+    setAgentActive,
+    refreshAgents,
+  } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
   const [top, setTop] = useState(anchor.top);
@@ -69,6 +79,20 @@ export function MemberCard({
   }, [onClose]);
 
   const isAgent = participant.kind === "agent";
+
+  // Runner health is not pushed over the socket (see refreshAgents), so pull it
+  // once when the card opens rather than acting on whatever is stale in state.
+  useEffect(() => {
+    if (isAgent) void refreshAgents();
+  }, [isAgent, participant.id]);
+
+  // Only paired runners have a sleep/wake switch; managed agents like noodle
+  // are not in the invite list and correctly get no runner controls.
+  const invite = isAgent ? agentInvites.find((a) => a.actorId === participant.id) : undefined;
+  const asleep = invite?.runtime.health === "dormant";
+  const ownsAgent = !!invite && self?.id === invite.createdBy;
+  const ownerName = invite && participants.find((p) => p.id === invite.createdBy)?.name;
+
   const currentTask = participant.currentTaskId
     ? board.find(
         (b) =>
@@ -159,6 +183,34 @@ export function MemberCard({
               <div className="text-sm text-muted">No active task</div>
             )}
           </div>
+          {invite && (
+            <div className="mb-3">
+              <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
+                Runner
+              </div>
+              <button
+                disabled={!ownsAgent || !invite.runtime.connected}
+                onClick={() => setAgentActive(participant.id, asleep)}
+                className="w-full cursor-pointer rounded-md bg-subtle px-2 py-1.5 text-xs font-semibold text-body hover:bg-subtle-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-subtle"
+              >
+                {asleep ? "Wake up" : "Put to sleep"}
+              </button>
+              {!invite.runtime.connected ? (
+                <p className="mt-1 text-xs text-faint">
+                  Offline — it can only be woken while the computer it is paired to is running.
+                </p>
+              ) : !ownsAgent ? (
+                <p className="mt-1 text-xs text-faint">
+                  {ownerName ? `Only ${ownerName}` : "Only the person who added this agent"} can{" "}
+                  {asleep ? "wake" : "sleep"} it — it runs on their computer.
+                </p>
+              ) : asleep ? (
+                <p className="mt-1 text-xs text-faint">
+                  Asleep: connected, but running nothing and touching no files until you wake it.
+                </p>
+              ) : null}
+            </div>
+          )}
           {pendingItem && (
             <div className="mb-3">
               <div className="mb-1 text-[10px] font-bold tracking-wider text-dead uppercase">
