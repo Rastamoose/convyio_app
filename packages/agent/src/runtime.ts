@@ -121,7 +121,7 @@ export async function runAgent(
     } catch (error) {
       if (!isCurrent()) return;
       const failure = readinessFailure(error);
-      reportFailure(socket, revision, failure.health, failure.code);
+      reportFailure(socket, revision, failure.health, failure.code, error);
     }
   });
 
@@ -298,9 +298,9 @@ export function readinessFailure(error: unknown): { health: RunnerHealth; code: 
   return { health: "degraded", code: "ACP_PREFLIGHT_FAILED" };
 }
 
-function reportFailure(socket: AgentSocket, revision: number, health: RunnerHealth, code: string): void {
+function reportFailure(socket: AgentSocket, revision: number, health: RunnerHealth, code: string, detail?: unknown): void {
   socket.send({ type: "runner_status", configRevision: revision, health, diagnosticCode: code });
-  console.error(`[agent] runner preflight failed: ${code}`);
+  console.error(`[agent] runner preflight failed: ${code}`, detail instanceof Error ? detail.message : (detail ?? ""));
 }
 
 function stateDirectory(agentId: string): string {

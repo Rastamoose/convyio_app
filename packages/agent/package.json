@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --banner:js=\"import { createRequire as __convyRequire } from 'node:module';const require = __convyRequire(import.meta.url);\" --outfile=dist/cli.js && chmod 755 dist/cli.js",
+    "prepublishOnly": "npm run build",
     "dev": "tsx watch src/index.ts",
     "dev:cli": "tsx src/cli.ts",
     "test": "tsx --test test/*.test.ts"

@@ -146,30 +146,30 @@ export class AcpBrain implements Brain {
       .onRequest(acp.methods.client.session.requestPermission, (ctx) => permissionDecision(this.workspace, ctx.params))
       .onRequest(acp.methods.client.fs.readTextFile, (ctx) => readWorkspaceFile(this.workspace, ctx.params))
       .onNotification(acp.methods.client.session.update, (ctx) => this.onSessionUpdate(ctx.params));
-    if (this.testAgent) {
-      this.connection = app.connect(this.testAgent);
-    } else {
-      const executable = resolveClaudeAcpExecutable();
-      await verifyClaudeAuthentication(executable, this.workspace);
-      const child = spawn(process.execPath, [executable], {
-        cwd: this.workspace,
-        env: sanitizedChildEnvironment(process.env),
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      this.process = child;
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        this.stderr = `${this.stderr}${chunk}`.slice(-4_000);
-      });
-      const stream = acp.ndJsonStream(
-        Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-        Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-      );
-      this.connection = app.connect(stream);
-    }
-    this.context = this.connection.agent;
     try {
+      if (this.testAgent) {
+        this.connection = app.connect(this.testAgent);
+      } else {
+        const executable = resolveClaudeAcpExecutable();
+        await verifyClaudeAuthentication(executable, this.workspace);
+        const child = spawn(process.execPath, [executable], {
+          cwd: this.workspace,
+          env: sanitizedChildEnvironment(process.env),
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        this.process = child;
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk: string) => {
+          this.stderr = `${this.stderr}${chunk}`.slice(-4_000);
+        });
+        const stream = acp.ndJsonStream(
+          Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+          Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+        );
+        this.connection = app.connect(stream);
+      }
+      this.context = this.connection.agent;
       const initialized = await this.context.request(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: true, writeTextFile: false } },
@@ -277,6 +277,9 @@ export class AcpBrain implements Brain {
     if (error instanceof AcpFailure) return error;
     const detail = error instanceof Error ? error.message : String(error);
     const combined = `${detail}\n${this.stderr}`.toLowerCase();
+    if (/cannot find module|module_not_found/.test(combined)) {
+      return new AcpFailure("ACP_MISCONFIGURED", `Claude ACP harness is not installed: ${detail}. Reinstall convyio-agent.`);
+    }
     if (/auth|login|credential|unauthorized/.test(combined)) {
       return new AcpFailure("ACP_AUTH_REQUIRED", "Claude authentication is required. Run `claude login`, then restart convyio-agent.");
     }
