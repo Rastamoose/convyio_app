@@ -243,8 +243,12 @@ export interface WsEnv {
   channels: Channels;
   attachments: Attachments;
   runnerRuntime: RunnerRuntime;
+  plans: PlanService;
   hub: Hub;
   agentInvites: AgentInvites;
+  toolman: Toolman;
+  roster: Roster;
+  workspaceDir: string;
   /** Set when the env was created with auth enabled. */
   auth: Auth | null;
   baseUrl: string;
@@ -346,6 +350,8 @@ export async function createWsEnv(
       ...(options.heartbeatMs ? { heartbeatMs: options.heartbeatMs } : {}),
     },
   );
+  service.onEvent = (e) => hub.broadcastBoardEvent(e);
+  plans.onEvent = (e) => hub.broadcastPlanEvent(e);
   channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
   channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
   channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);
@@ -371,8 +377,12 @@ export async function createWsEnv(
     channels,
     attachments,
     runnerRuntime,
+    plans,
     hub,
     agentInvites,
+    toolman,
+    roster,
+    workspaceDir,
     auth,
     baseUrl: `http://localhost:${port}`,
     join(frame) {

@@ -1,0 +1,105 @@
+{
+  "channel": "demo",
+  "mode": "walkthrough",
+  "personas": ["maya", "tom"],
+  "agents": ["noodle", "hermes"],
+  "seedDir": "billing",
+  "steps": [
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "@noodle pull the overnight activity from checkout, billing and alerts. correlate it with the Sentry spike, but keep this read-only"
+    },
+    {
+      "kind": "message",
+      "author": "noodle",
+      "say": "Daily scan: the Sentry spike began 11 minutes after yesterday's billing deploy. Checkout is stable. In billing, invoice-render and PDF export disagree on multi-currency line totals. I have not changed anything."
+    },
+    {
+      "kind": "gate",
+      "gate": "continue",
+      "prompt": "Shared evidence: both founders can see the same activity and Sentry correlation without anyone copying it between tools."
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "I would normally paste that into my private agent and bring a summary back here. @hermes inspect the billing path and profile the likely cause. Read only."
+    },
+    {
+      "kind": "message",
+      "author": "hermes",
+      "say": "The two surfaces round at different stages: invoice-render rounds converted line items, while PDF export rounds only the final sum. @noodle your deploy correlation fits that path. I would centralize the customer-facing total calculation."
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "@noodle riff on @hermes's diagnosis. combine it with the activity evidence and propose one plan we can both review"
+    },
+    {
+      "kind": "message",
+      "author": "noodle",
+      "say": "Building on @hermes's trace: the smallest fix is one shared customer-facing totals helper used by invoice-render and PDF export. The deploy evidence and code path now point to the same change."
+    },
+    {
+      "kind": "action",
+      "action": "propose_plan",
+      "actor": "noodle"
+    },
+    {
+      "kind": "gate",
+      "gate": "continue",
+      "prompt": "Two independently owned agents have contributed to one reviewable Plan in the same conversation."
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "Before we accept this: @hermes check the reconciliation path. What would operations refuse to let this change break?"
+    },
+    {
+      "kind": "message",
+      "author": "hermes",
+      "say": "@noodle keep ledger-sync.ts byte-for-byte unchanged. Historical Stripe reconciliation depends on its existing per-line amounts even though the customer-facing calculation needs fixing."
+    },
+    {
+      "kind": "action",
+      "action": "add_constraint",
+      "actor": "hermes",
+      "constraint": "ledger-sync.ts output must remain identical to existing Stripe charges; do not change it"
+    },
+    {
+      "kind": "message",
+      "author": "noodle",
+      "say": "Good constraint, @hermes. The Plan now limits the change to invoice-render and PDF export and requires the ledger fixture to stay identical."
+    },
+    {
+      "kind": "gate",
+      "gate": "accept_plan",
+      "prompt": "The shared constraint changed the Plan before execution. Accept it when the approach is correct."
+    },
+    {
+      "kind": "action",
+      "action": "correct_plan",
+      "actor": "noodle"
+    },
+    {
+      "kind": "action",
+      "action": "propose_ticket",
+      "actor": "noodle"
+    },
+    {
+      "kind": "gate",
+      "gate": "approve_ticket",
+      "prompt": "Approve one owner, one bounded billing scope, and explicit verification—not an open-ended agent run."
+    },
+    {
+      "kind": "action",
+      "action": "execute",
+      "actor": "noodle"
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "That whole loop stayed here: shared evidence, both agents' ideas, our decision, one authorized implementation, and the proof. No WhatsApp summary or copied private prompt."
+    }
+  ]
+}

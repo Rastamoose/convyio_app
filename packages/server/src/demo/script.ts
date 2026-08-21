@@ -8,24 +8,45 @@ import { z } from "zod";
  * boot instead of mid-playback.
  */
 
-const stepSchema = z.object({
-  author: z.string().min(1),
-  /** Message text; "{agent}" is replaced with the online agent's name. */
-  say: z.string().min(1),
-  await: z.enum(["agent_reply", "approve_proposal", "accept_plan"]).optional(),
-});
+const stepSchema = z
+  .object({
+    kind: z.enum(["message", "gate", "action"]).default("message"),
+    author: z.string().min(1).optional(),
+    /** Message text; "{agent}" is replaced with the online agent's name. */
+    say: z.string().min(1).optional(),
+    await: z.enum(["agent_reply", "approve_proposal", "accept_plan"]).optional(),
+    gate: z.enum(["continue", "accept_plan", "approve_ticket"]).optional(),
+    prompt: z.string().min(1).max(240).optional(),
+    action: z.enum(["propose_plan", "add_constraint", "correct_plan", "propose_ticket", "execute"]).optional(),
+    actor: z.string().min(1).optional(),
+    constraint: z.string().min(1).optional(),
+  })
+  .refine(
+    (step) => {
+      if (step.kind === "message") return step.author !== undefined && step.say !== undefined;
+      if (step.kind === "gate") return step.gate !== undefined;
+      if (step.kind === "action") return step.action !== undefined;
+      return true;
+    },
+    { message: "step fields do not match kind" },
+  );
 
 const scriptSchema = z
   .object({
     channel: z.string().min(1).max(64),
+    mode: z.enum(["live", "walkthrough"]).default("live"),
     personas: z.array(z.string().min(1)).min(1),
+    agents: z.array(z.string().min(1)).default([]),
     /** Fixture tree under assets/demo/seed to copy into the workspace. */
     seedDir: z.string().min(1).optional(),
     steps: z.array(stepSchema).min(1),
   })
   .refine(
-    (script) => script.steps.every((s) => script.personas.includes(s.author)),
-    { message: "every step author must be listed in personas" },
+    (script) =>
+      script.steps.every((s) =>
+        s.kind !== "message" || script.personas.includes(s.author!) || script.agents.includes(s.author!),
+      ),
+    { message: "every message author must be listed in personas or agents" },
   );
 
 export type DemoStep = z.infer<typeof stepSchema>;

@@ -38,8 +38,8 @@ export class WorkspaceRegistry {
       supabase: this.supabase,
       github: this.github,
       dataDir: this.dataDir,
-      demoScripts: workspaceId === this.defaultWorkspaceId ? this.demoScripts : undefined,
-      demoSeedRoot: workspaceId === this.defaultWorkspaceId ? this.demoSeedRoot : undefined,
+      demoScripts: this.demoScripts,
+      demoSeedRoot: this.demoSeedRoot,
     });
     this.runtimes.set(workspaceId, creating);
     try {
@@ -99,7 +99,10 @@ export class WorkspaceRegistry {
 
   attach(server: HttpServer): void {
     server.on("upgrade", (request, socket, head) => {
-      void this.routeUpgrade(request, socket, head).catch(() => socket.destroy());
+      void this.routeUpgrade(request, socket, head).catch((err) => {
+        console.warn("[WorkspaceRegistry] upgrade failed:", err instanceof Error ? err.message : err);
+        socket.destroy();
+      });
     });
   }
 
@@ -129,6 +132,7 @@ export class WorkspaceRegistry {
     }
     const runtime = await this.get(workspaceId);
     if (!runtime) {
+      console.warn("[WorkspaceRegistry] no runtime for workspace:", workspaceId);
       socket.destroy();
       return;
     }

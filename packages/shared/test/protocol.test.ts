@@ -27,6 +27,12 @@ describe("client event validation", () => {
     assert.throws(() => clientEventSchema.parse({ type: "sudo", content: "rm -rf" }));
   });
 
+  test("demo controls include explicit chapter continuation", () => {
+    const event = clientEventSchema.parse({ type: "demo_control", channel: "demo", action: "continue" });
+    assert.equal(event.type, "demo_control");
+    assert.throws(() => clientEventSchema.parse({ type: "demo_control", channel: "demo", action: "next" }));
+  });
+
   test("action_request validates the action union", () => {
     const ok = clientEventSchema.parse({
       type: "action_request",

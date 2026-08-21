@@ -21,6 +21,7 @@ import { supabase } from "./lib/supabase";
 import { WorkspaceLobby } from "./components/WorkspaceLobby";
 import { WorkspaceInviteFlow } from "./components/WorkspaceInviteFlow";
 import { WorkspaceSettings } from "./components/WorkspaceSettings";
+import { OnboardingShell } from "./components/OnboardingShell";
 import { accountFetch, type WorkspaceAccount } from "./lib/accountApi";
 import {
   chooseInitialWorkspace,
@@ -908,6 +909,7 @@ function Workspace({
           onLeft={onOpenLobby}
         />
       )}
+      <OnboardingShell channel={channel} setChannel={setChannel} onPrefill={prefillText} />
     </div>
   );
 }

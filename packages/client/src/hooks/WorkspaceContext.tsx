@@ -102,7 +102,7 @@ export interface WorkspaceState {
   clearMessages: () => void;
   interrupt: (target: string, content: string) => void;
   startDemo: (channel: string, mode?: "walkthrough" | "live") => void;
-  demoControl: (channel: string, action: "pause" | "resume" | "skip" | "replay") => void;
+  demoControl: (channel: string, action: "pause" | "resume" | "continue" | "skip" | "replay") => void;
   demoProgress: { channel: string; stage: string; message: string; paused: boolean } | null;
   /** Resolves to the created channel's normalized name, or null on failure. */
   createChannel: (name: string, sectionId?: string | null) => Promise<string | null>;

@@ -173,29 +173,35 @@ Definition of done:
 
 # P0 — Canonical demo scenario in the real app
 
-## Convert the billing demo into the product proof
+## Make the shared engineering incident the product proof
 
-- [ ] Keep the billing inconsistency and hidden ledger constraint as the canonical scenario.
-- [ ] Update the script/schema so the demo can produce an inline PlanCard.
-- [ ] Make the initial Plan plausible but incomplete without Tom's ledger constraint.
-- [ ] Show the exact Plan change after the constraint arrives.
-- [ ] Pause for the real viewer to accept the Plan and/or approve the Ticket in the app onboarding path.
-- [ ] Stop auto-approving the onboarding proof through a scripted persona.
-- [ ] Route work through the real authorization/dispatch/project pipeline.
-- [ ] Produce the real ResultCard.
-- [ ] Verify invoice and PDF agreement while ledger fixtures remain unchanged.
-- [ ] Keep demo data isolated, restartable and clearly labeled.
-- [ ] Handle noodle/provider unavailability with an honest deterministic playback fallback.
-- [ ] Ensure demo cleanup never deletes unrelated user work.
+- [x] Use two founders and their independently owned Noodle and Hermes agents as the canonical product story.
+- [x] Show the old relay chain concretely: activity report, private agent, WhatsApp summary, second private agent, copied implementation prompt.
+- [x] Have Noodle report daily project activity and Sentry correlation directly into the shared conversation.
+- [x] Have Tom ask Hermes to inspect the affected code path without mutation.
+- [x] Show Hermes referencing Noodle's evidence and Noodle building on Hermes's diagnosis.
+- [x] Produce one inline PlanCard from both agents' shared findings.
+- [x] Keep the billing inconsistency and hidden ledger constraint as deterministic execution proof underneath the story.
+- [x] Make the initial Plan plausible but incomplete without the ledger constraint.
+- [x] Show the exact Plan change after the constraint arrives.
+- [x] Pause between major chapters so the viewer can read and understand the causal progression.
+- [x] Pause for the real viewer to accept the Plan and approve the Ticket in the app onboarding path.
+- [x] Stop auto-approving the onboarding proof through a scripted persona.
+- [x] Route work through the real authorization/dispatch/project pipeline.
+- [x] Produce the real ResultCard.
+- [x] Verify invoice and PDF agreement while ledger fixtures remain unchanged.
+- [ ] Move demo fixtures into an isolated disposable project so playback cannot overwrite similarly named user files.
+- [x] Handle noodle/provider unavailability with an honest deterministic walkthrough.
+- [ ] Ensure demo cleanup never deletes or rewrites unrelated user work.
 
 Definition of done:
 
-- The demo proves that shared human context changed authorized work before execution and that the final result preserved the new constraint.
+- The demo proves that two humans and their independently owned agents can share evidence, build on one another's findings, agree a changed Plan, authorize one responsible implementation owner and review the result without manually relaying context between private tools.
 
 ## Demo playback modes
 
-- [ ] Interactive in-app onboarding mode with real user decision.
-- [ ] Deterministic in-app replay mode for support/demo reliability.
+- [x] Interactive in-app onboarding mode with real user decision.
+- [x] Deterministic in-app replay mode for support/demo reliability.
 - [ ] Landing-page video/recording mode sourced from the real app.
 - [ ] Accessible transcript/poster mode.
 - [ ] Reduced-motion mode.
@@ -314,8 +320,8 @@ Landing-specific direction is documented in `/home/harris/Programming/convyio/si
 ## Replace the current primary demo
 
 - [ ] Retire collaborative copywriting as the main product proof.
-- [ ] Use the canonical billing constraint-before-work scenario.
-- [ ] Show PlanCard, Plan change, human decision, bounded execution and ResultCard.
+- [ ] Use the canonical two-founder/two-agent engineering incident, with the billing fixture only as deterministic execution proof.
+- [ ] Show shared evidence, cross-agent reasoning, PlanCard, Plan change, human decision, bounded execution and ResultCard.
 - [ ] Embed the final recording from the real app flow.
 - [ ] Keep an accessible transcript or interactive playback.
 - [ ] Provide captions, replay and reduced-motion poster.
@@ -341,7 +347,7 @@ This starts only after the real app loop is visually coherent.
 
 ## Preproduction
 
-- [ ] Lock the canonical billing storyboard from `AGENTS/onboarding.txt`.
+- [ ] Lock the canonical shared engineering-incident storyboard from `AGENTS/onboarding.txt`.
 - [ ] Define full, landing and social durations from one master sequence.
 - [ ] Write captions and on-screen copy.
 - [ ] Identify every product state that must be real versus deterministic.

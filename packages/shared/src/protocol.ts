@@ -105,6 +105,14 @@ export const interruptEventSchema = z.object({
 export const demoStartEventSchema = z.object({
   type: z.literal("demo_start"),
   channel: z.string().max(64).default("demo"),
+  /** "walkthrough" replays a deterministic scripted loop; omit or "live" to use a connected agent. */
+  mode: z.enum(["walkthrough", "live"]).optional(),
+});
+
+export const demoControlEventSchema = z.object({
+  type: z.literal("demo_control"),
+  channel: z.string().max(64),
+  action: z.enum(["pause", "resume", "continue", "skip", "replay"]),
 });
 
 export const runEndEventSchema = z.object({
@@ -443,6 +451,7 @@ export const clientEventSchema = z
     summaryEventSchema,
     interruptEventSchema,
     demoStartEventSchema,
+    demoControlEventSchema,
     runEndEventSchema,
     workClaimEventSchema,
     workCompleteEventSchema,
@@ -478,6 +487,7 @@ export type SummaryEvent = z.infer<typeof summaryEventSchema>;
 export type ClearEvent = z.infer<typeof clearEventSchema>;
 export type InterruptEvent = z.infer<typeof interruptEventSchema>;
 export type DemoStartEvent = z.infer<typeof demoStartEventSchema>;
+export type DemoControlEvent = z.infer<typeof demoControlEventSchema>;
 export type RunEndEvent = z.infer<typeof runEndEventSchema>;
 export type WorkClaimEvent = z.infer<typeof workClaimEventSchema>;
 export type WorkCompleteEvent = z.infer<typeof workCompleteEventSchema>;
@@ -752,6 +762,14 @@ export interface RunEndBroadcast {
   reason: "completed" | "aborted";
 }
 
+export interface DemoProgressEvent {
+  type: "demo_progress";
+  channel: string;
+  stage: string;
+  message: string;
+  paused: boolean;
+}
+
 export type ServerEvent =
   | WelcomeEvent
   | AgentConfigEvent
@@ -779,6 +797,7 @@ export type ServerEvent =
   | ChannelMovedEvent
   | InterruptBroadcast
   | RunEndBroadcast
+  | DemoProgressEvent
   | ActionResultEvent
   | ProjectSyncEvent
   | ProjectUpdatedEvent

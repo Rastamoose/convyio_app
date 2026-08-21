@@ -188,6 +188,7 @@ export class WorkspaceRuntime {
         db,
         board,
         plans,
+        toolman,
         workspaceDir,
         options.demoSeedRoot,
         demoScripts,

@@ -20,6 +20,7 @@ import {
   type ConversationModeSetEvent,
   type ConversationSessionSetEvent,
   type InteractionResolveEvent,
+  type DemoProgressEvent,
   type JoinEvent,
   type MessageDeleteEvent,
   type MessageEditEvent,
@@ -128,7 +129,9 @@ export class Hub {
   /** Optional hook fired for every message posted to the channel. */
   onMessagePosted: ((message: ChatMessage) => void) | null = null;
   /** Optional hook fired when a client requests the scripted demo. */
-  onDemoStart: ((channel: string, actorId: string) => void) | null = null;
+  onDemoStart: ((channel: string, mode: "walkthrough" | "live" | undefined, actorId: string) => void) | null = null;
+  /** Optional hook fired for demo playback controls. */
+  onDemoControl: ((channel: string, action: string, actorId: string) => void) | null = null;
   /** Optional hook fired for every board event fanned out to clients. */
   onBoardEvent: ((envelope: BoardEventEnvelope) => void) | null = null;
   /** Optional hook fired for every plan event fanned out to clients. */
@@ -257,6 +260,10 @@ export class Hub {
 
   broadcastChannelMoved(name: string, sectionId: string | null): void {
     this.broadcast({ type: "channel_moved", channel: name, sectionId });
+  }
+
+  broadcastDemoProgress(event: DemoProgressEvent): void {
+    this.broadcast(event);
   }
 
   /**
@@ -436,7 +443,10 @@ export class Hub {
         break;
       }
       case "demo_start":
-        this.onDemoStart?.(event.channel, participant.id);
+        this.onDemoStart?.(event.channel, event.mode, participant.id);
+        break;
+      case "demo_control":
+        this.onDemoControl?.(event.channel, event.action, participant.id);
         break;
       case "clear":
         await this.clearChannel(participant.id);

@@ -523,32 +523,40 @@ One canonical scenario should power:
 - usability tests;
 - product regression/dogfooding demonstrations.
 
-The canonical scenario is the billing bug because it proves the category difference:
+The canonical product story is a shared engineering incident involving two founders and their independently owned agents. The billing rounding fixture remains the deterministic execution proof inside that story; it is not the category narrative.
 
-- a real problem is raised;
-- an agent investigates without mutation;
-- the initial plan is plausible;
-- a second human supplies a ledger constraint that exists only in conversation;
-- the plan changes before work;
-- the viewer makes the approval decision;
-- bounded work is assigned and executed;
-- the result proves invoice/PDF agreement while ledger output remains unchanged;
-- evidence returns to the thread.
+The story proves the category difference:
 
-The demo should focus on the prevented rework, not on message volume or model cleverness.
+- a daily activity agent reports project and Sentry evidence directly into the shared conversation;
+- both founders see the same evidence without relaying a private-agent summary;
+- the second founder asks their independently owned agent to inspect the affected code path;
+- that agent references the first agent's evidence;
+- the first agent builds on the second agent's diagnosis and proposes one shared Plan;
+- the founders discuss the trade-off beside both agents;
+- a ledger constraint changes the Plan before execution;
+- the viewer accepts the Plan and approves one bounded owner, scope and verification target;
+- the responsible implementation agent executes;
+- the result and evidence return to the same conversation.
+
+The billing fixture proves the final authorized implementation deterministically: invoice and PDF totals agree while ledger behavior remains unchanged. A GTM workflow is a secondary example of the same problem: agent results should enter the shared conversation directly instead of being manually relayed through private messages and copied prompts.
+
+The demo should focus on removed context relay, agents building on shared findings and the prevented rework—not on message volume or model cleverness.
 
 Suggested narrative spine:
 
 ```text
-0–6s    Agent work normally becomes team work at review. That is too late.
-6–15s   A billing bug is raised in the shared thread.
-15–25s  Noodle investigates and produces an inline PlanCard.
-25–35s  Tom adds the ledger constraint; the Plan visibly changes.
-35–43s  The viewer approves the corrected scope and owner.
-43–55s  Convyio routes the authorized work; progress stays in the thread.
-55–68s  A ResultCard returns with changes, checks and preserved ledger behavior.
-68–75s  Same agents. Different system of work.
+0–8s     Show the old chain: activity report -> private agent -> WhatsApp summary -> another private agent -> copied implementation prompt.
+8–20s    Maya asks @noodle for daily project activity and Sentry correlation; the evidence appears in the shared thread.
+20–35s   Tom asks @hermes to inspect the code path; Hermes references Noodle's evidence.
+35–50s   Maya asks Noodle to build on Hermes's diagnosis; one shared Plan appears.
+50–62s   Hermes identifies the ledger constraint; the Plan visibly changes before execution.
+62–75s   The viewer accepts the Plan and approves one bounded implementation Ticket.
+75–90s   Convyio routes the authorized work; progress stays in the thread.
+90–105s  A ResultCard returns with changes, checks and preserved ledger behavior.
+105–112s Same agents. Different system of work.
 ```
+
+The interactive walkthrough pauses between major chapters and at consequential human decisions. Short landing and social cuts may compress the same sequence, but they must preserve the two-human/two-agent causal story.
 
 The final duration is subordinate to clarity. A shorter cut may be used on the landing page; the complete version should remain available.
 

@@ -1,37 +1,64 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { BoardEventEnvelope, ChatMessage, PlanEventEnvelope } from "@workspace/shared";
+import type {
+  Actor,
+  BoardEventEnvelope,
+  BoardItem,
+  ChatMessage,
+  Participant,
+  PlanEventEnvelope,
+  WorkCapability,
+} from "@workspace/shared";
+import { emptyImpactMap } from "@workspace/shared";
+import type { EcosystemImpact, ImpactSurface } from "@workspace/shared";
+import type { WorkspaceDb } from "../db";
 import type { Hub } from "../hub";
 import type { Roster } from "../roster";
-import type { WorkspaceDb } from "../db";
 import type { BoardService } from "../board/BoardService";
 import type { PlanService } from "../board/PlanService";
+import type { Toolman } from "../board/Toolman";
 import type { DemoScript } from "./script";
 
-const STEP_DELAY_MS = 4500;
+const DEFAULT_STEP_DELAY_MS = 3_000;
 const AGENT_TIMEOUT_MS = 90_000;
-/** Post-approval the agent starts, edits files, and completes — allow longer. */
 const WORK_TIMEOUT_MS = 180_000;
 
-/**
- * Replays a demo script through the real pipeline: persona messages go
- * through the hub exactly like human input, agent replies and board
- * proposals are the live agent's own work. The orchestrator only feeds
- * inputs and waits — it owns no script content and no special server
- * behaviour.
- */
+export interface DemoRun {
+  channel: string;
+  script: DemoScript;
+  mode: "live" | "walkthrough";
+  generation: number;
+  startedBy: string;
+  stage: string;
+  progressMessage: string;
+  paused: boolean;
+  cancelled: boolean;
+  stepIndex: number;
+  planRef?: string;
+  ticketRef?: string;
+}
+
+export interface DemoProgress {
+  channel: string;
+  stage: string;
+  message: string;
+  paused: boolean;
+  running: boolean;
+}
+
 export class DemoOrchestrator {
-  private running = false;
-  /** Bumped on every start; a stale generation aborts its loop. */
   private generation = 0;
-  private agentReplyWaiter: ((message: ChatMessage) => void) | null = null;
-  private proposalWaiter: ((ref: string) => void) | null = null;
-  private cancelWaits: (() => void)[] = [];
-  /** Ref of the latest agent proposal observed during the current run. */
-  private lastProposalRef: string | null = null;
-  private lastPlanRef: string | null = null;
-  /** Board refs created by demo runs, cleaned up on the next start. */
-  private demoRefs = new Set<string>();
+  private run: DemoRun | null = null;
+  private resolveAgentReply: (() => void) | null = null;
+  private gateResolve: (() => void) | null = null;
+  private gateType: string | null = null;
+  private latestProposalRef: string | null = null;
+  private latestPlanRef: string | null = null;
+  private readonly demoRefs = new Set<string>();
+  private readonly demoPlanRefs = new Set<string>();
+  private readonly actors = new Map<string, Actor>();
+  private readonly participants = new Map<string, Participant>();
 
   constructor(
     private hub: Hub,
@@ -39,222 +66,630 @@ export class DemoOrchestrator {
     private db: WorkspaceDb,
     private service: BoardService,
     private plans: PlanService,
+    private toolman: Toolman,
     private workspaceDir: string,
     private seedRoot: string,
     private scripts: Map<string, DemoScript>,
+    private stepDelayMs = DEFAULT_STEP_DELAY_MS,
   ) {
-    hub.onDemoStart = (channel, actorId) => void this.start(channel, actorId);
-    hub.onMessagePosted = (message) => {
-      if (message.authorKind === "agent") {
-        this.agentReplyWaiter?.(message);
-      }
-    };
+    hub.onDemoStart = (channel, mode, actorId) => void this.start(channel, mode, actorId);
+    hub.onDemoControl = (channel, action, actorId) => void this.control(channel, action, actorId);
+    hub.onMessagePosted = (message) => this.onMessagePosted(message);
     hub.onBoardEvent = (envelope) => this.onBoardEvent(envelope);
     hub.onPlanEvent = (envelope) => this.onPlanEvent(envelope);
   }
 
-  get channels(): string[] {
-    return [...this.scripts.keys()];
-  }
-
-  private onBoardEvent(envelope: BoardEventEnvelope): void {
-    if (envelope.type === "item.proposed" && this.running) {
-      this.demoRefs.add(envelope.item.ref);
-      this.lastProposalRef = envelope.item.ref;
-      this.proposalWaiter?.(envelope.item.ref);
+  progress(channel: string): DemoProgress {
+    const run = this.run;
+    if (run && run.channel === channel) {
+      return {
+        channel: run.channel,
+        stage: run.stage,
+        message: run.progressMessage,
+        paused: run.paused,
+        running: !run.cancelled,
+      };
     }
+    return { channel, stage: "idle", message: "No demo running.", paused: false, running: false };
   }
 
-  private onPlanEvent(envelope: PlanEventEnvelope): void {
-    if ((envelope.type === "plan.proposed" || envelope.type === "plan.created") && this.running) {
-      this.lastPlanRef = envelope.plan.ref;
-    }
-  }
-
-  /** Always restarts from the top: cancels any in-flight run and clears the channel. */
-  private async start(channel: string, actorId: string): Promise<void> {
+  private async start(channel: string, mode: "live" | "walkthrough" | undefined, startedBy: string): Promise<void> {
     const script = this.scripts.get(channel);
-    if (!script) return;
-
-    const gen = ++this.generation;
-    for (const cancel of [...this.cancelWaits]) cancel();
-
-    // Let a previous run unwind before starting over.
-    while (this.running) {
-      await delay(50);
-      if (gen !== this.generation) return; // superseded by an even newer start
+    if (!script) {
+      console.warn(`[demo] no script for ${channel}`);
+      return;
     }
-    this.running = true;
-    this.lastProposalRef = null;
-    this.lastPlanRef = null;
-    console.log(`[demo] starting scripted demo in #${channel}`);
+    if (this.run) {
+      await this.abortRun();
+    }
+    const gen = ++this.generation;
+    const resolvedMode = mode ?? script.mode ?? "live";
+    this.run = {
+      channel,
+      script,
+      mode: resolvedMode,
+      generation: gen,
+      startedBy,
+      stage: "intro",
+      progressMessage: "Two founders and their independently owned agents start with the same evidence.",
+      paused: false,
+      cancelled: false,
+      stepIndex: 0,
+    };
+    this.broadcastProgress(this.run.progressMessage);
 
     try {
-      await this.hub.clearChannel(actorId, channel);
-      await this.cleanupDemoItems(script.personas[0]);
-      if (script.seedDir) await this.seedWorkspace(script.seedDir);
-
-      const agentName = this.roster.onlineAgentName();
-      if (!agentName) {
-        await this.post(script.personas[0], "(demo aborted: no agent is online — start the agent process first)", channel);
-        return;
-      }
-
-      for (const step of script.steps) {
-        await delay(STEP_DELAY_MS);
-        if (gen !== this.generation) return;
-        await this.post(step.author, step.say.replaceAll("{agent}", agentName), channel);
-        if (step.await === "agent_reply") {
-          await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
-          if (gen !== this.generation) return;
-        }
-        if (step.await === "approve_proposal") {
-          await this.approveProposal(step.author, channel);
-          if (gen !== this.generation) return;
-        }
-        if (step.await === "accept_plan") {
-          await this.acceptPlan(step.author, channel);
-          if (gen !== this.generation) return;
-        }
+      await this.prepare(channel, script, startedBy);
+      if (resolvedMode === "walkthrough") {
+        await this.runWalkthrough(channel, script, startedBy, gen);
+      } else {
+        await this.runLive(channel, script, startedBy, gen);
       }
     } catch (err) {
-      console.warn("[demo] aborted:", err instanceof Error ? err.message : err);
-    } finally {
-      this.running = false;
-      if (gen === this.generation) {
-        this.removePersonas(script.personas);
-      }
-      console.log("[demo] finished");
+      if (this.generation !== gen) return;
+      console.error("[demo] run failed:", err instanceof Error ? err.message : err);
+      this.setStage("failed", err instanceof Error ? err.message : "Demo failed");
+      await this.cleanupParticipants();
     }
   }
 
-  /** Post a message as a scripted persona through the normal pipeline. */
-  private async post(persona: string, content: string, channel: string): Promise<void> {
-    const participant = await this.roster.join("human", persona);
-    this.hub.broadcastPresence();
-    await this.hub.postMessage(participant, content, channel);
-  }
-
-  private removePersonas(personas: string[]): void {
-    for (const persona of personas) {
-      const participant = this.roster.get("human", persona);
-      if (participant) this.roster.removeHuman(participant.id);
+  private async abortRun(): Promise<void> {
+    if (this.run) {
+      this.run.cancelled = true;
+      this.resolveGate();
+      this.resolveAgentReply?.();
+      this.resolveAgentReply = null;
+      await this.cleanupParticipants();
     }
-    this.hub.broadcastPresence();
   }
 
-  /** Copy a fixture tree into the shared workspace before playback. */
-  private async seedWorkspace(seedDir: string): Promise<void> {
-    await fs.cp(path.join(this.seedRoot, seedDir), path.join(this.workspaceDir, seedDir), {
-      recursive: true,
-    });
-  }
-
-  /**
-   * Approve the proposal the agent filed during this run (waiting briefly if
-   * it has not landed yet), then wait for the agent's completion reply.
-   */
-  private async approveProposal(author: string, channel: string): Promise<void> {
-    const ref =
-      this.lastProposalRef ?? (await this.waitForProposal(AGENT_TIMEOUT_MS));
-    const actor = await this.db.upsertActor("human", author);
-    const item = await this.service.find(this.db.workspaceId, ref);
-    if (!item || item.status !== "proposed") {
-      throw new Error(`demo proposal ${ref} is not approvable`);
+  private async control(channel: string, action: string, _actorId: string): Promise<void> {
+    if (!this.run || this.run.channel !== channel) {
+      console.warn(`[demo] control ${action} for ${channel} but no matching run`);
+      return;
     }
-    const owner = item.owner
-      ?? this.roster.list().find((participant) => participant.kind === "agent")?.id;
-    if (!owner) throw new Error(`demo proposal ${ref} has no owner to assign`);
-    await this.service.approve(actor, ref, owner);
-    console.log(`[demo] ${author} approved ${ref} for ${owner}`);
-    await this.waitForAgentReply(channel, WORK_TIMEOUT_MS);
+    switch (action) {
+      case "pause":
+        this.run.paused = true;
+        this.broadcastProgress("Paused.");
+        break;
+      case "resume":
+        this.resume();
+        break;
+      case "continue":
+        if (this.gateType === "continue") {
+          this.setStage("continuing", "Continuing the shared workflow.");
+          this.resolveGate();
+        }
+        break;
+      case "skip":
+        this.run.cancelled = true;
+        this.setStage("idle", "Skipped.");
+        this.resolveGate();
+        await this.cleanupParticipants();
+        break;
+      case "replay":
+        await this.start(channel, this.run.mode, this.run.startedBy);
+        break;
+    }
   }
 
-  private async acceptPlan(author: string, channel: string): Promise<void> {
-    const ref = this.lastPlanRef;
-    if (!ref) throw new Error("demo has no plan to accept");
-    const actor = await this.db.upsertActor("human", author);
-    await this.plans.accept(actor, ref);
-    console.log(`[demo] ${author} accepted ${ref}`);
-    await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
+  private resume(): void {
+    if (!this.run) return;
+    this.run.paused = false;
+    this.broadcastProgress("Resumed.");
   }
 
-  /**
-   * Best-effort board hygiene: soft-delete leftovers from previous demo runs
-   * so restarting the demo does not pile up stale proposals.
-   */
-  private async cleanupDemoItems(asPersona: string): Promise<void> {
-    if (this.demoRefs.size === 0) return;
-    const actor = await this.db.upsertActor("human", asPersona);
-    for (const ref of this.demoRefs) {
+  private async prepare(channel: string, script: DemoScript, startedBy: string): Promise<void> {
+    this.actors.clear();
+    this.participants.clear();
+    await this.cleanupOldDemoWork();
+    for (const name of script.personas) await this.requireActor(name, "human");
+    for (const name of script.agents) await this.requireActor(name, "agent");
+    await this.hub.clearChannel(startedBy, channel);
+    if (script.seedDir) {
+      await this.seedWorkspace(script.seedDir);
+    }
+  }
+
+  private async cleanupOldDemoWork(): Promise<void> {
+    const human = await this.requireActor("maya", "human");
+    for (const ref of [...this.demoPlanRefs]) {
       try {
-        const item = await this.service.find(this.db.workspaceId, ref);
-        if (item && item.deletedAt == null) await this.service.softDelete(actor, ref);
-      } catch (err) {
-        console.warn(`[demo] cleanup of ${ref} failed:`, err instanceof Error ? err.message : err);
+        await this.plans.cancel(human, ref);
+      } catch {
+        // Already terminal or gone.
+      }
+    }
+    this.demoPlanRefs.clear();
+    for (const ref of [...this.demoRefs]) {
+      try {
+        await this.service.softDelete(human, ref);
+      } catch {
+        // Already gone.
       }
     }
     this.demoRefs.clear();
   }
 
-  private waitForAgentReply(channel: string, timeoutMs: number): Promise<void> {
-    return this.waitFor<ChatMessage>(
-      timeoutMs,
-      "timed out waiting for agent reply",
-      (set) => {
-        this.agentReplyWaiter = set;
-        return () => (this.agentReplyWaiter = null);
-      },
-      (message) => (message.channel ?? "general") === channel,
-    ).then(() => undefined);
+  private async cleanupParticipants(): Promise<void> {
+    for (const name of [...this.participants.keys()]) {
+      const participant = this.participants.get(name)!;
+      if (participant.kind === "human") {
+        this.roster.removeHuman(participant.id);
+      } else {
+        this.roster.setOnline(participant.id, false);
+      }
+    }
+    this.participants.clear();
+    this.actors.clear();
   }
 
-  private waitForProposal(timeoutMs: number): Promise<string> {
-    return this.waitFor<string>(
-      timeoutMs,
-      "timed out waiting for an agent proposal",
-      (set) => {
-        this.proposalWaiter = set;
-        return () => (this.proposalWaiter = null);
-      },
-      () => true,
+  // -------------------------------------------------------------------------
+  // Walkthrough
+  // -------------------------------------------------------------------------
+
+  private async runWalkthrough(channel: string, script: DemoScript, _startedBy: string, gen: number): Promise<void> {
+    for (let i = 0; i < script.steps.length; i++) {
+      if (!this.isCurrent(gen)) return;
+      this.run!.stepIndex = i;
+      await this.waitIfPaused();
+      if (!this.isCurrent(gen)) return;
+      const step = script.steps[i];
+      try {
+        if (step.kind === "message") {
+          const text = this.replaceAgent(step.say!, script);
+          await this.postAs(step.author!, text, channel);
+          if (step.await === "agent_reply") {
+            await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
+          }
+        } else if (step.kind === "gate") {
+          await this.pauseAtGate(step.gate!, step.prompt);
+        } else if (step.kind === "action") {
+          await this.runAction(step.action!, step.actor, step.constraint, channel, script);
+        }
+      } catch (err) {
+        throw err;
+      }
+      if (step.kind !== "gate") await this.delay(this.stepDelayMs);
+    }
+    if (this.isCurrent(gen)) {
+      this.setStage("completed", "Demo complete.");
+      await this.cleanupParticipants();
+    }
+  }
+
+  private async runAction(
+    action: string,
+    actorName: string | undefined,
+    constraint: string | undefined,
+    channel: string,
+    _script: DemoScript,
+  ): Promise<void> {
+    switch (action) {
+      case "propose_plan":
+        await this.proposePlan(channel);
+        break;
+      case "add_constraint":
+        await this.addConstraint(actorName ?? "tom", constraint ?? "ledger-sync.ts output must remain identical to existing Stripe charges");
+        break;
+      case "correct_plan":
+        await this.correctPlan(actorName ?? "noodle");
+        break;
+      case "propose_ticket":
+        await this.proposeTicket(channel);
+        break;
+      case "execute":
+        await this.executeTicket(this.run!.ticketRef!);
+        break;
+      default:
+        console.warn(`[demo] unknown walkthrough action ${action}`);
+    }
+  }
+
+  private async proposePlan(channel: string): Promise<void> {
+    const noodle = await this.requireActor("noodle", "agent");
+    const plan = await this.plans.create(noodle, {
+      title: "Fix the multi-currency invoice regression",
+      objective: "Restore agreement between the in-app invoice and customer-facing PDF after the billing deploy.",
+      outline: [
+        "Use the daily activity report and Sentry spike to isolate the affected billing path",
+        "Introduce a shared totals helper that rounds each converted line item and sums the rounded line totals",
+        "Update invoice-render.ts and pdf-export.ts to use the shared helper",
+        "Run the billing fixture before proposing any wider change",
+      ],
+      constraints: ["Invoice and PDF totals must agree for the same invoice"],
+      clarifications: [
+        "Noodle correlated the error spike with the billing deploy; Hermes traced the discrepancy to per-line versus final-total rounding",
+      ],
+      acceptanceCriteria: [
+        "invoice and PDF totals agree for sample invoices",
+        "billing/check.ts passes",
+      ],
+      impactMap: completeImpactMap({ tests: "billing/check.ts verifies agreement" }),
+      channel,
+      assumedOwnerId: noodle.id,
+    });
+    this.run!.planRef = plan.ref;
+    this.demoPlanRefs.add(plan.ref);
+    this.setStage("plan_proposed", "Both agents' findings are now one shared plan. Next: check what it must not break.");
+  }
+
+  private async addConstraint(actorName: string, text: string): Promise<void> {
+    const actor = await this.requireActor(actorName);
+    if (!this.run?.planRef) throw new Error("no plan to add constraint to");
+    await this.plans.appendConstraint(actor, this.run.planRef, text);
+    this.setStage("constraint_added", "Plan updated with a new constraint before execution.");
+  }
+
+  private async correctPlan(actorName: string): Promise<void> {
+    const actor = await this.requireActor(actorName);
+    if (!this.run?.planRef) throw new Error("no plan to correct");
+    await this.plans.appendDecision(
+      actor,
+      this.run.planRef,
+      "Approach corrected: update only invoice-render.ts and pdf-export.ts; leave ledger-sync.ts unchanged so existing Stripe reconciliation stays valid.",
     );
+    this.setStage("plan_corrected", "Plan corrected before execution.");
   }
 
-  /** Shared cancellable wait plumbing for message/proposal waiters. */
-  private waitFor<T>(
-    timeoutMs: number,
-    timeoutMessage: string,
-    register: (notify: (value: T) => void) => () => void,
-    accept: (value: T) => boolean,
-  ): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      let unregister = () => {};
-      const cleanup = () => {
-        clearTimeout(timer);
-        unregister();
-        this.cancelWaits = this.cancelWaits.filter((c) => c !== cancel);
+  private async proposeTicket(channel: string): Promise<void> {
+    const noodle = await this.requireActor("noodle", "agent");
+    if (!this.run?.planRef) throw new Error("no plan for ticket");
+    const ticket = await this.service.create(noodle, {
+      title: "Implement the reviewed invoice-total fix",
+      why: "The shared activity and Sentry investigation tied a customer-facing mismatch to the latest billing deploy.",
+      effect: "Invoice and PDF totals agree for the same invoice; ledger-sync.ts remains unchanged so Stripe reconciliation is preserved.",
+      planId: this.run.planRef,
+      owner: noodle.id,
+      scopePaths: ["billing/"],
+      capabilities: ["file_write", "shell_repo"] as WorkCapability[],
+      acceptanceCriteria: [
+        "invoice and PDF totals agree for sample invoices",
+        "ledger-sync.ts output matches existing Stripe charges",
+        "billing/check.ts passes",
+      ],
+      impactMap: completeImpactMap({ tests: "billing/check.ts verifies agreement" }),
+      channel,
+    });
+    this.run.ticketRef = ticket.ref;
+    this.demoRefs.add(ticket.ref);
+    this.setStage("ticket_proposed", "Ticket proposed. Approve it to authorize the changes.");
+  }
+
+  private async executeTicket(ticketRef: string): Promise<void> {
+    this.setStage("executing", "Running the authorized changes.");
+    const noodle = await this.requireActor("noodle", "agent");
+    const billingDir = path.join(this.workspaceDir, "billing");
+    const ledgerBefore = await fs.readFile(path.join(billingDir, "ledger-sync.ts"), "utf8");
+
+    await this.service.start(noodle, ticketRef);
+
+    const totalsContent = `import { roundMoney } from "./round";
+
+export function computeInvoiceTotals(
+  lines: { qty: number; unitPrice: number }[],
+  fxRate: number,
+) {
+  const lineTotals = lines.map((l) => roundMoney(l.qty * l.unitPrice * fxRate));
+  const total = lineTotals.reduce((sum, t) => sum + t, 0);
+  return { lineTotals, total };
+}
+`;
+
+    const invoiceContent = `import { computeInvoiceTotals } from "./totals";
+import type { LineItem } from "./invoice-render";
+
+export interface LineItem {
+  description: string;
+  qty: number;
+  unitPrice: number;
+}
+
+export function renderInvoiceTotals(lines: LineItem[], fxRate: number) {
+  return computeInvoiceTotals(lines, fxRate);
+}
+`;
+
+    const pdfContent = `import { computeInvoiceTotals } from "./totals";
+import type { LineItem } from "./invoice-render";
+
+export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
+  return computeInvoiceTotals(lines, fxRate);
+}
+`;
+
+    const outputs: string[] = [];
+    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/totals.ts", totalsContent));
+    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/invoice-render.ts", invoiceContent));
+    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/pdf-export.ts", pdfContent));
+
+    const ledgerAfter = await fs.readFile(path.join(billingDir, "ledger-sync.ts"), "utf8");
+    const ledgerUnchanged = ledgerBefore === ledgerAfter;
+
+    let checkOutput = "";
+    try {
+      const result = await this.toolman.execute(
+        noodle,
+        { kind: "run_shell", command: "tsx billing/check.ts" },
+        ticketRef,
+      );
+      checkOutput = result.ok ? result.output ?? "" : result.error ?? "check failed";
+      outputs.push(checkOutput);
+    } catch (err) {
+      checkOutput = `verification check error: ${err instanceof Error ? err.message : String(err)}`;
+      outputs.push(checkOutput);
+    }
+
+    const evidence = [
+      "Changed: billing/totals.ts, billing/invoice-render.ts, billing/pdf-export.ts",
+      `Ledger preserved: ${ledgerUnchanged ? "yes — ledger-sync.ts is byte-identical" : "no — ledger-sync.ts changed"}`,
+      "",
+      "Verification:",
+      checkOutput,
+    ].join("\n");
+
+    await this.service.complete(noodle, ticketRef, evidence);
+  }
+
+  private async toolFileWrite(actor: Actor, ticketRef: string, filePath: string, content: string): Promise<string> {
+    const result = await this.toolman.execute(actor, { kind: "write_file", path: filePath, content }, ticketRef);
+    if (!result.ok) throw new Error(`write ${filePath} failed: ${result.error}`);
+    return result.output ?? `wrote ${filePath}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // Live mode (legacy script-driven demo with one connected agent)
+  // -------------------------------------------------------------------------
+
+  private async runLive(channel: string, script: DemoScript, _startedBy: string, gen: number): Promise<void> {
+    for (const step of script.steps) {
+      if (!this.isCurrent(gen)) return;
+      if (step.kind !== "message") continue;
+      const text = this.replaceAgent(step.say!, script);
+      await this.postAs(step.author!, text, channel);
+      if (step.await === "agent_reply") {
+        await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
+      } else if (step.await === "approve_proposal") {
+        await this.waitForProposal(channel, WORK_TIMEOUT_MS);
+        await this.approveLatestProposal(channel);
+      } else if (step.await === "accept_plan") {
+        await this.waitForPlan(channel, WORK_TIMEOUT_MS);
+        await this.acceptLatestPlan(channel);
+      }
+      await this.delay(this.stepDelayMs);
+    }
+    if (this.isCurrent(gen)) {
+      this.setStage("completed", "Demo complete.");
+      await this.cleanupParticipants();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  private async requireActor(name: string, kind?: "human" | "agent"): Promise<Actor> {
+    const cached = this.actors.get(name);
+    if (cached) return cached;
+    const resolvedKind = kind ?? (this.run?.script.agents.includes(name) ? "agent" : "human");
+    let actor: Actor;
+    if (resolvedKind === "agent" && name === "noodle") {
+      const managed = await this.db.findManagedAgent("noodle");
+      actor = managed ?? (await this.db.upsertActor("agent", "noodle"));
+    } else if (resolvedKind === "agent") {
+      const rows = await this.db.sql<{ id: string; display_name: string }[]>`
+        SELECT id, display_name FROM actors WHERE kind = 'agent' AND lower(display_name) = lower(${name})
+      `;
+      if (rows[0]) {
+        actor = {
+          id: rows[0].id,
+          kind: "agent",
+          displayName: rows[0].display_name,
+          workspaceId: this.db.workspaceId,
+        };
+      } else {
+        const id = randomUUID();
+        await this.db.sql`INSERT INTO actors (id, kind, display_name) VALUES (${id}, 'agent', ${name})`;
+        actor = { id, kind: "agent", displayName: name, workspaceId: this.db.workspaceId };
+      }
+    } else {
+      actor = await this.db.upsertActor("human", name);
+    }
+    this.actors.set(name, actor);
+    await this.joinParticipant(actor);
+    return actor;
+  }
+
+  private async joinParticipant(actor: Actor): Promise<Participant> {
+    const cached = this.participants.get(actor.displayName);
+    if (cached) return cached;
+    const participant = await this.roster.join(actor.kind, actor.displayName, actor.id);
+    this.participants.set(actor.displayName, participant);
+    return participant;
+  }
+
+  private async postAs(name: string, content: string, channel: string): Promise<void> {
+    const actor = await this.requireActor(name);
+    const participant = await this.joinParticipant(actor);
+    await this.hub.postMessage(participant, content, channel);
+  }
+
+  private async seedWorkspace(seedDir: string): Promise<void> {
+    const source = path.join(this.seedRoot, seedDir);
+    const dest = path.join(this.workspaceDir, seedDir);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.cp(source, dest, { recursive: true, force: true });
+  }
+
+  private replaceAgent(text: string, script: DemoScript): string {
+    const agentName = script.agents[0] ?? this.roster.onlineAgentName() ?? "noodle";
+    return text.replaceAll("{agent}", agentName);
+  }
+
+  private async waitForAgentReply(channel: string, timeout: number): Promise<void> {
+    await this.waitFor(() => this.resolveAgentReply, timeout, `agent reply on ${channel}`);
+  }
+
+  private async waitForProposal(channel: string, timeout: number): Promise<void> {
+    await this.waitFor(() => (this.latestProposalRef ? this.resolveAgentReply : null), timeout, `proposal on ${channel}`);
+  }
+
+  private async waitForPlan(channel: string, timeout: number): Promise<void> {
+    await this.waitFor(() => (this.latestPlanRef ? this.resolveAgentReply : null), timeout, `plan on ${channel}`);
+  }
+
+  private async waitFor(getResolver: () => (() => void) | null, timeout: number, label: string): Promise<void> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const resolver = getResolver();
+      if (resolver) {
+        resolver();
+        this.resolveAgentReply = null;
+        return;
+      }
+      await this.delay(500);
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  }
+
+  private async approveLatestProposal(channel: string): Promise<void> {
+    const ref = this.latestProposalRef;
+    if (!ref) return;
+    const human = await this.requireActor("maya", "human");
+    await this.service.approve(human, ref);
+    await this.hub.postMessage(await this.participantFor("maya"), `approved ${ref}`, channel);
+  }
+
+  private async acceptLatestPlan(channel: string): Promise<void> {
+    const ref = this.latestPlanRef;
+    if (!ref) return;
+    const human = await this.requireActor("maya", "human");
+    await this.plans.accept(human, ref);
+    await this.hub.postMessage(await this.participantFor("maya"), `accepted ${ref}`, channel);
+  }
+
+  private async participantFor(name: string): Promise<Participant> {
+    const actor = await this.requireActor(name);
+    return this.joinParticipant(actor);
+  }
+
+  private onMessagePosted(message: ChatMessage): void {
+    if (!this.run || message.channel !== this.run.channel) return;
+    if (message.authorKind === "agent" && this.resolveAgentReply) {
+      this.resolveAgentReply();
+      this.resolveAgentReply = null;
+    }
+  }
+
+  private onBoardEvent(envelope: BoardEventEnvelope): Promise<void> {
+    if (!this.run || envelope.item.originChannelName !== this.run.channel) return Promise.resolve();
+    if (envelope.type === "item.proposed") {
+      this.latestProposalRef = envelope.item.ref;
+      this.demoRefs.add(envelope.item.ref);
+      if (this.resolveAgentReply) {
+        this.resolveAgentReply();
+        this.resolveAgentReply = null;
+      }
+    } else if (envelope.type === "item.approved" && this.gateType === "approve_ticket") {
+      if (this.run.ticketRef && envelope.item.ref === this.run.ticketRef) {
+        this.setStage("assigned", "Ticket approved. Starting execution.");
+        this.resolveGate();
+      }
+    }
+    return Promise.resolve();
+  }
+
+  private onPlanEvent(envelope: PlanEventEnvelope): Promise<void> {
+    if (!this.run || envelope.plan.originChannelName !== this.run.channel) return Promise.resolve();
+    if (envelope.type === "plan.created" || envelope.type === "plan.proposed") {
+      this.latestPlanRef = envelope.plan.ref;
+      this.demoPlanRefs.add(envelope.plan.ref);
+      if (this.resolveAgentReply) {
+        this.resolveAgentReply();
+        this.resolveAgentReply = null;
+      }
+    } else if (envelope.type === "plan.accepted" && this.gateType === "accept_plan") {
+      if (this.run.planRef && envelope.plan.ref === this.run.planRef) {
+        this.setStage("planning", "Plan accepted. Proposing the bounded ticket.");
+        this.resolveGate();
+      }
+    }
+    return Promise.resolve();
+  }
+
+  private resolveGate(): void {
+    if (this.gateResolve) {
+      this.gateResolve();
+      this.gateResolve = null;
+      this.gateType = null;
+    }
+  }
+
+  private async pauseAtGate(gateFor: "continue" | "accept_plan" | "approve_ticket", prompt?: string): Promise<void> {
+    this.gateType = gateFor;
+    const message = prompt ?? (gateFor === "continue"
+      ? "Continue when you are ready."
+      : gateFor === "accept_plan"
+        ? "Waiting for you to accept the plan."
+        : "Waiting for you to approve the ticket.");
+    this.setStage(`waiting_${gateFor}`, message);
+    await new Promise<void>((resolve) => {
+      this.gateResolve = resolve;
+    });
+  }
+
+  private waitIfPaused(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (!this.run?.paused) {
+        resolve();
+        return;
+      }
+      const check = () => {
+        if (!this.run?.paused) {
+          resolve();
+          return;
+        }
+        setTimeout(check, 100);
       };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(timeoutMessage));
-      }, timeoutMs);
-      const cancel = () => {
-        cleanup();
-        // Resolved value is unused: the generation check right after the
-        // await aborts the superseded loop.
-        resolve(undefined as T);
-      };
-      this.cancelWaits.push(cancel);
-      unregister = register((value) => {
-        if (!accept(value)) return;
-        cleanup();
-        resolve(value);
-      });
+      check();
+    });
+  }
+
+  private isCurrent(gen: number): boolean {
+    return this.run !== null && this.run.generation === gen && !this.run.cancelled;
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private setStage(stage: string, message: string): void {
+    if (!this.run) return;
+    this.run.stage = stage;
+    this.run.progressMessage = message;
+    this.broadcastProgress(message);
+  }
+
+  private broadcastProgress(message: string): void {
+    if (!this.run) return;
+    this.hub.broadcastDemoProgress({
+      type: "demo_progress",
+      channel: this.run.channel,
+      stage: this.run.stage,
+      message,
+      paused: this.run.paused,
     });
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function completeImpactMap(notes: Partial<Record<ImpactSurface, string>>): EcosystemImpact {
+  const map = emptyImpactMap();
+  for (const [surface, note] of Object.entries(notes)) {
+    if (note) {
+      map[surface as ImpactSurface] = "affected";
+      map.notes[surface as ImpactSurface] = note;
+    }
+  }
+  return map;
 }
