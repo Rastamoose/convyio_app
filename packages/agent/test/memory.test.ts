@@ -45,13 +45,17 @@ describe("Memory", () => {
     assert.ok(!memory.context().includes("before-seed"));
   });
 
-  test("context renders channel, author, kind and content", async () => {
+  test("context renders only the requested channel with author, kind and content", async () => {
     const memory = await Memory.load(await tempDir());
-    memory.seed([message("hello there", { channel: "random" })]);
-    assert.equal(memory.context(), "[#random] dana (human): hello there");
+    memory.seed([
+      message("billing history", { channel: "billing-loop" }),
+      message("hello there", { channel: "random" }),
+    ]);
+    assert.equal(memory.context("random"), "[#random] dana (human): hello there");
+    assert.doesNotMatch(memory.context("random"), /billing history/);
 
     memory.seed([message("no channel", { channel: undefined })]);
-    assert.equal(memory.context(), "[#general] dana (human): no channel");
+    assert.equal(memory.context("general"), "[#general] dana (human): no channel");
   });
 
   test("context lists a message's attachments after its content", async () => {

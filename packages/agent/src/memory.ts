@@ -40,8 +40,9 @@ export class Memory {
     this.persist(message);
   }
 
-  context(): string {
+  context(channel?: string): string {
     return this.window
+      .filter((message) => channel === undefined || (message.channel ?? "general") === channel)
       .map((m) => {
         const attachments = m.attachments?.length
           ? ` [attachments: ${m.attachments.map((a) => `${a.name} (${a.mime})`).join(", ")}]`

@@ -16,8 +16,11 @@ import { InteractionStore } from "./chat/InteractionStore";
 import { MessageStore } from "./chat/MessageStore";
 import { ThreadEventStore } from "./chat/ThreadEventStore";
 import { ContextCursorStore } from "./context/ContextCursorStore";
+import { ContextNotes } from "./context/ContextNotes";
 import { ContextStore } from "./context/ContextStore";
 import { PromptEnvelopeBuilder } from "./context/PromptEnvelope";
+import { ResourceAccessStore } from "./context/ResourceAccessStore";
+import { ResourceManifestBuilder } from "./context/ResourceManifest";
 import { WorkspaceSnapshotBuilder } from "./context/WorkspaceSnapshot";
 import { WorkspaceDb } from "./db";
 import { DemoOrchestrator } from "./demo/DemoOrchestrator";
@@ -53,6 +56,9 @@ export class WorkspaceRuntime {
   readonly board!: BoardService;
   readonly context!: ContextStore;
   readonly contextCursors!: ContextCursorStore;
+  readonly notes!: ContextNotes;
+  readonly resourceAccess!: ResourceAccessStore;
+  readonly resourceManifest!: ResourceManifestBuilder;
   readonly projects!: ProjectStore;
   readonly gitRepositories!: GitRepositories;
   readonly toolmanNodes!: ToolmanNodes;
@@ -81,6 +87,14 @@ export class WorkspaceRuntime {
     const board = new BoardService(db, threadEvents, plans, channels);
     const context = new ContextStore(db, threadEvents);
     const contextCursors = new ContextCursorStore(db, threadEvents);
+    const notes = new ContextNotes(db, threadEvents);
+    const agentInvites = new AgentInvites(db);
+    const resourceAccess = new ResourceAccessStore(
+      db,
+      threadEvents,
+      (agentId, humanId) => agentInvites.allowsAuthor(agentId, humanId),
+    );
+    const resourceManifest = new ResourceManifestBuilder(db, resourceAccess);
     const workspaceDir = path.join(
       options.dataDir,
       "workspaces",
@@ -98,7 +112,12 @@ export class WorkspaceRuntime {
     await gitRepositories.init();
     const toolmanNodes = new ToolmanNodes(db, threadEvents);
     const snapshot = new WorkspaceSnapshotBuilder(db, board, plans, context, projects);
-    const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
+    const envelope = new PromptEnvelopeBuilder(
+      snapshot,
+      { id: db.workspaceId, name: db.workspaceName },
+      resourceAccess,
+      notes,
+    );
     const interactions = new InteractionStore(db, threadEvents);
     const demoScripts = options.demoScripts ?? new Map<string, DemoScript>();
     const demoChannels = [...demoScripts.keys()].sort();
@@ -107,7 +126,6 @@ export class WorkspaceRuntime {
       ...demoChannels.map((name) => ({ name, isDemo: true })),
     ]);
     const attachments = new Attachments(db, options.supabase);
-    const agentInvites = new AgentInvites(db);
     const runnerRuntime = new RunnerRuntime();
     const executions = new ToolExecutionStore(db, threadEvents, options.supabase);
     const toolman = new Toolman(board, workspaceDir);
@@ -134,10 +152,12 @@ export class WorkspaceRuntime {
         authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
         threadEvents,
         contextCursors,
+        resourceAccess,
         projects,
         gitRepositories,
         toolmanGateway,
         executions,
+        board,
       },
     );
     const runtime = new WorkspaceRuntime();
@@ -150,6 +170,9 @@ export class WorkspaceRuntime {
       board,
       context,
       contextCursors,
+      notes,
+      resourceAccess,
+      resourceManifest,
       projects,
       gitRepositories,
       toolmanNodes,
@@ -168,6 +191,9 @@ export class WorkspaceRuntime {
     });
     board.onEvent = (event) => hub.broadcastBoardEvent(event);
     plans.onEvent = (event) => hub.broadcastPlanEvent(event);
+    resourceAccess.onEvent = (event) => hub.broadcastThreadEvent(event);
+    notes.onEvent = (event) => hub.broadcastThreadEvent(event);
+    projects.onEvent = (event) => hub.broadcastThreadEvent(event);
     channels.onCreated = (channel) => hub.broadcastChannelCreated(channel);
     channels.onRenamed = (oldName, newName) => hub.broadcastChannelRenamed(oldName, newName);
     channels.onArchived = (name, archived) => hub.broadcastChannelArchived(name, archived);

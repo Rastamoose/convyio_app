@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  AgentResourceAccessRequest,
   Attachment,
   BoardItem,
   BoardPlan,
@@ -31,6 +32,7 @@ import { PermissionCard } from "./PermissionCard";
 import { PinIcon, PinnedMessages } from "./PinnedMessages";
 import { PlanCard } from "./PlanCard";
 import { ProposalCard } from "./ProposalCard";
+import { ResourceAccessRequestCard } from "./ResourceAccessRequestCard";
 import { ResultCard } from "./ResultCard";
 import { TicketCard } from "./TicketCard";
 import { TraceMessageFinished, TraceMessageLive } from "./TraceMessage";
@@ -84,7 +86,8 @@ type TimelineEntry =
   | { kind: "plan"; plan: BoardPlan }
   | { kind: "proposal"; item: BoardItem }
   | { kind: "result"; item: BoardItem }
-  | { kind: "interaction"; request: InteractionRequest };
+  | { kind: "interaction"; request: InteractionRequest }
+  | { kind: "resource_request"; request: AgentResourceAccessRequest };
 
 function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "message") return entry.message.timestamp;
@@ -92,6 +95,7 @@ function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "proposal" || entry.kind === "result") return entry.item.createdAt;
   if (entry.kind === "plan") return entry.plan.createdAt;
   if (entry.kind === "interaction") return entry.request.createdAt;
+  if (entry.kind === "resource_request") return entry.request.createdAt;
   return entry.run.startedAt;
 }
 
@@ -580,6 +584,9 @@ export function MessageList({
     loadOlder,
     pendingInteractions,
     resolveInteraction,
+    pendingResourceAccessRequests,
+    resolveResourceAccessRequest,
+    channelInfos = [],
     executions,
   } = useWorkspace();
   const selfName = self?.name ?? null;
@@ -684,6 +691,14 @@ export function MessageList({
     const liveAgents = new Set(activeRuns.map((run) => run.agentId));
     return pendingInteractions.filter((request) => !liveAgents.has(request.agentId));
   }, [pendingInteractions, activeRuns]);
+  const channelId = channelInfos.find((info) => info.name === channel)?.id ?? channel;
+  const channelResourceRequests = useMemo(
+    () =>
+      pendingResourceAccessRequests.filter(
+        (request) => request.originChannelId === null || request.originChannelId === channelId,
+      ),
+    [pendingResourceAccessRequests, channelId],
+  );
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [
@@ -697,8 +712,31 @@ export function MessageList({
     ];
     // Stable sort: board lines and live traces interleave with messages by
     // when they started, not appended after the fact.
-    return entries.sort((a, b) => timelineTs(a) - timelineTs(b));
-  }, [messages, boardLines, activeRuns, channelPlans, proposedItems, completedItems, orphanInteractions]);
+    const sorted = entries.sort((a, b) => timelineTs(a) - timelineTs(b));
+
+    // Resource access requests are part of the agent's reply, so place each
+    // one immediately after the requesting agent's most recent message in
+    // this channel rather than at its bare request timestamp.
+    if (channelResourceRequests.length === 0) return sorted;
+    const withRequests: TimelineEntry[] = [...sorted];
+    for (const request of channelResourceRequests) {
+      let lastAgentIndex = -1;
+      for (let i = withRequests.length - 1; i >= 0; i--) {
+        const entry = withRequests[i];
+        if (
+          entry.kind === "message" &&
+          entry.message.authorKind === "agent" &&
+          entry.message.authorId === request.agentId
+        ) {
+          lastAgentIndex = i;
+          break;
+        }
+      }
+      const insertAt = lastAgentIndex >= 0 ? lastAgentIndex + 1 : withRequests.length;
+      withRequests.splice(insertAt, 0, { kind: "resource_request", request });
+    }
+    return withRequests;
+  }, [messages, boardLines, activeRuns, channelPlans, proposedItems, completedItems, orphanInteractions, channelResourceRequests]);
 
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -938,7 +976,7 @@ export function MessageList({
   const contextMenuMessage = contextMenu ? messages.find((m) => m.id === contextMenu.messageId) : undefined;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div data-onboarding-target="conversation" className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={containerRef}
         onScroll={handleScroll}
@@ -961,7 +999,8 @@ export function MessageList({
             channelPlans.length === 0 &&
             proposedItems.length === 0 &&
             completedItems.length === 0 &&
-            orphanInteractions.length === 0
+            orphanInteractions.length === 0 &&
+            channelResourceRequests.length === 0
               ? (() => {
                   const agent = participants.find((p) => p.kind === "agent");
                   return agent
@@ -1039,6 +1078,21 @@ export function MessageList({
               </div>
             );
           }
+          if (entry.kind === "resource_request") {
+            return (
+              <div
+                key={entry.request.id}
+                id={`resource-request-${entry.request.id}`}
+                className="px-4 py-2"
+              >
+                <ResourceAccessRequestCard
+                  request={entry.request}
+                  onResolve={resolveResourceAccessRequest}
+                  compact
+                />
+              </div>
+            );
+          }
           if (entry.kind === "trace") {
             return (
               <TraceMessageLive
@@ -1060,6 +1114,7 @@ export function MessageList({
             <div
               key={m.id}
               id={`msg-${m.id}`}
+              data-demo-message-id={m.id}
               className={`transition ${highlightId === m.id ? "bg-accent/20" : ""} ${m.pending ? "opacity-50" : ""}`}
             >
               {firstUnread === m.id && (

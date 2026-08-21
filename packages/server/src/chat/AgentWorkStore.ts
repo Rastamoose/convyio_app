@@ -422,6 +422,18 @@ export class AgentWorkStore {
     return rows.map(toRunRequest);
   }
 
+  /** Claimed requests represent a run that is currently in flight. */
+  async listActive(agentId: string): Promise<AgentRunRequest[]> {
+    const rows = await this.store.sql<RunRequestRow[]>`
+      SELECT * FROM agent_run_requests
+      WHERE workspace_id = ${this.store.workspaceId}
+        AND agent_id = ${agentId}
+        AND status = 'claimed'
+      ORDER BY created_at, id
+    `;
+    return rows.map(toRunRequest);
+  }
+
   private async getOrCreateConversation(
     sql: Sql,
     message: ChatMessage,

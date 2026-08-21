@@ -17,6 +17,9 @@ export function StatusBar({
   const working = participants.filter(
     (p) => p.kind === "agent" && p.runState === "working",
   ).length;
+  const blocked = participants.filter(
+    (p) => p.kind === "agent" && p.runState === "blocked",
+  );
   const online = participants.filter((p) => p.online).length;
 
   return (
@@ -32,6 +35,10 @@ export function StatusBar({
         {working > 0 ? (
           <span className="text-working">
             {working} agent{working === 1 ? "" : "s"} working
+          </span>
+        ) : blocked.length > 0 ? (
+          <span className="text-dead animate-pulse">
+            {blocked[0].name} waiting for approval
           </span>
         ) : (
           `${online} online`

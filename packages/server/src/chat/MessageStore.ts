@@ -70,6 +70,20 @@ export class MessageStore {
     return rows.map((row) => toMessage(row, reactions.get(row.id)));
   }
 
+  async search(channelId: string, query: string, limit: number): Promise<ChatMessage[]> {
+    const rows = await this.store.sql<MessageRow[]>`
+      SELECT * FROM messages
+      WHERE workspace_id = ${this.store.workspaceId}
+        AND channel_id = ${channelId}
+        AND position(lower(${query}) in lower(content)) > 0
+      ORDER BY created_at DESC, seq DESC
+      LIMIT ${limit}
+    `;
+    rows.reverse();
+    const reactions = await this.reactionsForIds(rows.map((row) => row.id));
+    return rows.map((row) => toMessage(row, reactions.get(row.id)));
+  }
+
   /**
    * The newest `limit` rows of `channel` older than `before` (or newest
    * overall when `before` is omitted), ascending.

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { BoardItem, BoardPlan, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
+import type { AgentResourceAccessRequest, BoardItem, BoardPlan, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import { MessageList } from "./MessageList";
 
@@ -15,6 +15,10 @@ let self: Participant | null = null;
 let board: BoardItem[] = [];
 let plans: BoardPlan[] = [];
 let pendingInteractions: InteractionRequest[] = [];
+let pendingResourceAccessRequests: AgentResourceAccessRequest[] = [];
+let channelInfos: { id: string; name: string; sectionId: string | null }[] = [
+  { id: "ch-general", name: "general", sectionId: null },
+];
 
 const pinMessage = vi.fn();
 const editMessage = vi.fn();
@@ -35,6 +39,9 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     plans,
     context: [],
     pendingInteractions,
+    pendingResourceAccessRequests,
+    resolveResourceAccessRequest: vi.fn(),
+    channelInfos,
     executions: [],
     acceptPlan: vi.fn(),
     addPlanConstraint: vi.fn(),
@@ -166,6 +173,8 @@ describe("MessageList", () => {
     board = [];
     plans = [];
     pendingInteractions = [];
+    pendingResourceAccessRequests = [];
+    channelInfos = [{ id: "ch-general", name: "general", sectionId: null }];
     participants = [human("self-1", "me")];
     self = participants[0];
     Element.prototype.scrollIntoView = vi.fn();
@@ -416,6 +425,32 @@ describe("MessageList", () => {
     expect(screen.getByText("write_file billing/round.ts")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
     expect(document.getElementById("interaction-req-1")).toBeTruthy();
+  });
+
+  it("places a resource access card in the origin channel, not the requested channel", () => {
+    pendingResourceAccessRequests = [
+      {
+        id: "rar-1",
+        workspaceId: "srv-1",
+        agentId: "agent-1",
+        agentName: "noodle",
+        resourceKind: "channel",
+        resourceId: "ch-anoher",
+        resourceName: "anoher",
+        reason: "Read the other room",
+        status: "pending",
+        originChannelId: "ch-general",
+        createdAt: Date.now(),
+        resolvedBy: null,
+        resolvedAt: null,
+      },
+    ];
+    messages = [
+      msg({ id: "m1", authorId: "agent-1", authorName: "noodle", authorKind: "agent", content: "I'll request access." }),
+    ];
+    render(<Harness />);
+    expect(screen.getByText("anoher")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   it("copies message text from the hover rail", async () => {

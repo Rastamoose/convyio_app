@@ -64,6 +64,7 @@ export async function runAgent(
   const memory = await Memory.load(local.dataDir);
   const conversationSessions = await ConversationSessions.load(local.dataDir);
   const presence = new Presence(socket, boardClient);
+  boardClient.onManifestUpdated(() => presence.refresh());
   const runner = new AgentRunner(
     socket,
     local.brain,

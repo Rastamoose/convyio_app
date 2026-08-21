@@ -90,6 +90,14 @@ describe("plan lifecycle", async () => {
     assert.equal(constrained.status, 200);
     assert.ok(constrained.body.plan.constraints.includes("Ledger output must remain identical to existing Stripe charges"));
     assert.ok((constrained.body.plan.changeLog ?? []).some((change: { field: string }) => change.field === "constraints"));
+    const channel = await env.channels.get("general");
+    assert.ok(channel);
+    const accessRequest = await env.resourceAccess.request(agent.actor, {
+      resourceKind: "channel",
+      resourceId: channel.id,
+      reason: "Continue the billing plan",
+    });
+    await env.resourceAccess.resolve(human.actor, accessRequest.id, "approved");
     const envelope = await env.api("GET", "/api/workspace/prompt-envelope", agent.token);
     assert.match(JSON.stringify(envelope.body.envelope), /Ledger output must remain identical/);
   });

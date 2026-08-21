@@ -24,7 +24,7 @@ export function ResultCard({
     .map((execution) => execution.summary)
     .filter(Boolean);
   return (
-    <div data-onboarding-target="result-card" className="rounded-lg bg-subtle p-3">
+    <div data-onboarding-target="result-card" data-demo-result-ref={item.ref} className="rounded-lg bg-subtle p-3">
       <div className="mb-2 flex items-baseline gap-2 text-xs">
         <span className="shrink-0 rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">{item.ref}</span>
         <span className="truncate font-medium text-body">Result</span>

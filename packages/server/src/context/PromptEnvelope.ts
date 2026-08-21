@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Actor, PermissionMode, PolicyRef, PromptEnvelope } from "@workspace/shared";
 import { renderPromptEnvelope } from "@workspace/shared";
+import type { ContextNotes } from "./ContextNotes";
+import type { ResourceAccessStore } from "./ResourceAccessStore";
 import type { WorkspaceSnapshotBuilder } from "./WorkspaceSnapshot";
 
 const POLICY_DIR = path.resolve(
@@ -31,6 +33,8 @@ export class PromptEnvelopeBuilder {
   constructor(
     private snapshot: WorkspaceSnapshotBuilder,
     private workspace: { id: string; name: string },
+    private resourceAccess?: ResourceAccessStore | null,
+    private notes?: ContextNotes | null,
   ) {
     this.policy = POLICY_FILES.map((file) => loadPolicy(path.join(POLICY_DIR, file)));
   }
@@ -40,7 +44,10 @@ export class PromptEnvelopeBuilder {
   }
 
   async build(actor: Actor, permissionMode: PermissionMode = "default"): Promise<PromptEnvelope> {
-    const snapshot = await this.snapshot.build();
+    const [snapshot, notes] = await Promise.all([
+      this.snapshot.buildFor(actor, this.resourceAccess),
+      actor.kind === "agent" && this.notes ? this.notes.listForAgent(actor.id) : Promise.resolve([]),
+    ]);
     return {
       generatedAt: Date.now(),
       seq: snapshot.seq,
@@ -55,6 +62,7 @@ export class PromptEnvelopeBuilder {
         item.status === "blocked",
       ),
       context: snapshot.context,
+      notes,
       members: snapshot.members,
       permissionMode,
     };

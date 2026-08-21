@@ -47,6 +47,9 @@ export interface WorkItem {
 const MAX_IMAGES_PER_RUN = 4;
 /** Ceiling on image bytes fetched per run, so one batch can't balloon the request. */
 const IMAGE_BYTE_BUDGET = 8 * 1024 * 1024;
+const MAX_INITIAL_CONTEXT_CHARS = 24_000;
+const MAX_TOOL_RESULT_CHARS = 12_000;
+const MAX_RUN_TOOL_RESULT_CHARS = 32_000;
 
 /**
  * Owns the work queue and the run cycle: batches queued work per channel,
@@ -250,7 +253,15 @@ export class AgentRunner {
     };
 
     await (this.board as { refreshEnvelope?: () => Promise<unknown> }).refreshEnvelope?.();
-    const executeTool = createToolExecutor(this.board, {
+    try {
+      await (this.board as { refreshManifest?: () => Promise<unknown> }).refreshManifest?.();
+    } catch (err) {
+      console.warn(
+        "[agent] manifest refresh at run start failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+    const executeTool = withContextBudget(createToolExecutor(this.board, {
       onProposed: () => {},
       onTaskActive: (item) => {
         if (this.activeTask?.id === item.id) return;
@@ -260,7 +271,8 @@ export class AgentRunner {
       onActivity: (line) => onBrainEvent({ type: "thought.delta", text: `[toolman] ${line}` }),
       conversationId,
       channel,
-    });
+      channelId,
+    }));
 
     const { images, notes } = await this.gatherImages(batch);
     let finalText = "";
@@ -282,7 +294,7 @@ export class AgentRunner {
       const result = await this.brain.run(
         {
           system: this.systemPrompt,
-          context: this.buildContext(),
+          context: boundInitialContext(this.buildContext(channel, channelId)),
           prompt: buildPrompt(batch, channel, notes),
           images,
           tools: TOOL_DECLARATIONS,
@@ -383,11 +395,11 @@ export class AgentRunner {
     }
   }
 
-  private buildContext(): string {
+  private buildContext(channel: string, channelId: string): string {
     return (
       `Current board (the only source of authority for mutating work):\n` +
-      `${this.board.summary()}\n\n` +
-      `Recent chat transcript:\n${this.memory.context()}`
+      `${this.board.summary(channelId)}\n\n` +
+      `Recent chat transcript:\n${this.memory.context(channel)}`
     );
   }
 
@@ -574,6 +586,27 @@ function buildPrompt(items: WorkItem[], channel: string, attachmentNotes: string
       : `You are answering one person, who already knows you are replying to ` +
         `them — do not open sentences with their name.`)
   );
+}
+
+function boundInitialContext(context: string): string {
+  if (context.length <= MAX_INITIAL_CONTEXT_CHARS) return context;
+  return `${context.slice(0, MAX_INITIAL_CONTEXT_CHARS)}\n[context truncated at Convyio's run limit]`;
+}
+
+function withContextBudget(execute: ToolExecutor): ToolExecutor {
+  let used = 0;
+  return async (name, args) => {
+    const result = await execute(name, args);
+    const size = JSON.stringify(result).length;
+    if (size > MAX_TOOL_RESULT_CHARS || used + size > MAX_RUN_TOOL_RESULT_CHARS) {
+      return {
+        error: "CONTEXT_BUDGET_EXCEEDED",
+        message: "This result is too large for the current run. Narrow the search or read a smaller resource.",
+      };
+    }
+    used += size;
+    return result;
+  };
 }
 
 function friendlyErrorMessage(detail: string): string {

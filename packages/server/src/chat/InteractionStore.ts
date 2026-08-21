@@ -97,6 +97,16 @@ export class InteractionStore {
     return rows.map(toRequest);
   }
 
+  async pendingForAgent(workspaceId: string, agentId: string): Promise<InteractionRequest[]> {
+    const rows = await this.store.sql<Row[]>`
+      SELECT * FROM interaction_requests
+      WHERE workspace_id = ${workspaceId} AND agent_id = ${agentId} AND status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT 100
+    `;
+    return rows.map(toRequest);
+  }
+
   async findPending(workspaceId: string, requestId: string): Promise<InteractionRequest | null> {
     const [row] = await this.store.sql<Row[]>`
       SELECT * FROM interaction_requests

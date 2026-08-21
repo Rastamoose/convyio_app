@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { DemoFocusTarget } from "@workspace/shared";
 import { OnboardingShell } from "./OnboardingShell";
 
 const mockWorkspace = {
@@ -11,6 +12,7 @@ const mockWorkspace = {
     stage: string;
     message: string;
     paused: boolean;
+    focus?: DemoFocusTarget;
   } | null,
   demoChannels: ["demo"],
   workspaceId: "ws-1",
@@ -40,8 +42,8 @@ describe("OnboardingShell", () => {
     const user = userEvent.setup();
     render(<OnboardingShell channel="general" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 
-    expect(screen.getByText(/Agent work usually becomes team work at review/)).toBeInTheDocument();
-    expect(screen.getByText(/both founders and both agents reason together/i)).toBeInTheDocument();
+    expect(screen.getByText(/See Convyio in one shared conversation/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Before:/i)).toBeNull();
     await user.click(screen.getByRole("button", { name: /Play the demo/i }));
     expect(mockWorkspace.startDemo).toHaveBeenCalledWith("demo", "walkthrough");
   });
@@ -64,9 +66,11 @@ describe("OnboardingShell", () => {
       stage: "waiting_continue",
       message: "Shared evidence is visible to both founders.",
       paused: false,
+      focus: { kind: "guide", label: "Shared evidence" },
     };
     render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 
+    expect(screen.getByText("Shared evidence")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(mockWorkspace.demoControl).toHaveBeenCalledWith("demo", "continue");
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();

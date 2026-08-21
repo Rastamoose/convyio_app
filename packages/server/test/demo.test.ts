@@ -66,7 +66,7 @@ describe("walkthrough demo", async () => {
 
     env.hub.onDemoStart?.("demo", "walkthrough", human.id);
 
-    await progress("waiting_continue", "Shared evidence");
+    await progress("waiting_continue", "Both founders");
     const firstChapter = (await env.messages.list()).filter((message) => message.channel === "demo");
     const noodleMessage = firstChapter.find((message) => message.authorName === "noodle");
     assert.ok(noodleMessage?.content.includes("Sentry spike"));
@@ -83,18 +83,26 @@ describe("walkthrough demo", async () => {
     env.hub.onDemoControl?.("demo", "continue", human.id);
 
     await progress("waiting_accept_plan");
+    assert.equal(orchestrator.progress("demo").focus?.kind, "plan_accept");
     const planBeforeAccept = await env.plans.find(env.db.workspaceId, planRef);
     assert.ok(planBeforeAccept?.constraints.some((c) => c.includes("ledger-sync.ts")), "ledger constraint was added");
     await env.plans.accept(human, planRef);
 
-    await progress("waiting_approve_ticket");
+    await progress("waiting_continue", "Ticket defines responsibility");
+    assert.equal(orchestrator.progress("demo").focus?.kind, "guide");
     assert.ok(ticketRef, "ticket was proposed");
+    env.hub.onDemoControl?.("demo", "continue", human.id);
+
+    await progress("waiting_approve_ticket");
+    assert.equal(orchestrator.progress("demo").focus?.kind, "ticket_approve");
     const ticketBeforeApprove = await env.service.find(env.db.workspaceId, ticketRef);
     assert.equal(ticketBeforeApprove?.status, "proposed");
     assert.deepEqual(ticketBeforeApprove?.scopePaths, ["billing/"]);
     await env.service.approve(human, ticketRef);
 
-    // Execution should run to completion.
+    await progress("waiting_continue", "outcome is reviewable");
+    assert.equal(orchestrator.progress("demo").focus?.kind, "result");
+    env.hub.onDemoControl?.("demo", "continue", human.id);
     await progress("completed");
 
     const ticket = await env.service.find(env.db.workspaceId, ticketRef);

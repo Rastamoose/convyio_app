@@ -71,7 +71,9 @@ describe("ApprovalQueue", () => {
       <ApprovalQueue
         items={[proposal("older", 1_000), proposal("newer", 2_000)]}
         interactions={[interaction("i1")]}
+        resourceAccessRequests={[]}
         onResolveInteraction={vi.fn()}
+        onResolveResourceAccess={vi.fn()}
         onDiscuss={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -85,7 +87,9 @@ describe("ApprovalQueue", () => {
       <ApprovalQueue
         items={[]}
         interactions={[]}
+        resourceAccessRequests={[]}
         onResolveInteraction={vi.fn()}
+        onResolveResourceAccess={vi.fn()}
         onDiscuss={vi.fn()}
         onClose={vi.fn()}
       />,

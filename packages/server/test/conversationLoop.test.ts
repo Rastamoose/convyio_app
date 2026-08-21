@@ -76,6 +76,14 @@ describe("conversation-native work loop", async () => {
     assert.ok(ticket.body.item.originChannelId);
     assert.equal(ticket.body.item.originChannelId, created.body.plan.originChannelId);
 
+    const channel = await env.channels.get("general");
+    assert.ok(channel);
+    const accessRequest = await env.resourceAccess.request(agent.actor, {
+      resourceKind: "channel",
+      resourceId: channel.id,
+      reason: "Continue the approved billing conversation",
+    });
+    await env.resourceAccess.resolve(human.actor, accessRequest.id, "approved");
     const envelope = await env.api("GET", "/api/workspace/prompt-envelope", agent.token);
     assert.equal(envelope.status, 200);
     const body = envelope.body.envelope;

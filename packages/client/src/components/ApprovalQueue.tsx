@@ -1,20 +1,25 @@
 import { useEffect, useRef } from "react";
-import type { BoardItem, InteractionRequest } from "@workspace/shared";
+import type { AgentResourceAccessRequest, BoardItem, InteractionRequest } from "@workspace/shared";
 import { ProposalCard } from "./ProposalCard";
 import { PermissionCard } from "./PermissionCard";
+import { ResourceAccessRequestCard } from "./ResourceAccessRequestCard";
 
 /** Compact index of the same cards chat already shows. Not a second home. */
 export function ApprovalQueue({
   items,
   interactions,
+  resourceAccessRequests,
   onResolveInteraction,
+  onResolveResourceAccess,
   onDiscuss,
   onClose,
 }: {
   items: BoardItem[];
   /** Runs paused mid-flight; they block an agent right now, so they sort first. */
   interactions: InteractionRequest[];
+  resourceAccessRequests: AgentResourceAccessRequest[];
   onResolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
+  onResolveResourceAccess: (requestId: string, decision: "approved" | "denied") => Promise<boolean>;
   onDiscuss: (item: BoardItem) => void;
   onClose: () => void;
 }) {
@@ -44,9 +49,9 @@ export function ApprovalQueue({
       className="elevated fixed top-11 right-3 z-50 max-h-[70vh] w-80 animate-pop-in overflow-y-auto rounded-lg p-3"
     >
       <h2 className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
-        Awaiting approval — {items.length + interactions.length}
+        Awaiting approval — {items.length + interactions.length + resourceAccessRequests.length}
       </h2>
-      {sorted.length + interactions.length === 0 ? (
+      {sorted.length + interactions.length + resourceAccessRequests.length === 0 ? (
         <div className="flex items-center gap-1.5 px-1 py-2 text-xs text-faint">
           <svg
             className="h-3.5 w-3.5 shrink-0"
@@ -72,6 +77,13 @@ export function ApprovalQueue({
               key={request.id}
               request={request}
               onResolve={onResolveInteraction}
+            />
+          ))}
+          {resourceAccessRequests.map((request) => (
+            <ResourceAccessRequestCard
+              key={request.id}
+              request={request}
+              onResolve={onResolveResourceAccess}
             />
           ))}
           {sorted.map((item) => (

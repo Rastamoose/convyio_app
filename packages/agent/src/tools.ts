@@ -1,4 +1,11 @@
-import type { AuthzDenyCode, BoardItem, ProjectAction, WorkCapability } from "@workspace/shared";
+import type {
+  AuthzDenyCode,
+  BoardItem,
+  ProjectAction,
+  ProtectedResourceKind,
+  ResourceManifestEntry,
+  WorkCapability,
+} from "@workspace/shared";
 import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
@@ -189,6 +196,74 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         board_item_ref: { type: "string", description: "Backing board item ref, e.g. task-3" },
       },
       required: ["command", "board_item_ref"],
+    },
+  },
+  {
+    name: "context_manifest",
+    description:
+      "List the workspace resources you can discover and whether their contents are accessible. " +
+      "Call this first whenever the user refers to a channel, project, folder, or file by name. " +
+      "Use the returned id (not the name) for context_request_access and read tools. This returns metadata only.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "context_channel_read",
+    description:
+      "Read at most 20 recent messages from a granted channel. " +
+      "If you do not have access, this will automatically request it; tell the human the request is pending. " +
+      "Use the exact channel_id from context_manifest.",
+    parameters: {
+      type: "object",
+      properties: {
+        channel_id: { type: "string" },
+        before: { type: "number", description: "Optional exclusive timestamp for older messages" },
+      },
+      required: ["channel_id"],
+    },
+  },
+  {
+    name: "context_channel_search",
+    description:
+      "Search message text in a granted channel and return at most 20 matches. " +
+      "If you do not have access, this will automatically request it; tell the human the request is pending. " +
+      "Use the exact channel_id from context_manifest.",
+    parameters: {
+      type: "object",
+      properties: {
+        channel_id: { type: "string" },
+        query: { type: "string" },
+      },
+      required: ["channel_id", "query"],
+    },
+  },
+  {
+    name: "context_request_access",
+    description:
+      "Request durable read/list/search access to one protected resource from the manifest. " +
+      "Use the exact resource_id returned by context_manifest. " +
+      "Call this immediately when the user asks you to use a resource you cannot access; do not ask the human for permission first.",
+    parameters: {
+      type: "object",
+      properties: {
+        resource_kind: { type: "string", description: "channel, git_project, local_project, or workspace_file" },
+        resource_id: { type: "string" },
+        reason: { type: "string", description: "Why the current request needs this resource" },
+      },
+      required: ["resource_kind", "resource_id", "reason"],
+    },
+  },
+  {
+    name: "context_note_list",
+    description: "List active workspace guidance and your persistent notebook entries.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "context_note_save",
+    description: "Save one concise persistent note to your own Convyio notebook.",
+    parameters: {
+      type: "object",
+      properties: { body: { type: "string" } },
+      required: ["body"],
     },
   },
   {
@@ -409,6 +484,31 @@ export interface ToolHooks {
   conversationId?: string | null;
   /** Channel name used as the origin thread for Plans and Tickets. */
   channel?: string | null;
+  /** Channel id used as the origin for resource access requests. */
+  channelId?: string | null;
+}
+
+async function findManifestEntry(
+  board: BoardClient,
+  kind: ProtectedResourceKind,
+  idOrName: string,
+): Promise<ResourceManifestEntry | null> {
+  const exact = board.resourceManifest()?.resources.find((r) => r.kind === kind && r.id === idOrName);
+  if (exact) return exact;
+  const byName = board.resourceManifest()?.resources.filter(
+    (r) => r.kind === kind && r.name.toLowerCase() === idOrName.toLowerCase(),
+  );
+  if (byName && byName.length === 1) return byName[0];
+  if (byName && byName.length > 1) return null; // ambiguous; require id
+  // Refresh and try again
+  await board.refreshManifest();
+  const exact2 = board.resourceManifest()?.resources.find((r) => r.kind === kind && r.id === idOrName);
+  if (exact2) return exact2;
+  const byName2 = board.resourceManifest()?.resources.filter(
+    (r) => r.kind === kind && r.name.toLowerCase() === idOrName.toLowerCase(),
+  );
+  if (byName2 && byName2.length === 1) return byName2[0];
+  return null;
 }
 
 export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolExecutor {
@@ -500,6 +600,116 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           hooks.onActivity(`list_files ${path ?? "."}`);
           const result = await board.requestAction({ kind: "list_files", path }, null);
           return result.ok ? { listing: result.output } : { error: result.error };
+        }
+        case "context_manifest": {
+          hooks.onActivity("context_manifest");
+          const manifest = await board.refreshManifest();
+          return { workspace_id: manifest.workspaceId, seq: manifest.seq, resources: manifest.resources };
+        }
+        case "context_channel_read": {
+          const before = typeof args.before === "number" && Number.isFinite(args.before) ? args.before : undefined;
+          const channel = await findManifestEntry(board, "channel", str("channel_id"));
+          if (!channel) throw new Error("NOT_FOUND: no such channel; check context_manifest");
+          hooks.onActivity(`context_channel_read ${channel.id}`);
+          if (channel.access === "granted") {
+            const messages = await board.readChannel(channel.id, before);
+            return { messages };
+          }
+          if (channel.access === "pending") {
+            return {
+              requested: true,
+              status: "pending",
+              message: `My access request for the '${channel.name}' channel is still pending. Please approve it and ask again.`,
+            };
+          }
+          const request = await board.requestResourceAccess({
+            resourceKind: "channel",
+            resourceId: channel.id,
+            reason: "User asked to read messages from this channel.",
+            originChannelId: hooks.channelId,
+          });
+          return {
+            requested: true,
+            request_id: request.id,
+            status: request.status,
+            message: `I don't have access to the '${channel.name}' channel yet, so I've requested it. Please approve and ask again.`,
+          };
+        }
+        case "context_channel_search": {
+          const channel = await findManifestEntry(board, "channel", str("channel_id"));
+          if (!channel) throw new Error("NOT_FOUND: no such channel; check context_manifest");
+          hooks.onActivity(`context_channel_search ${channel.id}`);
+          if (channel.access === "granted") {
+            const messages = await board.searchChannel(channel.id, str("query"));
+            return { messages };
+          }
+          if (channel.access === "pending") {
+            return {
+              requested: true,
+              status: "pending",
+              message: `My access request for the '${channel.name}' channel is still pending. Please approve it and ask again.`,
+            };
+          }
+          const request = await board.requestResourceAccess({
+            resourceKind: "channel",
+            resourceId: channel.id,
+            reason: "User asked to search messages in this channel.",
+            originChannelId: hooks.channelId,
+          });
+          return {
+            requested: true,
+            request_id: request.id,
+            status: request.status,
+            message: `I don't have access to the '${channel.name}' channel yet, so I've requested it. Please approve and ask again.`,
+          };
+        }
+        case "context_request_access": {
+          const resourceKind = str("resource_kind");
+          if (!["channel", "git_project", "local_project", "workspace_file"].includes(resourceKind)) {
+            return { error: "resource_kind must be channel, git_project, local_project, or workspace_file" };
+          }
+          let resourceId = str("resource_id");
+          if (resourceKind === "channel") {
+            const channel = await findManifestEntry(board, "channel", resourceId);
+            if (!channel) throw new Error("NOT_FOUND: no such channel; check context_manifest");
+            resourceId = channel.id;
+            if (channel.access === "granted") {
+              return { granted: true, status: "granted", message: `You already have access to the '${channel.name}' channel.` };
+            }
+            if (channel.access === "pending") {
+              return { requested: true, status: "pending", message: `My access request for the '${channel.name}' channel is still pending.` };
+            }
+          }
+          hooks.onActivity(`context_request_access ${resourceKind}:${resourceId}`);
+          if (resourceKind === "git_project" || resourceKind === "local_project") {
+            await board.requestProjectAccess(resourceId, str("reason"));
+            return { requested: true, status: "pending" };
+          }
+          try {
+            const request = await board.requestResourceAccess({
+              resourceKind: resourceKind as ProtectedResourceKind,
+              resourceId,
+              reason: str("reason"),
+              originChannelId: hooks.channelId,
+            });
+            return { requested: true, request_id: request.id, status: request.status };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message.includes("ALREADY_PENDING")) {
+              return { requested: true, status: "pending", message: "An access request for this resource is already pending." };
+            }
+            throw err;
+          }
+        }
+        case "context_note_list": {
+          hooks.onActivity("context_note_list");
+          const notes = await board.listContextNotes();
+          return { notes };
+        }
+        case "context_note_save": {
+          hooks.onActivity("context_note_save");
+          const note = await board.saveContextNote(str("body"));
+          return { saved: true, note_id: note.id };
         }
         case "project_list": {
           hooks.onActivity("project_list");

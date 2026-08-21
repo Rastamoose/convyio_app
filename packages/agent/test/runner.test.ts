@@ -80,6 +80,61 @@ describe("AgentRunner", () => {
     );
   });
 
+  test("scopes transcript and board context to the addressed channel", async () => {
+    const inputs: BrainInput[] = [];
+    const brain = {
+      run: async (input: BrainInput) => {
+        inputs.push(input);
+        return { text: "done", providerSessionId: null };
+      },
+    } as unknown as Brain;
+    const { socket, sent } = fakeSocket();
+    const board = fakeBoard({ summary: (channelId: string) => `board for ${channelId}` });
+    const dir = await tempDir();
+    const memory = await Memory.load(dir);
+    memory.seed([
+      {
+        id: "billing-message",
+        authorId: "tom",
+        authorName: "tom",
+        authorKind: "human",
+        content: "read invoice.ts and ledger.ts",
+        timestamp: 1,
+        channel: "billing-loop",
+      },
+      {
+        id: "pitch-message",
+        authorId: "dana",
+        authorName: "dana",
+        authorKind: "human",
+        content: "find product direction",
+        timestamp: 2,
+        channel: "pitch-notes",
+      },
+    ]);
+    const runner = new AgentRunner(
+      socket,
+      brain,
+      memory,
+      board,
+      await ConversationSessions.load(dir),
+      new Presence(socket, board),
+      "system prompt",
+    );
+    runner.onWelcome([
+      { id: "channel-billing", name: "billing-loop", sectionId: null },
+      { id: "channel-pitch", name: "pitch-notes", sectionId: null },
+    ]);
+
+    runner.enqueue({ authorName: "dana", content: "confirm access", channel: "pitch-notes" });
+    await waitFor(() => sent.find((event) => event.type === "agent_run_finish"), "run finish");
+
+    assert.equal(inputs.length, 1);
+    assert.match(inputs[0].context, /board for channel-pitch/);
+    assert.match(inputs[0].context, /find product direction/);
+    assert.doesNotMatch(inputs[0].context, /invoice\.ts|ledger\.ts/);
+  });
+
   test("binds the run-scoped tool executor for ACP and clears it after the run", async () => {
     let external: ToolExecutor | null = null;
     const board = fakeBoard();

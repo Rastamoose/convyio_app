@@ -5,11 +5,17 @@ import {
   mergeLiveItems,
   type ActionResultEvent,
   type AgentProjectAccess,
+  type AgentResourceAccessRequest,
+  type AgentResourceManifest,
   type BoardItem,
   type BoardPlan,
+  type ChatMessage,
+  type ContextNote,
+  type ServerEvent,
   type ToolmanAction,
   type WorkCapability,
   type PromptEnvelope,
+  type ProtectedResourceKind,
   type WorkspaceSnapshot,
 } from "@workspace/shared";
 import { renderPromptEnvelope } from "@workspace/shared";
@@ -27,14 +33,19 @@ const APPROVAL_WAIT_MS = 11 * 60 * 1000;
 export class BoardClient {
   private items = new Map<string, BoardItem>();
   private projects: AgentProjectAccess[] = [];
+  private manifest: AgentResourceManifest | null = null;
   private envelope: PromptEnvelope | null = null;
   private token: string | null = null;
   private apiUrl: string | null = null;
   private actionWaiters = new Map<string, (result: ActionResultEvent) => void>();
   private lastRequestId: string | null = null;
+  private onManifestUpdatedCallback: (() => void) | null = null;
 
   constructor(private socket: AgentSocket) {
     socket.onEvent((event) => {
+      if (this.token && this.apiUrl && manifestUpdateEvent(event)) {
+        void this.refreshManifest();
+      }
       if (isBoardEnvelope(event)) {
         if (event.item.deletedAt) this.items.delete(event.item.id);
         else this.items.set(event.item.id, event.item);
@@ -66,6 +77,11 @@ export class BoardClient {
       this.items.clear();
       for (const item of merged) this.items.set(item.id, item);
       await this.refreshProjectAccess();
+      try {
+        await this.refreshManifest();
+      } catch (err) {
+        console.warn("[agent] manifest refresh failed:", err instanceof Error ? err.message : err);
+      }
       await this.refreshEnvelope();
       return true;
     } catch (err) {
@@ -100,6 +116,66 @@ export class BoardClient {
   async requestProjectAccess(projectId: string, reason: string): Promise<AgentProjectAccess[]> {
     await this.api("POST", `/api/projects/${projectId}/access-requests`, { reason });
     return this.refreshProjectAccess();
+  }
+
+  resourceManifest(): AgentResourceManifest | null {
+    return this.manifest;
+  }
+
+  pendingResourceAccess(): Array<{ kind: string; name: string }> {
+    return this.manifest?.resources.filter((r) => r.access === "pending").map((r) => ({ kind: r.kind, name: r.name })) ?? [];
+  }
+
+  onManifestUpdated(callback: () => void): void {
+    this.onManifestUpdatedCallback = callback;
+  }
+
+  async refreshManifest(): Promise<AgentResourceManifest> {
+    const body = (await this.api("GET", "/api/agent-context/manifest")) as { manifest: AgentResourceManifest };
+    this.manifest = body.manifest;
+    this.onManifestUpdatedCallback?.();
+    return this.manifest;
+  }
+
+  async requestResourceAccess(input: {
+    resourceKind: ProtectedResourceKind;
+    resourceId: string;
+    reason: string;
+    originChannelId?: string | null;
+  }): Promise<AgentResourceAccessRequest> {
+    const body = (await this.api("POST", "/api/agent-context/access-requests", input)) as {
+      request: AgentResourceAccessRequest;
+    };
+    await this.refreshManifest();
+    return body.request;
+  }
+
+  async readChannel(channelId: string, before?: number): Promise<ChatMessage[]> {
+    const query = before === undefined ? "" : `?before=${encodeURIComponent(String(before))}`;
+    const body = (await this.api("GET", `/api/agent-context/channels/${channelId}/messages${query}`)) as {
+      messages: ChatMessage[];
+    };
+    return body.messages;
+  }
+
+  async searchChannel(channelId: string, query: string): Promise<ChatMessage[]> {
+    const body = (await this.api(
+      "GET",
+      `/api/agent-context/channels/${channelId}/search?q=${encodeURIComponent(query)}`,
+    )) as { messages: ChatMessage[] };
+    return body.messages;
+  }
+
+  async listContextNotes(): Promise<ContextNote[]> {
+    const body = (await this.api("GET", "/api/context/notes")) as { notes: ContextNote[] };
+    return body.notes;
+  }
+
+  async saveContextNote(body: string): Promise<ContextNote> {
+    const response = (await this.api("POST", "/api/context/notes", { scope: "agent", body })) as {
+      note: ContextNote;
+    };
+    return response.note;
   }
 
   // -------------------------------------------------------------------------
@@ -234,12 +310,19 @@ export class BoardClient {
   }
 
   /** Compact board summary for the model's context window. */
-  summary(): string {
-    const board = this.envelope
-      ? renderPromptEnvelope(this.envelope)
+  summary(channelId?: string): string {
+    const envelope = channelId && this.envelope ? scopeEnvelope(this.envelope, channelId) : this.envelope;
+    const board = envelope
+      ? renderPromptEnvelope(envelope)
       : this.list().length === 0
         ? "(board is empty)"
         : this.list()
+            .filter(
+              (item) =>
+                channelId === undefined ||
+                ["approved", "in_progress", "blocked", "done"].includes(item.status) ||
+                item.originChannelId === channelId,
+            )
             .map((i) => {
               const proposal =
                 i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
@@ -247,7 +330,7 @@ export class BoardClient {
               const owner = i.ownerName ? ` — owner: ${i.ownerName}` : "";
               return `${i.ref} [${i.status}] ${i.title}${owner}${proposal}${scope}`;
             })
-            .join("\n");
+            .join("\n") || "(board is empty)";
     const projects = this.projects.length === 0
       ? "(no shared projects)"
       : this.projects
@@ -260,6 +343,50 @@ export class BoardClient {
             return `${project.id} [${access}] ${project.name} (${project.kind}) — owner: ${project.createdByName ?? project.createdBy} — folder-policy: ${project.accessMode}`;
           })
           .join("\n");
-    return `${board}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
+    const resources = this.manifest?.resources
+      .map((resource) => `${resource.kind}:${resource.id} [${resource.access}] ${resource.name}`)
+      .join("\n") ?? "(resource manifest unavailable)";
+    return `${board}\n\nResource manifest (discovery only; access does not load contents):\n${resources}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
   }
+}
+
+function scopeEnvelope(envelope: PromptEnvelope, channelId: string): PromptEnvelope {
+  const plans = envelope.plans.filter((plan) => plan.originChannelId === channelId);
+  const planIds = new Set(plans.map((plan) => plan.id));
+  const tickets = envelope.tickets.filter(
+    (ticket) =>
+      ["approved", "in_progress", "blocked", "done"].includes(ticket.status) ||
+      ticket.originChannelId === channelId ||
+      (ticket.planId !== null && planIds.has(ticket.planId)),
+  );
+  const ticketIds = new Set(tickets.map((ticket) => ticket.id));
+  const context = envelope.context.filter(
+    (entry) =>
+      entry.scope === "workspace" ||
+      (entry.scope === "channel" && entry.subjectId === channelId) ||
+      (entry.scope === "plan" && entry.subjectId !== null && planIds.has(entry.subjectId)) ||
+      (entry.scope === "ticket" && entry.subjectId !== null && ticketIds.has(entry.subjectId)),
+  );
+  return { ...envelope, plans, tickets, context };
+}
+
+/** Returns true when the event indicates the workspace resource manifest may have changed. */
+function manifestUpdateEvent(event: ServerEvent): boolean {
+  if (event.type === "thread_event") {
+    const kind = event.event.kind;
+    return kind.startsWith("resource.access.") || kind.startsWith("project.");
+  }
+  return (
+    event.type === "channel_created" ||
+    event.type === "channel_renamed" ||
+    event.type === "channel_archived" ||
+    event.type === "channel_deleted" ||
+    event.type === "channel_moved" ||
+    event.type === "channel_section_created" ||
+    event.type === "channel_pinned" ||
+    event.type === "project_sync" ||
+    event.type === "project_updated" ||
+    event.type === "project_assignment" ||
+    event.type === "project_access"
+  );
 }

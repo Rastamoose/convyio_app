@@ -4,6 +4,7 @@ import type {
   AgentAccessPolicy,
   AgentInvite,
   AgentProvider,
+  AgentResourceAccessRequest,
   AgentSummary,
   Attachment,
   ChannelInfo,
@@ -14,9 +15,11 @@ import type {
   ContextEntry,
   ChatMessage,
   ClientEvent,
+  DemoFocusTarget,
   InteractionRequest,
   PermissionMode,
   Participant,
+  ThreadEvent,
   ToolExecution,
   WorkspaceInfo,
 } from "@workspace/shared";
@@ -56,6 +59,9 @@ export interface WorkspaceState {
   /** Permission prompts waiting on a human; the same ids every surface shows. */
   pendingInteractions: InteractionRequest[];
   resolveInteraction: (requestId: string, decision: "approve" | "deny") => void;
+  /** Channel/project/workspace file access requests from agents that a human can approve or deny. */
+  pendingResourceAccessRequests: AgentResourceAccessRequest[];
+  resolveResourceAccessRequest: (requestId: string, decision: "approved" | "denied") => Promise<boolean>;
   setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
   board: BoardItem[];
   plans: BoardPlan[];
@@ -103,7 +109,7 @@ export interface WorkspaceState {
   interrupt: (target: string, content: string) => void;
   startDemo: (channel: string, mode?: "walkthrough" | "live") => void;
   demoControl: (channel: string, action: "pause" | "resume" | "continue" | "skip" | "replay") => void;
-  demoProgress: { channel: string; stage: string; message: string; paused: boolean } | null;
+  demoProgress: { channel: string; stage: string; message: string; paused: boolean; focus?: DemoFocusTarget } | null;
   /** Resolves to the created channel's normalized name, or null on failure. */
   createChannel: (name: string, sectionId?: string | null) => Promise<string | null>;
   /** Resolves to the channel's new normalized name, or null on failure. */
@@ -190,8 +196,9 @@ export function WorkspaceProvider({
   const chat = useChatMessages();
   const traces = useAgentTraces();
   const [executions, setExecutions] = useState<ToolExecution[]>([]);
-  const [demoProgress, setDemoProgress] = useState<{ channel: string; stage: string; message: string; paused: boolean } | null>(null);
+  const [demoProgress, setDemoProgress] = useState<{ channel: string; stage: string; message: string; paused: boolean; focus?: DemoFocusTarget } | null>(null);
   const interactions = useInteractions();
+  const [resourceAccessRequests, setResourceAccessRequests] = useState<AgentResourceAccessRequest[]>([]);
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
@@ -273,6 +280,17 @@ export function WorkspaceProvider({
       case "interaction_resolved":
         interactions.close(event.request.id);
         break;
+      case "thread_event":
+        if (event.event.kind === "resource.access.requested") {
+          // Refresh so the UI shows agent/resource names and the new request.
+          if (connection.self?.kind === "human") void refreshResourceAccessRequests();
+        } else if (event.event.kind === "resource.access.granted" || event.event.kind === "resource.access.denied") {
+          const payload = event.event.payload as { requestId: string } | undefined;
+          if (payload) {
+            setResourceAccessRequests((prev) => prev.filter((r) => r.id !== payload.requestId));
+          }
+        }
+        break;
       case "clear":
         chat.clearChannel(event.channel);
         break;
@@ -305,9 +323,48 @@ export function WorkspaceProvider({
     }
   };
 
+  const refreshResourceAccessRequests = async (): Promise<void> => {
+    const request = api.fetch("/api/resource-access-requests");
+    if (!request) return;
+    try {
+      const res = await request;
+      if (!res.ok) return;
+      const data = (await res.json()) as { requests: AgentResourceAccessRequest[] };
+      setResourceAccessRequests(data.requests);
+    } catch (err) {
+      console.warn("[workspace] failed to load resource access requests:", err);
+    }
+  };
+
+  const resolveResourceAccessRequest = async (requestId: string, decision: "approved" | "denied"): Promise<boolean> => {
+    // Optimistically remove the card so the UI feels immediate; the server
+    // response and the thread event will reconcile if anything goes wrong.
+    setResourceAccessRequests((prev) => prev.filter((r) => r.id !== requestId));
+    const request = api.fetch(`/api/agent-context/access-requests/${encodeURIComponent(requestId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not ${decision} access request: ${await api.errorMessage(res)}`);
+        await refreshResourceAccessRequests();
+        return false;
+      }
+      await refreshResourceAccessRequests();
+      return true;
+    } catch (err) {
+      pushToast(`Could not ${decision} access request: ${String(err)}`);
+      await refreshResourceAccessRequests();
+      return false;
+    }
+  };
+
   useEffect(() => {
     if (!connection.self) return;
     void refreshAgents();
+    if (connection.self.kind === "human") void refreshResourceAccessRequests();
   }, [connection.self]);
 
   const typing = useTyping(connection.self?.id, (channel) =>
@@ -662,6 +719,8 @@ export function WorkspaceProvider({
     ),
     resolveInteraction: (requestId, decision) =>
       connection.send({ type: "interaction_resolve", requestId, decision }),
+    pendingResourceAccessRequests: resourceAccessRequests,
+    resolveResourceAccessRequest,
     setPermissionMode: (agentId, channel, mode) =>
       connection.send({ type: "conversation_mode_set", agentId, channel, mode }),
     setStatus: (status) => connection.send({ type: "status_set", status }),

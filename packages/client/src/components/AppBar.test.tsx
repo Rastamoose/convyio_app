@@ -10,8 +10,10 @@ let board: BoardItem[] = [];
 let pendingInteractions: InteractionRequest[] = [];
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
+    workspace: { id: "ws-1", name: "test" },
     board,
     pendingInteractions,
+    pendingResourceAccessRequests: [],
     demoChannels: [],
     startDemo: vi.fn(),
   }),

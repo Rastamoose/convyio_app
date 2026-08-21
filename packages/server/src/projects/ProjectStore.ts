@@ -9,6 +9,7 @@ import type {
   ProjectAccessStatus,
   ProjectAssignment,
   ProjectKind,
+  ThreadEvent,
 } from "@workspace/shared";
 import { sanitizeRemoteUrl } from "@workspace/shared";
 import { ApiError } from "../board/BoardService";
@@ -22,6 +23,9 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
  * access to a concrete checkout. Paths stay on the Toolman node.
  */
 export class ProjectStore {
+  /** Fan-out hook for project lifecycle thread events; WorkspaceRuntime wires this to the hub. */
+  onEvent: ((event: ThreadEvent) => void) | null = null;
+
   constructor(
     private store: WorkspaceDb,
     private events: ThreadEventStore,
@@ -62,7 +66,7 @@ export class ProjectStore {
     const id = randomUUID();
     const remoteUrl = input.remoteUrl ? sanitizeRemoteUrl(input.remoteUrl) : null;
     try {
-      return await this.store.transaction(async (sql) => {
+      const { project, event } = await this.store.transaction(async (sql) => {
         await sql`
           INSERT INTO projects (
             id, workspace_id, name, kind, remote_url, default_branch, created_by, created_at, archived_at
@@ -71,7 +75,7 @@ export class ProjectStore {
             ${input.defaultBranch ?? null}, ${actor.id}, ${now}, NULL
           )
         `;
-        await this.events.append(sql, {
+        const event = await this.events.append(sql, {
           workspaceId: this.store.workspaceId,
           actorId: actor.id,
           kind: "project.created",
@@ -79,8 +83,10 @@ export class ProjectStore {
           payload: { projectId: id, name, kind: input.kind },
           createdAt: now,
         });
-        return (await this.findIn(sql, id))!;
+        return { project: (await this.findIn(sql, id))!, event };
       });
+      this.onEvent?.(event);
+      return project;
     } catch (err) {
       if (isUniqueViolation(err)) throw new ApiError(409, "NAME_TAKEN", `project ${name} already exists`);
       throw err;
@@ -91,14 +97,14 @@ export class ProjectStore {
     this.assertHuman(actor);
     await this.requireOwner(actor, id);
     const now = Date.now();
-    return this.store.transaction(async (sql) => {
+    const { project, event } = await this.store.transaction(async (sql) => {
       const [row] = await sql<ProjectRow[]>`
         UPDATE projects SET archived_at = ${now}
         WHERE id = ${id} AND workspace_id = ${this.store.workspaceId} AND archived_at IS NULL
         RETURNING *
       `;
       if (!row) throw new ApiError(404, "NOT_FOUND", "no such project");
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: actor.id,
         kind: "project.archived",
@@ -106,14 +112,16 @@ export class ProjectStore {
         payload: { projectId: id },
         createdAt: now,
       });
-      return (await this.findIn(sql, id))!;
+      return { project: (await this.findIn(sql, id))!, event };
     });
+    this.onEvent?.(event);
+    return project;
   }
 
   async setAccessMode(actor: Actor, projectId: string, accessMode: FolderAccessMode): Promise<Project> {
     this.assertHuman(actor);
     const now = Date.now();
-    return this.store.transaction(async (sql) => {
+    const { project, event } = await this.store.transaction(async (sql) => {
       const existing = await this.findIn(sql, projectId);
       if (!existing || existing.archivedAt) throw new ApiError(404, "NOT_FOUND", "no such project");
       if (existing.createdBy !== actor.id) {
@@ -123,7 +131,7 @@ export class ProjectStore {
         UPDATE projects SET access_mode = ${accessMode}
         WHERE id = ${projectId} AND workspace_id = ${this.store.workspaceId}
       `;
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: actor.id,
         kind: "project.access_mode.updated",
@@ -131,8 +139,10 @@ export class ProjectStore {
         payload: { projectId, accessMode },
         createdAt: now,
       });
-      return (await this.findIn(sql, projectId))!;
+      return { project: (await this.findIn(sql, projectId))!, event };
     });
+    this.onEvent?.(event);
+    return project;
   }
 
   async requestAccess(actor: Actor, projectId: string, reason: string): Promise<ProjectAccessRequest> {
@@ -146,7 +156,7 @@ export class ProjectStore {
     const now = Date.now();
     const id = randomUUID();
     try {
-      return await this.store.transaction(async (sql) => {
+      const { request, event } = await this.store.transaction(async (sql) => {
         const [row] = await sql<AccessRow[]>`
           INSERT INTO project_access_requests (
             id, workspace_id, project_id, agent_id, reason, status, created_at
@@ -155,7 +165,7 @@ export class ProjectStore {
           )
           RETURNING *
         `;
-        await this.events.append(sql, {
+        const event = await this.events.append(sql, {
           workspaceId: this.store.workspaceId,
           actorId: actor.id,
           kind: "project.access.requested",
@@ -163,8 +173,10 @@ export class ProjectStore {
           payload: { requestId: id, projectId, agentId: actor.id },
           createdAt: now,
         });
-        return toAccess(row, actor.displayName);
+        return { request: toAccess(row, actor.displayName), event };
       });
+      this.onEvent?.(event);
+      return request;
     } catch (err) {
       if (isUniqueViolation(err)) throw new ApiError(409, "ALREADY_PENDING", "an access request is already pending");
       throw err;
@@ -179,7 +191,7 @@ export class ProjectStore {
   ): Promise<ProjectAccessRequest> {
     this.assertHuman(actor);
     const now = Date.now();
-    return this.store.transaction(async (sql) => {
+    const { request, event } = await this.store.transaction(async (sql) => {
       const [pending] = await sql<{ created_by: string }[]>`
         SELECT p.created_by
         FROM project_access_requests r
@@ -208,7 +220,7 @@ export class ProjectStore {
           assignedAt: now,
         });
       }
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: actor.id,
         kind: "project.access.resolved",
@@ -216,8 +228,10 @@ export class ProjectStore {
         payload: { requestId, decision, projectId: row.project_id, agentId: row.agent_id },
         createdAt: now,
       });
-      return toAccess(row);
+      return { request: toAccess(row), event };
     });
+    this.onEvent?.(event);
+    return request;
   }
 
   async assign(
@@ -227,13 +241,13 @@ export class ProjectStore {
     this.assertHuman(actor);
     await this.requireOwner(actor, input.projectId);
     const now = Date.now();
-    return this.store.transaction(async (sql) => {
+    const { assignment, event } = await this.store.transaction(async (sql) => {
       const assignment = await this.insertAssignment(sql, {
         ...input,
         assignedBy: actor.id,
         assignedAt: now,
       });
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: actor.id,
         kind: "project.assignment.granted",
@@ -241,22 +255,24 @@ export class ProjectStore {
         payload: { projectId: input.projectId, agentId: input.agentId, mountId: input.mountId },
         createdAt: now,
       });
-      return assignment;
+      return { assignment, event };
     });
+    this.onEvent?.(event);
+    return assignment;
   }
 
   async revoke(actor: Actor, projectId: string, agentId: string): Promise<void> {
     this.assertHuman(actor);
     await this.requireOwner(actor, projectId);
     const now = Date.now();
-    await this.store.transaction(async (sql) => {
+    const { event } = await this.store.transaction(async (sql) => {
       const rows = await sql`
         DELETE FROM project_assignments
         WHERE project_id = ${projectId} AND agent_id = ${agentId}
         RETURNING project_id
       `;
       if (rows.length === 0) throw new ApiError(404, "NOT_FOUND", "no such assignment");
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: actor.id,
         kind: "project.assignment.revoked",
@@ -264,7 +280,9 @@ export class ProjectStore {
         payload: { projectId, agentId },
         createdAt: now,
       });
+      return { event };
     });
+    this.onEvent?.(event);
   }
 
   async assignment(projectId: string, agentId: string): Promise<ProjectAssignment | null> {
@@ -336,7 +354,7 @@ export class ProjectStore {
     },
   ): Promise<ProjectAssignment> {
     const now = Date.now();
-    return this.store.transaction(async (sql) => {
+    const { assignment, event } = await this.store.transaction(async (sql) => {
       const [row] = await sql<AssignmentRow[]>`
         UPDATE project_assignments
         SET checkout_key = COALESCE(${patch.checkoutKey ?? null}, checkout_key),
@@ -349,7 +367,7 @@ export class ProjectStore {
         RETURNING *
       `;
       if (!row) throw new ApiError(404, "NOT_FOUND", "no such assignment");
-      await this.events.append(sql, {
+      const event = await this.events.append(sql, {
         workspaceId: this.store.workspaceId,
         actorId: agentId,
         kind: "toolman.checkout.updated",
@@ -357,8 +375,10 @@ export class ProjectStore {
         payload: { projectId, agentId, status: patch.status },
         createdAt: now,
       });
-      return (await this.findAssignmentIn(sql, projectId, agentId))!;
+      return { assignment: (await this.findAssignmentIn(sql, projectId, agentId))!, event };
     });
+    this.onEvent?.(event);
+    return assignment;
   }
 
   async requireOwner(actor: Actor, projectId: string): Promise<Project> {

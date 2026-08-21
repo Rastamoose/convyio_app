@@ -4,8 +4,8 @@ import path from "node:path";
 import type {
   Actor,
   BoardEventEnvelope,
-  BoardItem,
   ChatMessage,
+  DemoFocusTarget,
   Participant,
   PlanEventEnvelope,
   WorkCapability,
@@ -18,7 +18,7 @@ import type { Roster } from "../roster";
 import type { BoardService } from "../board/BoardService";
 import type { PlanService } from "../board/PlanService";
 import type { Toolman } from "../board/Toolman";
-import type { DemoScript } from "./script";
+import type { DemoScript, DemoStep } from "./script";
 
 const DEFAULT_STEP_DELAY_MS = 3_000;
 const AGENT_TIMEOUT_MS = 90_000;
@@ -32,6 +32,7 @@ export interface DemoRun {
   startedBy: string;
   stage: string;
   progressMessage: string;
+  focus: DemoFocusTarget | null;
   paused: boolean;
   cancelled: boolean;
   stepIndex: number;
@@ -45,6 +46,7 @@ export interface DemoProgress {
   message: string;
   paused: boolean;
   running: boolean;
+  focus?: DemoFocusTarget;
 }
 
 export class DemoOrchestrator {
@@ -88,6 +90,7 @@ export class DemoOrchestrator {
         message: run.progressMessage,
         paused: run.paused,
         running: !run.cancelled,
+        ...(run.focus ? { focus: run.focus } : {}),
       };
     }
     return { channel, stage: "idle", message: "No demo running.", paused: false, running: false };
@@ -111,7 +114,8 @@ export class DemoOrchestrator {
       generation: gen,
       startedBy,
       stage: "intro",
-      progressMessage: "Two founders and their independently owned agents start with the same evidence.",
+      progressMessage: "The work starts in the shared conversation.",
+      focus: { kind: "conversation", label: "Shared request" },
       paused: false,
       cancelled: false,
       stepIndex: 0,
@@ -239,22 +243,27 @@ export class DemoOrchestrator {
       try {
         if (step.kind === "message") {
           const text = this.replaceAgent(step.say!, script);
-          await this.postAs(step.author!, text, channel);
+          const messageId = await this.postAs(step.author!, text, channel);
+          if (step.focus) this.applyStepFocus(step.focus, messageId);
           if (step.await === "agent_reply") {
             await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
           }
         } else if (step.kind === "gate") {
-          await this.pauseAtGate(step.gate!, step.prompt);
+          await this.pauseAtGate(step.gate!, step.prompt, step.focus);
         } else if (step.kind === "action") {
           await this.runAction(step.action!, step.actor, step.constraint, channel, script);
+          if (step.focus) this.applyStepFocus(step.focus);
         }
       } catch (err) {
         throw err;
       }
-      if (step.kind !== "gate") await this.delay(this.stepDelayMs);
+      if (step.kind !== "gate") await this.delay(this.stepDelayMs === 0 ? 0 : step.focus?.holdMs ?? this.stepDelayMs);
     }
     if (this.isCurrent(gen)) {
-      this.setStage("completed", "Demo complete.");
+      this.setStage("completed", "The request, decisions, implementation and proof are all in one thread.", {
+        kind: "guide",
+        label: "Reviewable result",
+      });
       await this.cleanupParticipants();
     }
   }
@@ -509,10 +518,12 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
     return participant;
   }
 
-  private async postAs(name: string, content: string, channel: string): Promise<void> {
+  private async postAs(name: string, content: string, channel: string): Promise<string> {
     const actor = await this.requireActor(name);
     const participant = await this.joinParticipant(actor);
-    await this.hub.postMessage(participant, content, channel);
+    const id = randomUUID();
+    await this.hub.postMessage(participant, content, channel, { id });
+    return id;
   }
 
   private async seedWorkspace(seedDir: string): Promise<void> {
@@ -525,6 +536,21 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
   private replaceAgent(text: string, script: DemoScript): string {
     const agentName = script.agents[0] ?? this.roster.onlineAgentName() ?? "noodle";
     return text.replaceAll("{agent}", agentName);
+  }
+
+  private applyStepFocus(focus: NonNullable<DemoStep["focus"]>, messageId?: string): void {
+    const id = focus.kind === "message"
+      ? messageId
+      : focus.kind === "plan" || focus.kind === "plan_change" || focus.kind === "plan_accept"
+        ? this.run?.planRef
+        : focus.kind === "ticket" || focus.kind === "ticket_approve" || focus.kind === "result"
+          ? this.run?.ticketRef
+          : undefined;
+    this.setStage(`spotlight_${this.run?.stepIndex ?? 0}`, focus.note, {
+      kind: focus.kind,
+      ...(id ? { id } : {}),
+      label: focus.label,
+    });
   }
 
   private async waitForAgentReply(channel: string, timeout: number): Promise<void> {
@@ -626,16 +652,36 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
     }
   }
 
-  private async pauseAtGate(gateFor: "continue" | "accept_plan" | "approve_ticket", prompt?: string): Promise<void> {
+  private async pauseAtGate(
+    gateFor: "continue" | "accept_plan" | "approve_ticket",
+    prompt?: string,
+    focus?: DemoStep["focus"],
+  ): Promise<void> {
     this.gateType = gateFor;
     const message = prompt ?? (gateFor === "continue"
       ? "Continue when you are ready."
       : gateFor === "accept_plan"
         ? "Waiting for you to accept the plan."
         : "Waiting for you to approve the ticket.");
-    this.setStage(`waiting_${gateFor}`, message);
+    const fallback: DemoFocusTarget = gateFor === "accept_plan"
+      ? { kind: "plan_accept", id: this.run?.planRef, label: "Your decision" }
+      : gateFor === "approve_ticket"
+        ? { kind: "ticket_approve", id: this.run?.ticketRef, label: "Authorize work" }
+        : { kind: "guide", label: "Chapter checkpoint" };
+    const target = focus
+      ? {
+          kind: focus.kind,
+          ...(focus.kind === "plan" || focus.kind === "plan_change" || focus.kind === "plan_accept"
+            ? { id: this.run?.planRef }
+            : focus.kind === "ticket" || focus.kind === "ticket_approve" || focus.kind === "result"
+              ? { id: this.run?.ticketRef }
+              : {}),
+          label: focus.label,
+        }
+      : fallback;
     await new Promise<void>((resolve) => {
       this.gateResolve = resolve;
+      this.setStage(`waiting_${gateFor}`, message, target);
     });
   }
 
@@ -664,10 +710,11 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private setStage(stage: string, message: string): void {
+  private setStage(stage: string, message: string, focus: DemoFocusTarget | null = null): void {
     if (!this.run) return;
     this.run.stage = stage;
     this.run.progressMessage = message;
+    this.run.focus = focus;
     this.broadcastProgress(message);
   }
 
@@ -679,6 +726,7 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
       stage: this.run.stage,
       message,
       paused: this.run.paused,
+      ...(this.run.focus ? { focus: this.run.focus } : {}),
     });
   }
 }

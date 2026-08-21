@@ -27,9 +27,12 @@ import { createApiHandler, type AuthGate } from "../src/board/api";
 import { Hub } from "../src/hub";
 import { RunnerRuntime } from "../src/RunnerRuntime";
 import { createTestDb } from "./pgSchema";
+import { ContextNotes } from "../src/context/ContextNotes";
 import { ContextStore } from "../src/context/ContextStore";
 import { WorkspaceSnapshotBuilder } from "../src/context/WorkspaceSnapshot";
 import { PromptEnvelopeBuilder } from "../src/context/PromptEnvelope";
+import { ResourceAccessStore } from "../src/context/ResourceAccessStore";
+import { ResourceManifestBuilder } from "../src/context/ResourceManifest";
 import { PlanService } from "../src/board/PlanService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +89,9 @@ export interface Env {
   agentWork: AgentWorkStore;
   threadEvents: ThreadEventStore;
   attachments: Attachments;
+  notes: ContextNotes;
+  resourceAccess: ResourceAccessStore;
+  resourceManifest: ResourceManifestBuilder;
   runnerRuntime: RunnerRuntime;
   baseUrl: string;
   envelopes: BoardEventEnvelope[];
@@ -115,10 +121,22 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
   const messages = new MessageStore(db, threadEvents);
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const agentInvites = new AgentInvites(db);
+  const resourceAccess = new ResourceAccessStore(
+    db,
+    threadEvents,
+    (agentId, humanId) => agentInvites.allowsAuthor(agentId, humanId),
+  );
+  const resourceManifest = new ResourceManifestBuilder(db, resourceAccess);
   const runnerRuntime = new RunnerRuntime();
   const context = new ContextStore(db, threadEvents);
+  const notes = new ContextNotes(db, threadEvents);
   const snapshot = new WorkspaceSnapshotBuilder(db, service, plans, context);
-  const envelope = new PromptEnvelopeBuilder(snapshot, { id: db.workspaceId, name: db.workspaceName });
+  const envelope = new PromptEnvelopeBuilder(
+    snapshot,
+    { id: db.workspaceId, name: db.workspaceName },
+    resourceAccess,
+    notes,
+  );
   const handler = createApiHandler({
     db,
     service,
@@ -135,6 +153,9 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
     plans,
     envelope,
     context,
+    notes,
+    resourceAccess,
+    resourceManifest,
   });
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, r));
@@ -149,6 +170,9 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
     agentWork,
     threadEvents,
     attachments,
+    notes,
+    resourceAccess,
+    resourceManifest,
     runnerRuntime,
     baseUrl,
     envelopes,
@@ -242,6 +266,9 @@ export interface WsEnv {
   threadEvents: ThreadEventStore;
   channels: Channels;
   attachments: Attachments;
+  notes: ContextNotes;
+  resourceAccess: ResourceAccessStore;
+  resourceManifest: ResourceManifestBuilder;
   runnerRuntime: RunnerRuntime;
   plans: PlanService;
   hub: Hub;
@@ -302,6 +329,13 @@ export async function createWsEnv(
   const agentWork = new AgentWorkStore(db, threadEvents, messages);
   const attachments = new Attachments(db, supabaseAdmin());
   const agentInvites = new AgentInvites(db);
+  const resourceAccess = new ResourceAccessStore(
+    db,
+    threadEvents,
+    (agentId, humanId) => agentInvites.allowsAuthor(agentId, humanId),
+  );
+  const resourceManifest = new ResourceManifestBuilder(db, resourceAccess);
+  const notes = new ContextNotes(db, threadEvents);
   const runnerRuntime = new RunnerRuntime();
   // Auth-enabled envs expose /api/auth/* through the SAME Auth instance the
   // join gate uses (prod runs one instance for both HTTP and ws, and the
@@ -320,6 +354,9 @@ export async function createWsEnv(
     corsOrigin: "localhost-dev",
     authGate,
     agentInvites,
+    notes,
+    resourceAccess,
+    resourceManifest,
     runnerRuntime,
     onUpdateAgent: (profile) => hub.updateAgentConfig(profile),
     onRevokeAgent: (actorId) => hub.closeAgentConnection(actorId),
@@ -347,6 +384,7 @@ export async function createWsEnv(
         : undefined,
       authorizeAgentWork: (agentId, authorId) => agentInvites.allowsAuthor(agentId, authorId),
       threadEvents,
+      resourceAccess,
       ...(options.heartbeatMs ? { heartbeatMs: options.heartbeatMs } : {}),
     },
   );
@@ -376,6 +414,9 @@ export async function createWsEnv(
     threadEvents,
     channels,
     attachments,
+    notes,
+    resourceAccess,
+    resourceManifest,
     runnerRuntime,
     plans,
     hub,

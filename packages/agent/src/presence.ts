@@ -36,6 +36,7 @@ export class Presence {
   refresh(): void {
     if (this.runActive) return;
     const proposed = this.selfId ? this.board.myProposedItems(this.selfId) : [];
+    const pendingAccess = (this.board as { pendingResourceAccess?: () => Array<{ kind: string; name: string }> }).pendingResourceAccess?.() ?? [];
     if (proposed.length > 0) {
       const refs = proposed.map((i) => i.ref).join(", ");
       this.socket.send({
@@ -43,6 +44,14 @@ export class Presence {
         status: `Blocked — awaiting approval (${refs})`,
         runState: "blocked",
         taskId: proposed[0].id,
+      });
+    } else if (pendingAccess.length > 0) {
+      const names = pendingAccess.map((r) => r.name).join(", ");
+      this.socket.send({
+        type: "status_update",
+        status: `Blocked — waiting for access approval (${names})`,
+        runState: "blocked",
+        taskId: null,
       });
     } else {
       this.socket.send({ type: "status_update", status: "", runState: "idle", taskId: null });

@@ -47,7 +47,10 @@ import { requestOrigin, websocketUrl } from "../requestOrigin";
 import type { RunnerRuntime } from "../RunnerRuntime";
 import type { WorkspaceSnapshotBuilder } from "../context/WorkspaceSnapshot";
 import type { PromptEnvelopeBuilder } from "../context/PromptEnvelope";
+import type { ContextNotes } from "../context/ContextNotes";
 import type { ContextStore } from "../context/ContextStore";
+import type { ResourceAccessStore } from "../context/ResourceAccessStore";
+import type { ResourceManifestBuilder } from "../context/ResourceManifest";
 import type { GitHub } from "../projects/GitHub";
 import type { GitRepositories } from "../projects/GitRepositories";
 import type { ProjectStore } from "../projects/ProjectStore";
@@ -149,6 +152,19 @@ const toolmanMountBodySchema = z.object({
   cleanliness: z.enum(["clean", "dirty", "unknown"]).optional(),
 });
 const projectAccessBodySchema = z.object({ reason: z.string().min(1).max(1000) });
+const protectedResourceKindSchema = z.enum(["channel", "git_project", "local_project", "workspace_file"]);
+const resourceAccessBodySchema = z.object({
+  resourceKind: protectedResourceKindSchema,
+  resourceId: z.string().min(1).max(200),
+  reason: z.string().min(1).max(1000),
+  originChannelId: z.string().min(1).max(200).nullable().optional(),
+});
+const resourceAccessResolveBodySchema = z.object({ decision: z.enum(["approved", "denied"] as const) });
+const contextNoteBodySchema = z.object({
+  scope: z.enum(["workspace", "agent"] as const),
+  agentId: z.string().min(1).max(200).nullable().optional(),
+  body: z.string().min(1).max(4000),
+});
 const projectAssignBodySchema = z.object({
   agentId: z.string().min(1).max(128),
   mountId: z.string().min(1).max(128).nullable().optional(),
@@ -224,6 +240,9 @@ export interface ApiServices {
   plans?: PlanService | null;
   envelope?: PromptEnvelopeBuilder | null;
   context?: ContextStore | null;
+  notes?: ContextNotes | null;
+  resourceAccess?: ResourceAccessStore | null;
+  resourceManifest?: ResourceManifestBuilder | null;
   github?: GitHub | null;
   gitRepositories?: GitRepositories | null;
   projects?: ProjectStore | null;
@@ -257,6 +276,9 @@ export function createApiHandler(services: ApiServices) {
     plans = null,
     envelope = null,
     context = null,
+    notes = null,
+    resourceAccess = null,
+    resourceManifest = null,
     github = null,
     gitRepositories = null,
     projects = null,
@@ -551,6 +573,9 @@ export function createApiHandler(services: ApiServices) {
               plans,
               envelope,
               context,
+              notes,
+              resourceAccess,
+              resourceManifest,
               github,
               gitRepositories,
               projects,
@@ -593,6 +618,9 @@ interface RouteServices {
   plans: PlanService | null;
   envelope: PromptEnvelopeBuilder | null;
   context: ContextStore | null;
+  notes: ContextNotes | null;
+  resourceAccess: ResourceAccessStore | null;
+  resourceManifest: ResourceManifestBuilder | null;
   github: GitHub | null;
   gitRepositories: GitRepositories | null;
   projects: ProjectStore | null;
@@ -628,6 +656,9 @@ async function route(
     plans,
     envelope,
     context,
+    notes,
+    resourceAccess,
+    resourceManifest,
     github,
     gitRepositories,
     projects,
@@ -874,6 +905,9 @@ async function route(
   if (parts[1] === "board" && parts[2] === "plans") {
     if (!plans) throw new ApiError(501, "NOT_IMPLEMENTED", "plans are not available");
     if (parts.length === 3 && method === "GET") {
+      if (actor.kind === "agent" && snapshot) {
+        return json(res, 200, { plans: (await snapshot.buildFor(actor, resourceAccess)).plans });
+      }
       return json(res, 200, { plans: await plans.list(actor.workspaceId) });
     }
     if (parts.length === 3 && method === "POST") {
@@ -883,7 +917,9 @@ async function route(
     const id = parts[3];
     if (!id) throw new ApiError(404, "NOT_FOUND", "no such route");
     if (parts.length === 4 && method === "GET") {
-      const plan = await plans.find(actor.workspaceId, id);
+      const plan = actor.kind === "agent" && snapshot
+        ? (await snapshot.buildFor(actor, resourceAccess)).plans.find((candidate) => candidate.id === id || candidate.ref === id)
+        : await plans.find(actor.workspaceId, id);
       if (!plan) throw new ApiError(404, "PLAN_NOT_FOUND", `no plan ${id}`);
       return json(res, 200, { plan });
     }
@@ -923,7 +959,12 @@ async function route(
 
   if (parts[1] === "context" && parts.length === 2) {
     if (!context) throw new ApiError(501, "NOT_IMPLEMENTED", "context is not available");
-    if (method === "GET") return json(res, 200, { context: await context.listActive() });
+    if (method === "GET") {
+      if (actor.kind === "agent" && snapshot) {
+        return json(res, 200, { context: (await snapshot.buildFor(actor, resourceAccess)).context });
+      }
+      return json(res, 200, { context: await context.listActive() });
+    }
     if (method === "POST") {
       const body = contextBodySchema.parse(await readBody(req));
       return json(res, 201, {
@@ -939,10 +980,83 @@ async function route(
     throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
   }
 
+  if (parts[1] === "context" && parts[2] === "notes" && parts.length === 3) {
+    if (!notes) throw new ApiError(501, "NOT_IMPLEMENTED", "context notes are not available");
+    if (method === "GET") return json(res, 200, { notes: await notes.listFor(actor) });
+    if (method === "POST") {
+      const body = contextNoteBodySchema.parse(await readBody(req));
+      return json(res, 201, { note: await notes.create(actor, body) });
+    }
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", `${method} not allowed`);
+  }
+
+  if (parts[1] === "agent-context" && parts[2] === "manifest" && parts.length === 3 && method === "GET") {
+    if (!resourceManifest) throw new ApiError(501, "NOT_IMPLEMENTED", "resource manifest is not available");
+    if (actor.kind !== "agent") throw new ApiError(403, "AGENT_ONLY", "resource manifests are agent-scoped");
+    return json(res, 200, { manifest: await resourceManifest.build(actor) });
+  }
+
+  if (parts[1] === "agent-context" && parts[2] === "channels" && parts.length === 5 && method === "GET") {
+    if (!resourceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "resource access is not available");
+    if (actor.kind !== "agent") throw new ApiError(403, "AGENT_ONLY", "agent context is agent-scoped");
+    const channel = await channels.getById(parts[3]);
+    if (!channel) throw new ApiError(404, "NOT_FOUND", "no such channel");
+    if (!(await resourceAccess.has(actor.id, "channel", channel.id))) {
+      throw new ApiError(403, "RESOURCE_ACCESS_REQUIRED", "channel access is required");
+    }
+    if (parts[4] === "messages") {
+      const before = Number(url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER);
+      if (!Number.isFinite(before)) throw new ApiError(400, "BAD_BEFORE", "before must be numeric");
+      return json(res, 200, { messages: await messages.olderPage(channel.name, before, Math.min(historyLimit(url), 20)) });
+    }
+    if (parts[4] === "search") {
+      const query = url.searchParams.get("q")?.trim() ?? "";
+      if (!query || query.length > 200) throw new ApiError(400, "BAD_QUERY", "q must be 1-200 characters");
+      return json(res, 200, { messages: await messages.search(channel.id, query, Math.min(historyLimit(url), 20)) });
+    }
+  }
+
+  if (parts[1] === "agent-context" && parts[2] === "access-requests") {
+    if (!resourceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "resource access is not available");
+    if (parts.length === 3 && method === "POST") {
+      const body = resourceAccessBodySchema.parse(await readBody(req));
+      return json(res, 201, { request: await resourceAccess.request(actor, body) });
+    }
+    if (parts.length === 5 && parts[4] === "resolve" && method === "POST") {
+      const body = resourceAccessResolveBodySchema.parse(await readBody(req));
+      return json(res, 200, { request: await resourceAccess.resolve(actor, parts[3], body.decision) });
+    }
+  }
+
+  if (parts[1] === "resource-access-requests" && parts.length === 2 && method === "GET") {
+    if (!resourceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "resource access is not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can inspect resource access requests");
+    return json(res, 200, { requests: await resourceAccess.pendingRequests() });
+  }
+
+  if (parts[1] === "agents" && parts[3] === "resource-access" && parts.length === 4 && method === "GET") {
+    if (!resourceAccess || !resourceManifest) throw new ApiError(501, "NOT_IMPLEMENTED", "resource access is not available");
+    if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can inspect agent access");
+    const target = await db.getActor(parts[2]);
+    if (!target || target.kind !== "agent") throw new ApiError(404, "NOT_FOUND", "no such agent");
+    return json(res, 200, {
+      manifest: await resourceManifest.build(target),
+      grants: await resourceAccess.grantsForAgent(target.id),
+      requests: await resourceAccess.requestsForAgent(target.id),
+    });
+  }
+
+  if (parts[1] === "agents" && parts[3] === "resource-grants" && parts.length === 5 && method === "DELETE") {
+    if (!resourceAccess) throw new ApiError(501, "NOT_IMPLEMENTED", "resource access is not available");
+    const grants = await resourceAccess.grantsForAgent(parts[2]);
+    if (!grants.some((grant) => grant.id === parts[4])) throw new ApiError(404, "NOT_FOUND", "no such agent grant");
+    return json(res, 200, { grant: await resourceAccess.revoke(actor, parts[4]) });
+  }
+
   // GET /api/workspace/snapshot — cursor-bearing board + context projection.
   if (parts[1] === "workspace" && parts[2] === "snapshot" && parts.length === 3 && method === "GET") {
     if (!snapshot) throw new ApiError(501, "NOT_IMPLEMENTED", "workspace snapshot is not available");
-    const body: WorkspaceSnapshot = await snapshot.build();
+    const body: WorkspaceSnapshot = await snapshot.buildFor(actor, resourceAccess);
     return json(res, 200, body);
   }
 
@@ -957,6 +1071,9 @@ async function route(
   if (parts[1] === "thread" && parts[2] === "events" && parts.length === 3 && method === "GET") {
     const channelId = url.searchParams.get("channel_id");
     if (!channelId) throw new ApiError(400, "BAD_CHANNEL_ID", "channel_id is required");
+    if (actor.kind === "agent" && resourceAccess && !(await resourceAccess.has(actor.id, "channel", channelId))) {
+      throw new ApiError(403, "RESOURCE_ACCESS_REQUIRED", "channel access is required");
+    }
     const beforeSeq = optionalPositiveInt(url, "before_seq", "BAD_BEFORE_SEQ");
     return json(res, 200, {
       events: await threadEvents.list({
@@ -973,6 +1090,11 @@ async function route(
   if (parts[1] === "messages" && parts.length === 2 && method === "GET") {
     const channel = url.searchParams.get("channel");
     if (!channel) throw new ApiError(400, "BAD_CHANNEL", "channel is required");
+    const channelInfo = await channels.get(channel);
+    if (!channelInfo) throw new ApiError(404, "NOT_FOUND", "no such channel");
+    if (actor.kind === "agent" && resourceAccess && !(await resourceAccess.has(actor.id, "channel", channelInfo.id))) {
+      throw new ApiError(403, "RESOURCE_ACCESS_REQUIRED", "channel access is required");
+    }
     // Number(null) is 0, not NaN, so a missing `before` must be checked
     // before the numeric coercion or it would silently pass as "before 0".
     const beforeRaw = url.searchParams.get("before");
@@ -1280,10 +1402,12 @@ async function route(
     if (status && !statusValues.includes(status as ItemStatus)) {
       throw new ApiError(400, "BAD_STATUS", `status must be one of ${statusValues.join(", ")}`);
     }
-    const items = await service.list(actor.workspaceId, {
-      status: (status as ItemStatus) ?? undefined,
-      includeDeleted: url.searchParams.get("include_deleted") === "true",
-    });
+    const items = actor.kind === "agent" && snapshot
+      ? (await snapshot.buildFor(actor, resourceAccess)).items.filter((item) => !status || item.status === status)
+      : await service.list(actor.workspaceId, {
+          status: (status as ItemStatus) ?? undefined,
+          includeDeleted: url.searchParams.get("include_deleted") === "true",
+        });
     return json(res, 200, { items });
   }
 
@@ -1481,6 +1605,9 @@ function runtimeRouteServices(
     plans: runtime.plans,
     envelope: runtime.envelope,
     context: runtime.context,
+    notes: runtime.notes,
+    resourceAccess: runtime.resourceAccess,
+    resourceManifest: runtime.resourceManifest,
     github,
     gitRepositories: runtime.gitRepositories,
     projects: runtime.projects,

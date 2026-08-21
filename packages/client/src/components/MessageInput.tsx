@@ -459,7 +459,7 @@ export function MessageInput({
   };
 
   return (
-    <div className="relative shrink-0 border-t border-divider px-4 pb-6">
+    <div data-onboarding-target="composer" className="relative shrink-0 border-t border-divider px-4 pb-6">
       {commandOpen && (
         <div className="elevated absolute bottom-full left-4 right-4 z-10 mb-2 overflow-hidden rounded-lg">
           <div className="px-3 pt-3 pb-1 text-[10px] font-bold tracking-wider text-muted uppercase">

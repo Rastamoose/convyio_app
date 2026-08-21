@@ -5,10 +5,13 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   ACTION_CAPABILITY,
   clientEventSchema,
+  isReadOnlyToolmanAction,
   type ActionRequestEvent,
   type ActivityBatchEvent,
+  type Actor,
   type AgentInvite,
   type AgentProvider,
+  type AgentResourceAccessRequest,
   type AgentRunFinishEvent,
   type Attachment,
   type BoardEventEnvelope,
@@ -19,8 +22,9 @@ import {
   type ClientEvent,
   type ConversationModeSetEvent,
   type ConversationSessionSetEvent,
-  type InteractionResolveEvent,
+  type DemoControlEvent,
   type DemoProgressEvent,
+  type InteractionResolveEvent,
   type JoinEvent,
   type MessageDeleteEvent,
   type MessageEditEvent,
@@ -33,6 +37,8 @@ import {
   type ServerEvent,
   type StatusUpdateEvent,
   type SummaryEvent,
+  type ThreadEvent,
+  type ToolExecution,
   type TraceChunk,
   type WorkClaimEvent,
   type WorkCompleteEvent,
@@ -47,6 +53,7 @@ import type { Channels } from "./chat/Channels";
 import { DEFAULT_HISTORY_LIMIT, type MessageStore } from "./chat/MessageStore";
 import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
+import type { BoardService } from "./board/BoardService";
 import type { ProjectAction } from "@workspace/shared";
 import type { Toolman, ToolmanResult } from "./board/Toolman";
 import type { GitRepositories } from "./projects/GitRepositories";
@@ -57,6 +64,7 @@ import { folderConsent } from "./projects/folderConsent";
 import { requestOrigin } from "./requestOrigin";
 import type { RunnerRuntime } from "./RunnerRuntime";
 import type { ContextCursorStore } from "./context/ContextCursorStore";
+import type { ResourceAccessStore } from "./context/ResourceAccessStore";
 import type { ThreadEventStore } from "./chat/ThreadEventStore";
 
 interface Connection {
@@ -83,6 +91,7 @@ interface Connection {
  * disconnect path and turns the dot grey.
  */
 const HEARTBEAT_MS = 30_000;
+const MAX_CONTEXT_READ_CHARS = 12_000;
 
 /** Verdict from the join gate: whether a join stands, and as what stored identity. */
 export type JoinDecision =
@@ -108,10 +117,21 @@ export interface HubOptions {
   /** Sequenced workspace projection used to stamp welcome.snapshotSeq. */
   threadEvents?: ThreadEventStore;
   contextCursors?: ContextCursorStore;
+  resourceAccess?: ResourceAccessStore;
   projects?: ProjectStore;
   gitRepositories?: GitRepositories;
   toolmanGateway?: ToolmanGateway;
   executions?: ToolExecutionStore;
+  board?: BoardService;
+}
+
+interface AgentOccupancy {
+  kind: "working" | "waiting";
+  /** Where the agent is stuck — origin thread, not the resource it wants. */
+  location: string;
+  reason: string;
+  /** What the pending approval is for, when that is distinct from location. */
+  target?: string;
 }
 
 /**
@@ -142,6 +162,8 @@ export class Hub {
   private rateLimiter = new RateLimiter();
   /** Folder-owner approvals for the rest of a conversation, keyed by agent:folder:conversation. */
   private folderLeases = new Map<string, string>();
+
+  private channelNameCache = new Map<string, string | null>();
 
   constructor(
     server: HttpServer | null,
@@ -201,7 +223,7 @@ export class Hub {
   }
 
   broadcastBoardEvent(envelope: BoardEventEnvelope): void {
-    this.broadcast(envelope);
+    void this.broadcastBoardEnvelope(envelope);
     this.onBoardEvent?.(envelope);
     if (envelope.type === "item.approved") {
       void this.dispatchApprovedTicket(envelope).catch((err) => {
@@ -217,6 +239,16 @@ export class Hub {
     if (!owner || owner.kind !== "agent") return;
     const channel = await this.channels.resolve(item.originChannelId);
     if (!channel) return;
+
+    const occupancy = await this.checkAgentOccupancy(owner.id, channel.id);
+    if (occupancy) {
+      const reply = this.buildOccupancyReply(owner, occupancy, channel, Date.now());
+      await this.messages.append(reply);
+      this.broadcast({ type: "message", message: reply });
+      this.onMessagePosted?.(reply);
+      return;
+    }
+
     const queued = await this.agentWork.queueApprovedTicket({
       actor: { id: envelope.actor.id, displayName: envelope.actor.display_name },
       owner: { id: owner.id, displayName: owner.name, kind: owner.kind },
@@ -230,8 +262,12 @@ export class Hub {
   }
 
   broadcastPlanEvent(envelope: PlanEventEnvelope): void {
-    this.broadcast(envelope);
+    void this.broadcastPlanEnvelope(envelope);
     this.onPlanEvent?.(envelope);
+  }
+
+  broadcastThreadEvent(event: ThreadEvent): void {
+    void this.broadcastThreadEventScoped(event);
   }
 
   broadcastChannelCreated(channel: ChannelInfo): void {
@@ -301,6 +337,38 @@ export class Hub {
           .filter(({ allowed }) => allowed)
           .map(({ agent }) => agent)
       : mentionCandidates;
+
+    // Determine which agents can accept work right now. An agent that is
+    // already working in another channel or waiting for any human approval is
+    // globally unavailable; the user gets a deterministic templated reply
+    // instead of being silently mixed into an ongoing run.
+    const allowedAgents: Participant[] = [];
+    const occupiedAgents: { agent: Participant; occupancy: AgentOccupancy }[] = [];
+    for (const agent of mentionedAgents) {
+      const occupancy = await this.checkAgentOccupancy(agent.id, channelInfo.id);
+      if (occupancy) {
+        occupiedAgents.push({ agent, occupancy });
+      } else {
+        allowedAgents.push(agent);
+      }
+    }
+
+    // First mention in a channel asks for durable read access before the
+    // agent can see history. The current trigger still queues; later
+    // mentions in other channels see the pending request as occupancy.
+    if (this.options.resourceAccess) {
+      await Promise.all(
+        allowedAgents.map((agent) =>
+          this.options.resourceAccess!.requestIfNeeded(this.toActor(agent), {
+            resourceKind: "channel",
+            resourceId: channelInfo.id,
+            reason: `Mentioned in #${channelInfo.name}`,
+            originChannelId: channelInfo.id,
+          }),
+        ),
+      );
+    }
+
     const message: ChatMessage = {
       id,
       authorId: author.id,
@@ -309,23 +377,190 @@ export class Hub {
       content,
       timestamp: Date.now(),
       channelId: channelInfo.id,
-      mentions: mentionedAgents.map((agent) => agent.id),
+      mentions: allowedAgents.map((agent) => agent.id),
       channel: channelInfo.name,
       ...rest,
     };
-    const requests = await this.messages.appendAtomically(message, (sql) =>
-      this.agentWork.queue(sql, message, message.mentions ?? []),
-    );
-    this.broadcast(
+    const { requests, replies } = await this.messages.appendAtomically(message, async (sql) => {
+      const queued = await this.agentWork.queue(sql, message, message.mentions ?? []);
+      const replyMessages: ChatMessage[] = [];
+      for (let index = 0; index < occupiedAgents.length; index++) {
+        const { agent, occupancy } = occupiedAgents[index];
+        const reply = this.buildOccupancyReply(agent, occupancy, channelInfo, message.timestamp + 1 + index);
+        await this.messages.appendInTransaction(sql, reply, { clientEventId: `occupancy-reply:${reply.id}` });
+        replyMessages.push(reply);
+      }
+      return { requests: queued, replies: replyMessages };
+    });
+    await this.broadcastMessage(
       nonce === undefined ? { type: "message", message } : { type: "message", message, nonce },
     );
-    for (const agent of mentionedAgents) {
+    for (const reply of replies) {
+      this.broadcast({ type: "message", message: reply });
+      this.onMessagePosted?.(reply);
+    }
+    for (const agent of allowedAgents) {
       this.notifyWork(
         agent.id,
         requests.filter((request) => request.agentId === agent.id).map((request) => request.id),
       );
     }
     this.onMessagePosted?.(message);
+  }
+
+  /**
+   * Describes why an agent cannot start a new run right now.
+   * `location` is the human-readable place the agent is stuck.
+   */
+  private async checkAgentOccupancy(agentId: string, currentChannelId: string): Promise<AgentOccupancy | null> {
+    const workspaceId = this.options.workspace.id;
+
+    // Waiting on a human approval blocks every channel, even the one the
+    // approval was raised in.
+    const interactions = await this.interactions.pendingForAgent(workspaceId, agentId);
+    if (interactions.length > 0) {
+      const interaction = interactions[0];
+      const channelName = await this.lookupChannelName(interaction.channelId);
+      return {
+        kind: "waiting",
+        location: this.formatChannelLocation(currentChannelId, interaction.channelId, channelName),
+        reason: `waiting for approval to ${interaction.capability}`,
+      };
+    }
+
+    if (this.options.resourceAccess) {
+      const resourceRequests = (await this.options.resourceAccess.requestsForAgent(agentId)).filter(
+        (request) => request.status === "pending",
+      );
+      const request = this.chooseOccupyingResourceRequest(resourceRequests, currentChannelId);
+      if (request) {
+        const originName = await this.lookupChannelName(request.originChannelId);
+        const target = this.formatAccessTarget(request);
+        const originId = request.originChannelId ?? request.resourceId;
+        return {
+          kind: "waiting",
+          location: this.formatChannelLocation(currentChannelId, request.originChannelId, originName),
+          ...(originId !== request.resourceId ? { target } : {}),
+          reason: `waiting for access approval to ${target}`,
+        };
+      }
+    }
+
+    if (this.options.board) {
+      const proposedItems = (await this.options.board.list(workspaceId, { status: "proposed" })).filter(
+        (item) => item.createdBy === agentId && item.status === "proposed",
+      );
+      if (proposedItems.length > 0) {
+        const item = proposedItems[0];
+        const channelName = item.originChannelName ?? (await this.lookupChannelName(item.originChannelId ?? null));
+        return {
+          kind: "waiting",
+          location: this.formatChannelLocation(currentChannelId, item.originChannelId ?? currentChannelId, channelName),
+          reason: `waiting for approval of ${item.ref} (${item.title})`,
+        };
+      }
+    }
+
+    // A claimed run in a different channel means the agent is currently
+    // responding there. A claimed run in the same channel is fine: the new
+    // message will queue and run after the current one finishes.
+    const activeRuns = await this.agentWork.listActive(agentId);
+    if (activeRuns.length > 0) {
+      const run = activeRuns[0];
+      if (run.channelId !== currentChannelId) {
+        const channelName = await this.lookupChannelName(run.channelId);
+        return {
+          kind: "working",
+          location: this.formatChannelLocation(currentChannelId, run.channelId, channelName),
+          reason: `already responding`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private formatChannelLocation(currentChannelId: string, channelId: string | null, channelName: string): string {
+    if (channelId && channelId === currentChannelId) return "this channel";
+    return channelName === "workspace" ? "workspace" : `#${channelName}`;
+  }
+
+  /**
+   * A first-mention request for the channel the user is speaking in is not
+   * occupancy — the agent can keep working there while that grant is pending.
+   * Anything else (another resource, or a grant requested from another
+   * thread) occupies the agent globally.
+   */
+  private chooseOccupyingResourceRequest(
+    requests: AgentResourceAccessRequest[],
+    currentChannelId: string,
+  ): AgentResourceAccessRequest | null {
+    const occupying = requests.filter((request) => {
+      const originId = request.originChannelId ?? request.resourceId;
+      const currentChannelGrant =
+        request.resourceKind === "channel" &&
+        request.resourceId === currentChannelId &&
+        originId === currentChannelId;
+      return !currentChannelGrant;
+    });
+    if (occupying.length === 0) return null;
+    const foreign = occupying.filter(
+      (request) => request.resourceKind !== "channel" || request.resourceId !== currentChannelId,
+    );
+    const pool = foreign.length > 0 ? foreign : occupying;
+    return pool[pool.length - 1] ?? null;
+  }
+
+  private formatAccessTarget(request: AgentResourceAccessRequest): string {
+    const name = request.resourceName ?? request.resourceId;
+    if (request.resourceKind === "channel") return `#${name}`;
+    if (request.resourceKind === "git_project") return `Git project ${name}`;
+    if (request.resourceKind === "local_project") return `local project ${name}`;
+    return `workspace file ${name}`;
+  }
+
+  private toActor(participant: Participant): Actor {
+    return {
+      id: participant.id,
+      workspaceId: this.options.workspace.id,
+      kind: participant.kind === "agent" ? "agent" : "human",
+      displayName: participant.name,
+    };
+  }
+
+  private buildOccupancyReply(
+    agent: Participant,
+    occupancy: AgentOccupancy,
+    channelInfo: ChannelInfo,
+    timestamp: number,
+  ): ChatMessage {
+    const content =
+      occupancy.kind === "waiting" && occupancy.target
+        ? `${agent.name} is waiting for a decision in ${occupancy.location} to access ${occupancy.target}. Resolve that approval first, then continue here.`
+        : occupancy.kind === "waiting"
+          ? `${agent.name} is waiting for a decision in ${occupancy.location} (${occupancy.reason}). Resolve that approval first, then continue here.`
+          : `${agent.name} is currently occupied in ${occupancy.location} (${occupancy.reason}). Wait for it to finish there, or continue the conversation in that channel.`;
+    return {
+      id: randomUUID(),
+      authorId: agent.id,
+      authorName: agent.name,
+      authorKind: "agent",
+      content,
+      timestamp,
+      channelId: channelInfo.id,
+      channel: channelInfo.name,
+      mentions: [],
+    };
+  }
+
+  private async lookupChannelName(channelId: string | null): Promise<string> {
+    if (!channelId) return "workspace";
+    const cached = this.channelNameCache.get(channelId);
+    if (cached !== undefined) return cached ?? "unknown";
+    const channel = await this.channels.getById(channelId);
+    const name = channel?.name ?? "unknown";
+    this.channelNameCache.set(channelId, channel ? name : null);
+    return name;
   }
 
   /** Clear one channel's messages (or all) and tell clients. */
@@ -583,7 +818,7 @@ export class Hub {
     // Older messages page in via GET /api/messages.
     const channelInfos = await this.channels.listInfo();
     const channelList = channelInfos.map((channel) => channel.name);
-    const [history, archivedChannels, pinnedChannels, channelSections, snapshotSeq, contextCursor] = await Promise.all([
+    const [rawHistory, archivedChannels, pinnedChannels, channelSections, snapshotSeq, contextCursor] = await Promise.all([
       this.messages.recentByChannel(channelList, DEFAULT_HISTORY_LIMIT),
       this.channels.listArchived(),
       this.channels.pinned(),
@@ -595,6 +830,9 @@ export class Hub {
         ? this.options.contextCursors.get(participant.id)
         : Promise.resolve(null),
     ]);
+    const history = kind === "agent" && this.options.resourceAccess
+      ? await this.authorizedHistory(participant.id, rawHistory)
+      : rawHistory;
     this.send(conn, {
       type: "welcome",
       workspace: this.options.workspace,
@@ -618,7 +856,14 @@ export class Hub {
     });
     if (this.options.executions) {
       const recent = await this.options.executions.listRecent();
-      for (const execution of recent) this.send(conn, { type: "tool_execution", execution });
+      for (const execution of recent) {
+        const allowed =
+          participant.kind === "human" ||
+          participant.id === execution.agentId ||
+          !this.options.resourceAccess ||
+          (execution.channelId !== null && await this.options.resourceAccess.has(participant.id, "channel", execution.channelId));
+        if (allowed) this.send(conn, { type: "tool_execution", execution });
+      }
     }
     if (kind === "agent" && this.runnerRuntime.isAvailable(participant.id)) {
       await this.sendPendingWork(conn);
@@ -754,7 +999,7 @@ export class Hub {
     try {
       const committed = await this.agentWork.appendActivity(conn.participant!.id, event);
       for (const threadEvent of committed) {
-        this.broadcast({ type: "thread_event", event: threadEvent });
+        await this.broadcastThreadEventScoped(threadEvent);
       }
     } catch (err) {
       if (!(err instanceof RunRequestAccessError)) throw err;
@@ -768,11 +1013,11 @@ export class Hub {
       const result = await this.agentWork.finishRun(conn.participant!.id, event, trace);
       this.traceBuffers.delete(event.runId);
       if (result.message) {
-        this.broadcast({ type: "message", message: result.message });
+        await this.broadcastMessage({ type: "message", message: result.message });
         this.onMessagePosted?.(result.message);
       }
       for (const threadEvent of result.events) {
-        this.broadcast({ type: "thread_event", event: threadEvent });
+        await this.broadcastThreadEventScoped(threadEvent);
       }
       if (!result.message) {
         this.broadcast({
@@ -793,7 +1038,7 @@ export class Hub {
   ): Promise<void> {
     try {
       const updated = await this.agentWork.setConversationSession(conn.participant!.id, event);
-      if (updated.event) this.broadcast({ type: "thread_event", event: updated.event });
+      if (updated.event) await this.broadcastThreadEventScoped(updated.event);
       this.send(conn, { type: "conversation_updated", conversation: updated.conversation });
     } catch (err) {
       if (!(err instanceof RunRequestAccessError)) throw err;
@@ -877,6 +1122,14 @@ export class Hub {
     const result = isProjectAction(event.action)
       ? await this.executeProjectAction(actor, event.action, event.boardItemRef ?? null, conversationId, event.requestId)
       : await this.toolman.execute(actor, event.action, event.boardItemRef ?? null, { chatGrant });
+    if (isReadOnlyToolmanAction(event.action.kind) && result.ok && (result.output?.length ?? 0) > MAX_CONTEXT_READ_CHARS) {
+      return this.send(conn, {
+        type: "action_result",
+        requestId: event.requestId,
+        ok: false,
+        error: "CONTEXT_BUDGET_EXCEEDED: narrow the search or read a smaller resource",
+      });
+    }
     this.send(conn, { type: "action_result", requestId: event.requestId, ...result });
   }
 
@@ -987,8 +1240,8 @@ export class Hub {
           conversationId,
           action,
         });
-        this.broadcast({ type: "tool_execution", execution: started.execution });
-        if (started.event) this.broadcast({ type: "thread_event", event: started.event });
+        await this.broadcastToolExecution(started.execution);
+        if (started.event) await this.broadcastThreadEventScoped(started.event);
       } catch (err) {
         console.warn("[hub] could not persist tool execution:", err instanceof Error ? err.message : err);
       }
@@ -1003,8 +1256,8 @@ export class Hub {
           output: result.output,
           error: result.error,
         });
-        this.broadcast({ type: "tool_execution", execution: finished.execution });
-        this.broadcast({ type: "thread_event", event: finished.event });
+        await this.broadcastToolExecution(finished.execution);
+        await this.broadcastThreadEventScoped(finished.event);
       } catch (err) {
         console.warn("[hub] could not finish tool execution:", err instanceof Error ? err.message : err);
       }
@@ -1142,7 +1395,7 @@ export class Hub {
 
   private handleTraceStart(participant: Participant, runId: string): void {
     this.traceBuffers.set(runId, []);
-    this.broadcast({
+    this.broadcastHumans({
       type: "trace_start",
       runId,
       agentId: participant.id,
@@ -1153,7 +1406,7 @@ export class Hub {
 
   private handleTraceChunk(runId: string, chunk: TraceChunk): void {
     this.traceBuffers.get(runId)?.push(chunk);
-    this.broadcast({ type: "trace_chunk", runId, chunk });
+    this.broadcastHumans({ type: "trace_chunk", runId, chunk });
   }
 
   private async handleSummary(participant: Participant, event: SummaryEvent): Promise<void> {
@@ -1167,7 +1420,7 @@ export class Hub {
 
   private handleRunEnd(event: RunEndEvent): void {
     this.traceBuffers.delete(event.runId);
-    this.broadcast({ type: "run_end", runId: event.runId, reason: event.reason });
+    this.broadcastHumans({ type: "run_end", runId: event.runId, reason: event.reason });
   }
 
   private async agentOnly(conn: Connection, handle: () => void | Promise<void>): Promise<void> {
@@ -1176,6 +1429,106 @@ export class Hub {
       return;
     }
     await handle();
+  }
+
+  private async authorizedHistory(agentId: string, history: ChatMessage[]): Promise<ChatMessage[]> {
+    const channelIds = [...new Set(history.flatMap((message) => message.channelId ?? []))];
+    const accessible = new Set(
+      (
+        await Promise.all(
+          channelIds.map(async (channelId) =>
+            (await this.options.resourceAccess!.has(agentId, "channel", channelId)) ? channelId : null,
+          ),
+        )
+      ).filter((channelId): channelId is string => channelId !== null),
+    );
+    return history.filter((message) => message.channelId !== undefined && accessible.has(message.channelId));
+  }
+
+  private async broadcastThreadEventScoped(event: ThreadEvent): Promise<void> {
+    const payload = JSON.stringify({ type: "thread_event", event });
+    const isGlobal =
+      event.channelId === null ||
+      event.kind.startsWith("resource.access.") ||
+      event.kind.startsWith("note.");
+    for (const conn of this.connections) {
+      if (conn.socket.readyState !== WebSocket.OPEN || !conn.participant) continue;
+      const allowed =
+        conn.participant.kind === "human" ||
+        conn.participant.id === event.actorId ||
+        isGlobal ||
+        !this.options.resourceAccess ||
+        (event.channelId !== null && await this.options.resourceAccess.has(conn.participant.id, "channel", event.channelId));
+      if (allowed) conn.socket.send(payload);
+    }
+  }
+
+  private async broadcastToolExecution(execution: ToolExecution): Promise<void> {
+    const payload = JSON.stringify({ type: "tool_execution", execution });
+    for (const conn of this.connections) {
+      if (conn.socket.readyState !== WebSocket.OPEN || !conn.participant) continue;
+      const allowed =
+        conn.participant.kind === "human" ||
+        conn.participant.id === execution.agentId ||
+        !this.options.resourceAccess ||
+        (execution.channelId !== null && await this.options.resourceAccess.has(conn.participant.id, "channel", execution.channelId));
+      if (allowed) conn.socket.send(payload);
+    }
+  }
+
+  private async broadcastBoardEnvelope(envelope: BoardEventEnvelope): Promise<void> {
+    const globallyPublished = ["approved", "in_progress", "blocked", "done"].includes(envelope.item.status);
+    const payload = JSON.stringify(envelope);
+    for (const conn of this.connections) {
+      if (conn.socket.readyState !== WebSocket.OPEN || !conn.participant) continue;
+      const allowed =
+        conn.participant.kind === "human" ||
+        conn.participant.id === envelope.actor.id ||
+        globallyPublished ||
+        !this.options.resourceAccess ||
+        (envelope.item.originChannelId !== null &&
+          envelope.item.originChannelId !== undefined &&
+          await this.options.resourceAccess.has(conn.participant.id, "channel", envelope.item.originChannelId));
+      if (allowed) conn.socket.send(payload);
+    }
+  }
+
+  private async broadcastPlanEnvelope(envelope: PlanEventEnvelope): Promise<void> {
+    const payload = JSON.stringify(envelope);
+    for (const conn of this.connections) {
+      if (conn.socket.readyState !== WebSocket.OPEN || !conn.participant) continue;
+      const allowed =
+        conn.participant.kind === "human" ||
+        conn.participant.id === envelope.actor.id ||
+        !this.options.resourceAccess ||
+        (envelope.plan.originChannelId !== null &&
+          envelope.plan.originChannelId !== undefined &&
+          await this.options.resourceAccess.has(conn.participant.id, "channel", envelope.plan.originChannelId));
+      if (allowed) conn.socket.send(payload);
+    }
+  }
+
+  private async broadcastMessage(event: Extract<ServerEvent, { type: "message" }>): Promise<void> {
+    const payload = JSON.stringify(event);
+    for (const conn of this.connections) {
+      if (conn.socket.readyState !== WebSocket.OPEN || !conn.participant) continue;
+      const allowed =
+        conn.participant.kind === "human" ||
+        conn.participant.id === event.message.authorId ||
+        !this.options.resourceAccess ||
+        (event.message.channelId !== undefined &&
+          await this.options.resourceAccess.has(conn.participant.id, "channel", event.message.channelId));
+      if (allowed) conn.socket.send(payload);
+    }
+  }
+
+  private broadcastHumans(event: ServerEvent): void {
+    const payload = JSON.stringify(event);
+    for (const conn of this.connections) {
+      if (conn.participant?.kind === "human" && conn.socket.readyState === WebSocket.OPEN) {
+        conn.socket.send(payload);
+      }
+    }
   }
 
   private broadcast(event: ServerEvent): void {
@@ -1211,7 +1564,16 @@ export class Hub {
   }
 
   private async sendPendingWork(conn: Connection): Promise<void> {
-    const pending = await this.agentWork.listPending(conn.participant!.id);
+    const agentId = conn.participant!.id;
+    let pending = await this.agentWork.listPending(agentId);
+    // Never dispatch work in a different channel while the agent is already
+    // in a run. Same-channel work is queued and processed after the current
+    // run finishes; cross-channel work waits until the agent is free.
+    const active = await this.agentWork.listActive(agentId);
+    if (active.length > 0) {
+      const activeChannelId = active[0].channelId;
+      pending = pending.filter((request) => request.channelId === activeChannelId);
+    }
     this.sendWorkAvailable(conn, pending.map((request) => request.id));
   }
 

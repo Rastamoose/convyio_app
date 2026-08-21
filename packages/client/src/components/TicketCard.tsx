@@ -28,7 +28,7 @@ export function TicketCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <div data-onboarding-target="ticket-card" className="rounded-lg bg-subtle p-3">
+    <div data-onboarding-target="ticket-card" data-demo-ticket-ref={item.ref} className="rounded-lg bg-subtle p-3">
       <div className="mb-2 flex items-baseline gap-2 text-xs">
         <span className="shrink-0 rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">{item.ref}</span>
         <span className="truncate font-medium text-body">{item.title}</span>
@@ -63,7 +63,9 @@ export function TicketCard({
                 <option key={actor.id} value={actor.id}>{actor.displayName}</option>
               ))}
             </select>
-            <ActionButton compact label="Approve" tone="approve" onClick={() => approveItem(item.id, owner || item.owner || undefined)} />
+            <span data-demo-ticket-approve={item.ref}>
+              <ActionButton compact label="Approve" tone="approve" onClick={() => approveItem(item.id, owner || item.owner || undefined)} />
+            </span>
             <ActionButton compact label="Deny" tone="deny" onClick={() => denyItem(item.id)} />
           </>
         )}

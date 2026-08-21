@@ -34,11 +34,11 @@ export function AppBar({
   onOpenLobby?: () => void;
   onOpenSettings?: () => void;
 }) {
-  const { workspace, board, pendingInteractions, demoChannels, startDemo } = useWorkspace();
+  const { workspace, board, pendingInteractions, pendingResourceAccessRequests, demoChannels, startDemo } = useWorkspace();
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const pendingCount =
-    board.filter((i) => i.status === "proposed").length + pendingInteractions.length;
+    board.filter((i) => i.status === "proposed").length + pendingInteractions.length + pendingResourceAccessRequests.length;
 
   useEffect(() => {
     if (!workspaceMenuOpen) return;

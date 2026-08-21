@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentAccessMode,
   AgentAccessPolicy,
+  AgentResourceAccessRequest,
+  AgentResourceGrant,
+  AgentResourceManifest,
   AgentSummary,
   Participant,
   RunnerConfigOption,
@@ -83,6 +86,7 @@ export function AddAgentModal({
   const {
     agentInvites,
     apiUrl,
+    apiFetch,
     createAgent,
     updateAgent,
     repairAgent,
@@ -244,6 +248,7 @@ export function AddAgentModal({
               key={activeAgent.id}
               agent={activeAgent}
               participants={participants}
+              apiFetch={apiFetch}
               onSave={(fields) => updateAgent(activeAgent.id, fields)}
               onRepair={() => void repair()}
               onRevoke={() => void revoke()}
@@ -500,12 +505,14 @@ function isModelSelectOption(
 function ConfigureStep({
   agent,
   participants,
+  apiFetch,
   onSave,
   onRepair,
   onRevoke,
 }: {
   agent: AgentSummary;
   participants: Participant[];
+  apiFetch: (path: string, init?: RequestInit) => Promise<Response> | null;
   onSave: (fields: {
     instructions: string;
     model: string | null;
@@ -519,6 +526,39 @@ function ConfigureStep({
   const [access, setAccess] = useState<AgentAccessPolicy>(agent.access);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [resourceAccess, setResourceAccess] = useState<{
+    manifest: AgentResourceManifest;
+    grants: AgentResourceGrant[];
+    requests: AgentResourceAccessRequest[];
+  } | null>(null);
+
+  const refreshResourceAccess = async () => {
+    const request = apiFetch(`/api/agents/${encodeURIComponent(agent.actorId)}/resource-access`);
+    if (!request) return;
+    const response = await request;
+    if (response.ok) setResourceAccess(await response.json());
+  };
+
+  useEffect(() => {
+    void refreshResourceAccess();
+  }, [agent.actorId]);
+
+  const resolveResourceRequest = async (requestId: string, decision: "approved" | "denied") => {
+    const request = apiFetch(`/api/agent-context/access-requests/${encodeURIComponent(requestId)}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }),
+    });
+    if (request && (await request).ok) await refreshResourceAccess();
+  };
+
+  const revokeResourceGrant = async (grantId: string) => {
+    const request = apiFetch(
+      `/api/agents/${encodeURIComponent(agent.actorId)}/resource-grants/${encodeURIComponent(grantId)}`,
+      { method: "DELETE" },
+    );
+    if (request && (await request).ok) await refreshResourceAccess();
+  };
 
   const modelOption = agent.runtime.options.find(isModelSelectOption);
   const modelFallback =
@@ -614,6 +654,69 @@ function ConfigureStep({
             {agent.runtime.effectiveModel}).
           </p>
         )}
+      </div>
+
+      <div className="mb-4">
+        <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
+          Resources and permissions
+        </div>
+        <div className="rounded-md border border-divider bg-subtle p-2.5">
+          <div className="mb-2 text-xs text-muted">
+            Board, platform policy, and workspace guidance are always available.
+          </div>
+          {!resourceAccess && <div className="text-xs text-faint">Loading access…</div>}
+          {resourceAccess && (
+            <ul className="space-y-2">
+              {resourceAccess.manifest.resources
+                .filter((resource) => resource.access !== "default")
+                .map((resource) => {
+                  const grant = resourceAccess.grants.find(
+                    (candidate) => candidate.resourceKind === resource.kind && candidate.resourceId === resource.id,
+                  );
+                  const pending = resourceAccess.requests.find(
+                    (candidate) =>
+                      candidate.status === "pending" &&
+                      candidate.resourceKind === resource.kind &&
+                      candidate.resourceId === resource.id,
+                  );
+                  return (
+                    <li key={`${resource.kind}:${resource.id}`} className="flex items-start justify-between gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-body">{resource.name}</div>
+                        <div className="text-muted">
+                          {resource.kind.replace("_", " ")} · {resource.access === "none" ? "No access" : resource.access}
+                        </div>
+                        {grant?.grantedByName && <div className="text-faint">Granted by {grant.grantedByName}</div>}
+                      </div>
+                      {pending ? (
+                        <div className="flex shrink-0 gap-2">
+                          <button
+                            onClick={() => void resolveResourceRequest(pending.id, "approved")}
+                            className="cursor-pointer font-medium text-accent hover:underline"
+                          >
+                            Allow
+                          </button>
+                          <button
+                            onClick={() => void resolveResourceRequest(pending.id, "denied")}
+                            className="cursor-pointer text-muted hover:text-body"
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      ) : grant ? (
+                        <button
+                          onClick={() => void revokeResourceGrant(grant.id)}
+                          className="shrink-0 cursor-pointer text-muted hover:text-dead"
+                        >
+                          Revoke
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+            </ul>
+          )}
+        </div>
       </div>
 
       <div className="mb-4">

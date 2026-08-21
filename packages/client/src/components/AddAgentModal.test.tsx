@@ -14,10 +14,16 @@ const updateAgent = vi.fn();
 const repairAgent = vi.fn();
 const revokeAgent = vi.fn();
 const refreshAgents = vi.fn().mockResolvedValue(undefined);
+const apiFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+  manifest: { workspaceId: "w1", seq: 0, generatedAt: 0, resources: [] },
+  grants: [],
+  requests: [],
+}), { status: 200, headers: { "Content-Type": "application/json" } }));
 vi.mock("../hooks/WorkspaceContext", () => ({
   useWorkspace: () => ({
     agentInvites,
     apiUrl: "http://localhost:3001",
+    apiFetch,
     participants,
     createAgent,
     updateAgent,

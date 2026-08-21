@@ -863,7 +863,9 @@ function Workspace({
         <ApprovalQueue
           items={workspace.board.filter((i) => i.status === "proposed")}
           interactions={workspace.pendingInteractions}
+          resourceAccessRequests={workspace.pendingResourceAccessRequests}
           onResolveInteraction={workspace.resolveInteraction}
+          onResolveResourceAccess={workspace.resolveResourceAccessRequest}
           onDiscuss={(item) => {
             setQueueOpen(false);
             discussItem(item);

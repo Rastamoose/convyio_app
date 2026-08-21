@@ -1,6 +1,7 @@
 import type { Actor, BoardItem } from "./board";
 import type { PermissionMode } from "./agentWork";
 import type { BoardPlan, ContextEntry } from "./context";
+import type { ContextNote } from "./resource";
 
 export interface PolicyRef {
   id: string;
@@ -18,6 +19,7 @@ export interface PromptEnvelope {
   plans: BoardPlan[];
   tickets: BoardItem[];
   context: ContextEntry[];
+  notes: ContextNote[];
   members: Actor[];
   permissionMode: PermissionMode;
 }
@@ -58,6 +60,11 @@ export function renderPromptEnvelope(envelope: PromptEnvelope): string {
         })
         .join("\n")
     : "(no active context entries)";
+  const notes = envelope.notes?.length
+    ? envelope.notes
+        .map((note) => `[${note.scope}${note.createdByName ? ` by ${note.createdByName}` : ""}] ${note.body}`)
+        .join("\n")
+    : "(no active notes)";
   const members = envelope.members
     .map((member) => `${member.displayName} (${member.kind})`)
     .join(", ");
@@ -70,5 +77,6 @@ export function renderPromptEnvelope(envelope: PromptEnvelope): string {
     `<plans>\n${plans}\n</plans>`,
     `<tickets>\n${tickets}\n</tickets>`,
     `<context>\n${context}\n</context>`,
+    `<notes>\n${notes}\n</notes>`,
   ].join("\n\n");
 }
