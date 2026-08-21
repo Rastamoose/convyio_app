@@ -5,7 +5,6 @@ import type {
   Actor,
   BoardEventEnvelope,
   ChatMessage,
-  DemoFocusTarget,
   Participant,
   PlanEventEnvelope,
   WorkCapability,
@@ -18,7 +17,7 @@ import type { Roster } from "../roster";
 import type { BoardService } from "../board/BoardService";
 import type { PlanService } from "../board/PlanService";
 import type { Toolman } from "../board/Toolman";
-import type { DemoScript, DemoStep } from "./script";
+import type { DemoScript } from "./script";
 
 const DEFAULT_STEP_DELAY_MS = 3_000;
 const AGENT_TIMEOUT_MS = 90_000;
@@ -32,7 +31,7 @@ export interface DemoRun {
   startedBy: string;
   stage: string;
   progressMessage: string;
-  focus: DemoFocusTarget | null;
+  progressLabel?: string;
   paused: boolean;
   cancelled: boolean;
   stepIndex: number;
@@ -46,7 +45,7 @@ export interface DemoProgress {
   message: string;
   paused: boolean;
   running: boolean;
-  focus?: DemoFocusTarget;
+  label?: string;
 }
 
 export class DemoOrchestrator {
@@ -90,7 +89,7 @@ export class DemoOrchestrator {
         message: run.progressMessage,
         paused: run.paused,
         running: !run.cancelled,
-        ...(run.focus ? { focus: run.focus } : {}),
+        ...(run.progressLabel ? { label: run.progressLabel } : {}),
       };
     }
     return { channel, stage: "idle", message: "No demo running.", paused: false, running: false };
@@ -115,7 +114,7 @@ export class DemoOrchestrator {
       startedBy,
       stage: "intro",
       progressMessage: "The work starts in the shared conversation.",
-      focus: { kind: "conversation", label: "Shared request" },
+      progressLabel: "Shared request",
       paused: false,
       cancelled: false,
       stepIndex: 0,
@@ -321,27 +320,24 @@ export class DemoOrchestrator {
       try {
         if (step.kind === "message") {
           const text = this.replaceAgent(step.say!, script);
-          const messageId = await this.postAs(step.author!, text, channel);
-          if (step.focus) this.applyStepFocus(step.focus, messageId);
+          await this.postAs(step.author!, text, channel);
+          if (step.note) this.setStage(`step_${i}`, step.note, step.label);
           if (step.await === "agent_reply") {
             await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
           }
         } else if (step.kind === "gate") {
-          await this.pauseAtGate(step.gate!, step.prompt, step.focus);
+          await this.pauseAtGate(step.gate!, step.prompt, step.label);
         } else if (step.kind === "action") {
           await this.runAction(step.action!, step.actor, step.constraint, channel, script);
-          if (step.focus) this.applyStepFocus(step.focus);
+          if (step.note) this.setStage(`step_${i}`, step.note, step.label);
         }
       } catch (err) {
         throw err;
       }
-      if (step.kind !== "gate") await this.delay(this.stepDelayMs === 0 ? 0 : step.focus?.holdMs ?? this.stepDelayMs);
+      if (step.kind !== "gate") await this.delay(this.stepDelayMs === 0 ? 0 : step.holdMs ?? this.stepDelayMs);
     }
     if (this.isCurrent(gen)) {
-      this.setStage("completed", "Everything stayed in one thread.", {
-        kind: "guide",
-        label: "Reviewable result",
-      });
+      this.setStage("completed", "Everything stayed in one thread.", "Reviewable result");
       await this.cleanupParticipants();
     }
   }
@@ -358,7 +354,7 @@ export class DemoOrchestrator {
         await this.proposePlan(channel);
         break;
       case "add_constraint":
-        await this.addConstraint(actorName ?? "tom", constraint ?? "ledger-sync.ts output must remain identical to existing Stripe charges");
+        await this.addConstraint(actorName ?? "tom", constraint ?? "Keep owner_name working for one release; do not change the mobile client");
         break;
       case "correct_plan":
         await this.correctPlan(actorName ?? "noodle");
@@ -377,29 +373,30 @@ export class DemoOrchestrator {
   private async proposePlan(channel: string): Promise<void> {
     const noodle = await this.requireActor("noodle", "agent");
     const plan = await this.plans.create(noodle, {
-      title: "Fix the multi-currency invoice regression",
-      objective: "Restore agreement between the in-app invoice and customer-facing PDF after the billing deploy.",
+      title: "Ship the owner field without breaking clients",
+      objective: "Add owner to the project API while existing clients using owner_name continue working.",
       outline: [
-        "Use the daily activity report and Sentry spike to isolate the affected billing path",
-        "Introduce a shared totals helper that rounds each converted line item and sums the rounded line totals",
-        "Update invoice-render.ts and pdf-export.ts to use the shared helper",
-        "Run the billing fixture before proposing any wider change",
+        "Add owner while preserving owner_name for one release",
+        "Update the web client to read owner",
+        "Leave the mobile client unchanged",
+        "Run the API contract check for old and new clients",
       ],
-      constraints: ["Invoice and PDF totals must agree for the same invoice"],
+      constraints: ["New API clients can read owner"],
       clarifications: [
-        "Noodle correlated the error spike with the billing deploy; Hermes traced the discrepancy to per-line versus final-total rounding",
+        "Noodle reviewed the backend response; Hermes checked the web and mobile consumers",
       ],
       acceptanceCriteria: [
-        "invoice and PDF totals agree for sample invoices",
-        "billing/check.ts passes",
+        "API returns owner and owner_name",
+        "web reads owner and mobile still reads owner_name",
+        "api-contract/check.ts passes",
       ],
-      impactMap: completeImpactMap({ tests: "billing/check.ts verifies agreement" }),
+      impactMap: completeImpactMap({ tests: "api-contract/check.ts verifies old and new clients" }),
       channel,
       assumedOwnerId: noodle.id,
     });
     this.run!.planRef = plan.ref;
     this.demoPlanRefs.add(plan.ref);
-    this.setStage("plan_proposed", "Both agents' findings are now one shared plan. Next: check what it must not break.");
+    this.setStage("plan_proposed", "Backend and client findings are now one shared Plan.");
   }
 
   private async addConstraint(actorName: string, text: string): Promise<void> {
@@ -415,7 +412,7 @@ export class DemoOrchestrator {
     await this.plans.appendDecision(
       actor,
       this.run.planRef,
-      "Approach corrected: update only invoice-render.ts and pdf-export.ts; leave ledger-sync.ts unchanged so existing Stripe reconciliation stays valid.",
+      "Rollout corrected: add owner, preserve owner_name for one release, update web, and leave mobile unchanged.",
     );
     this.setStage("plan_corrected", "Plan corrected before execution.");
   }
@@ -424,19 +421,23 @@ export class DemoOrchestrator {
     const noodle = await this.requireActor("noodle", "agent");
     if (!this.run?.planRef) throw new Error("no plan for ticket");
     const ticket = await this.service.create(noodle, {
-      title: "Implement the reviewed invoice-total fix",
-      why: "The shared activity and Sentry investigation tied a customer-facing mismatch to the latest billing deploy.",
-      effect: "Invoice and PDF totals agree for the same invoice; ledger-sync.ts remains unchanged so Stripe reconciliation is preserved.",
+      title: "Add the compatible owner API field",
+      why: "The backend wants owner, but existing web and mobile consumers still depend on owner_name.",
+      effect: "New clients can read owner while existing clients keep working through owner_name.",
       planId: this.run.planRef,
       owner: noodle.id,
-      scopePaths: ["billing/"],
+      scopePaths: [
+        "api-contract/server/project-response.ts",
+        "api-contract/web/project-card.ts",
+      ],
       capabilities: ["file_write", "shell_repo"] as WorkCapability[],
       acceptanceCriteria: [
-        "invoice and PDF totals agree for sample invoices",
-        "ledger-sync.ts output matches existing Stripe charges",
-        "billing/check.ts passes",
+        "API returns owner and owner_name",
+        "web reads owner",
+        "mobile remains unchanged",
+        "api-contract/check.ts passes",
       ],
-      impactMap: completeImpactMap({ tests: "billing/check.ts verifies agreement" }),
+      impactMap: completeImpactMap({ tests: "api-contract/check.ts verifies old and new clients" }),
       channel,
     });
     this.run.ticketRef = ticket.ref;
@@ -447,70 +448,51 @@ export class DemoOrchestrator {
   private async executeTicket(ticketRef: string): Promise<void> {
     this.setStage("executing", "Running the authorized changes.");
     const noodle = await this.requireActor("noodle", "agent");
-    const billingDir = path.join(this.workspaceDir, "billing");
-    const ledgerBefore = await fs.readFile(path.join(billingDir, "ledger-sync.ts"), "utf8");
+    const fixtureDir = path.join(this.workspaceDir, "api-contract");
+    const mobileBefore = await fs.readFile(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
 
     await this.service.start(noodle, ticketRef);
 
-    const totalsContent = `import { roundMoney } from "./round";
+    const serverContent = `export interface Project {
+  id: string;
+  ownerName: string;
+}
 
-export function computeInvoiceTotals(
-  lines: { qty: number; unitPrice: number }[],
-  fxRate: number,
-) {
-  const lineTotals = lines.map((l) => roundMoney(l.qty * l.unitPrice * fxRate));
-  const total = lineTotals.reduce((sum, t) => sum + t, 0);
-  return { lineTotals, total };
+export function projectResponse(project: Project) {
+  return {
+    id: project.id,
+    owner: project.ownerName,
+    owner_name: project.ownerName,
+  };
 }
 `;
 
-    const invoiceContent = `import { computeInvoiceTotals } from "./totals";
-import type { LineItem } from "./invoice-render";
-
-export interface LineItem {
-  description: string;
-  qty: number;
-  unitPrice: number;
-}
-
-export function renderInvoiceTotals(lines: LineItem[], fxRate: number) {
-  return computeInvoiceTotals(lines, fxRate);
+    const webContent = `export function projectOwner(project: { owner: string; owner_name?: string }): string {
+  return project.owner;
 }
 `;
 
-    const pdfContent = `import { computeInvoiceTotals } from "./totals";
-import type { LineItem } from "./invoice-render";
+    await this.toolFileWrite(noodle, ticketRef, "api-contract/server/project-response.ts", serverContent);
+    await this.toolFileWrite(noodle, ticketRef, "api-contract/web/project-card.ts", webContent);
 
-export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
-  return computeInvoiceTotals(lines, fxRate);
-}
-`;
-
-    const outputs: string[] = [];
-    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/totals.ts", totalsContent));
-    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/invoice-render.ts", invoiceContent));
-    outputs.push(await this.toolFileWrite(noodle, ticketRef, "billing/pdf-export.ts", pdfContent));
-
-    const ledgerAfter = await fs.readFile(path.join(billingDir, "ledger-sync.ts"), "utf8");
-    const ledgerUnchanged = ledgerBefore === ledgerAfter;
+    const mobileAfter = await fs.readFile(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
+    const mobileUnchanged = mobileBefore === mobileAfter;
 
     let checkOutput = "";
     try {
       const result = await this.toolman.execute(
         noodle,
-        { kind: "run_shell", command: "tsx billing/check.ts" },
+        { kind: "run_shell", command: "tsx api-contract/check.ts" },
         ticketRef,
       );
       checkOutput = result.ok ? result.output ?? "" : result.error ?? "check failed";
-      outputs.push(checkOutput);
     } catch (err) {
       checkOutput = `verification check error: ${err instanceof Error ? err.message : String(err)}`;
-      outputs.push(checkOutput);
     }
 
     const evidence = [
-      "Changed: billing/totals.ts, billing/invoice-render.ts, billing/pdf-export.ts",
-      `Ledger preserved: ${ledgerUnchanged ? "yes — ledger-sync.ts is byte-identical" : "no — ledger-sync.ts changed"}`,
+      "Changed: API response and web client",
+      `Mobile preserved: ${mobileUnchanged ? "yes — mobile client is byte-identical" : "no — mobile client changed"}`,
       "",
       "Verification:",
       checkOutput,
@@ -596,12 +578,10 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
     return participant;
   }
 
-  private async postAs(name: string, content: string, channel: string): Promise<string> {
+  private async postAs(name: string, content: string, channel: string): Promise<void> {
     const actor = await this.requireActor(name);
     const participant = await this.joinParticipant(actor);
-    const id = randomUUID();
-    await this.hub.postMessage(participant, content, channel, { id });
-    return id;
+    await this.hub.postMessage(participant, content, channel);
   }
 
   private async seedWorkspace(seedDir: string): Promise<void> {
@@ -614,21 +594,6 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
   private replaceAgent(text: string, script: DemoScript): string {
     const agentName = script.agents[0] ?? this.roster.onlineAgentName() ?? "noodle";
     return text.replaceAll("{agent}", agentName);
-  }
-
-  private applyStepFocus(focus: NonNullable<DemoStep["focus"]>, messageId?: string): void {
-    const id = focus.kind === "message"
-      ? messageId
-      : focus.kind === "plan" || focus.kind === "plan_change" || focus.kind === "plan_accept"
-        ? this.run?.planRef
-        : focus.kind === "ticket" || focus.kind === "ticket_approve" || focus.kind === "result"
-          ? this.run?.ticketRef
-          : undefined;
-    this.setStage(`spotlight_${this.run?.stepIndex ?? 0}`, focus.note, {
-      kind: focus.kind,
-      ...(id ? { id } : {}),
-      label: focus.label,
-    });
   }
 
   private async waitForAgentReply(channel: string, timeout: number): Promise<void> {
@@ -733,7 +698,7 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
   private async pauseAtGate(
     gateFor: "continue" | "accept_plan" | "approve_ticket",
     prompt?: string,
-    focus?: DemoStep["focus"],
+    label?: string,
   ): Promise<void> {
     this.gateType = gateFor;
     const message = prompt ?? (gateFor === "continue"
@@ -741,25 +706,9 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
       : gateFor === "accept_plan"
         ? "Waiting for you to accept the plan."
         : "Waiting for you to approve the ticket.");
-    const fallback: DemoFocusTarget = gateFor === "accept_plan"
-      ? { kind: "plan_accept", id: this.run?.planRef, label: "Your decision" }
-      : gateFor === "approve_ticket"
-        ? { kind: "ticket_approve", id: this.run?.ticketRef, label: "Authorize work" }
-        : { kind: "guide", label: "Chapter checkpoint" };
-    const target = focus
-      ? {
-          kind: focus.kind,
-          ...(focus.kind === "plan" || focus.kind === "plan_change" || focus.kind === "plan_accept"
-            ? { id: this.run?.planRef }
-            : focus.kind === "ticket" || focus.kind === "ticket_approve" || focus.kind === "result"
-              ? { id: this.run?.ticketRef }
-              : {}),
-          label: focus.label,
-        }
-      : fallback;
     await new Promise<void>((resolve) => {
       this.gateResolve = resolve;
-      this.setStage(`waiting_${gateFor}`, message, target);
+      this.setStage(`waiting_${gateFor}`, message, label);
     });
   }
 
@@ -788,11 +737,11 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private setStage(stage: string, message: string, focus: DemoFocusTarget | null = null): void {
+  private setStage(stage: string, message: string, label?: string): void {
     if (!this.run) return;
     this.run.stage = stage;
     this.run.progressMessage = message;
-    this.run.focus = focus;
+    this.run.progressLabel = label;
     this.broadcastProgress(message);
   }
 
@@ -804,7 +753,7 @@ export function pdfInvoiceTotals(lines: LineItem[], fxRate: number) {
       stage: this.run.stage,
       message,
       paused: this.run.paused,
-      ...(this.run.focus ? { focus: this.run.focus } : {}),
+      ...(this.run.progressLabel ? { label: this.run.progressLabel } : {}),
     });
   }
 }

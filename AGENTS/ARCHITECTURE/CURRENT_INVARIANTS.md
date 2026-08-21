@@ -129,8 +129,10 @@ does not supersede them until the corresponding code change lands.
   Branch creation creates/reactivates it; branch deletion, repository unlink or
   pull-request merge archives it. Unlink preserves project/event attribution
   and a later relink reuses the same project id.
-- The Hub knows nothing about demos; `DemoOrchestrator` attaches through the
-  Hub's three hooks and feeds inputs through the same paths humans use.
+- The Hub knows nothing about demo stories; `DemoOrchestrator` attaches through
+  start, control, message, Plan and Ticket hooks and feeds inputs through the
+  same services humans use. Demo startup may purge work only from a channel
+  marked `is_demo`; normal channels cannot enter that cleanup path.
 - `messages.author_id` has no FK to `actors`: kept loose so a message and
   its reactions can be deleted together without a cascade depending on the
   author row still existing.

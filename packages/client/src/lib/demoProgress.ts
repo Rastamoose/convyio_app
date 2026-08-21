@@ -8,6 +8,6 @@ export function projectDemoProgress(event: DemoProgressEvent): DemoProgressState
     stage: event.stage,
     message: event.message,
     paused: event.paused,
-    ...(event.focus ? { focus: event.focus } : {}),
+    ...(event.label ? { label: event.label } : {}),
   };
 }

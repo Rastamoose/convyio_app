@@ -361,8 +361,8 @@ describe("demo scripts", () => {
     const scriptsDir = path.resolve(import.meta.dirname, "../assets/demo/scripts");
     const scripts = await loadDemoScripts(scriptsDir);
     assert.ok(scripts.has("demo"));
-    assert.ok(scripts.has("demo-bug"));
-    assert.equal(scripts.get("demo-bug")!.seedDir, "billing");
+    assert.equal(scripts.get("demo")!.seedDir, "api-contract");
+    assert.equal(scripts.has("demo-bug"), false);
   });
 
   test("a script with an unknown step author is rejected", async () => {

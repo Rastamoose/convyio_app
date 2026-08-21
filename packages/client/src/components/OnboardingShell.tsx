@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DemoFocusTarget } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
-import { ShowcaseSpotlight } from "./ShowcaseSpotlight";
 
 const STORAGE_KEY = "convyio:onboarding";
 
@@ -26,7 +24,6 @@ export function OnboardingShell({
   const workspace = useWorkspace();
   const [dismissed, setDismissed] = useState(false);
   const [showStarters, setShowStarters] = useState(false);
-  const [composerHandoff, setComposerHandoff] = useState(false);
 
   useEffect(() => {
     try {
@@ -63,14 +60,13 @@ export function OnboardingShell({
     return () => document.removeEventListener("keydown", pauseOnEscape);
   }, [active?.channel, active?.paused, demoRunning]);
 
-  if (dismissed && !demoRunning && !composerHandoff) return null;
-  if (!hasDemos && !demoRunning && !composerHandoff) return null;
+  if (dismissed && !demoRunning) return null;
+  if (!hasDemos && !demoRunning) return null;
 
   const playDemo = () => {
     const target = demoChannel ?? workspace.demoChannels[0];
     if (!target) return;
     setDismissed(false);
-    setComposerHandoff(false);
     setChannel(target);
     workspace.startDemo(target, "walkthrough");
   };
@@ -88,99 +84,83 @@ export function OnboardingShell({
 
   const startRealWork = (text: string) => {
     persistDismissed(true);
-    setComposerHandoff(true);
+    setDismissed(true);
     if (channel !== "general") setChannel("general");
     onPrefill(text);
   };
 
   // Active demo progress bar.
-  if (demoRunning || composerHandoff) {
-    const stage = active?.stage ?? "handoff";
-    const done = stage === "completed" && !composerHandoff;
-    const waitingToContinue = stage === "waiting_continue";
-    const focus: DemoFocusTarget | undefined = composerHandoff
-      ? { kind: "composer", label: "Bring one piece of work" }
-      : active?.focus;
-    const message = composerHandoff
-      ? "Edit this request and send it when ready."
-      : active?.message ?? "Follow the highlighted item.";
+  if (demoRunning && active) {
+    const done = active.stage === "completed";
+    const waitingToContinue = active.stage === "waiting_continue";
     return (
-      <>
-        <ShowcaseSpotlight focus={focus} />
-        <div data-onboarding-target="demo-guide" className="fixed bottom-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4">
-          <div className="elevated rounded-xl px-4 py-3" role="status" aria-live="polite">
-            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <div className="text-[10px] font-bold tracking-wider text-muted uppercase">
-                  {focus?.label ?? "Walkthrough"}
-                </div>
-                <div className="text-sm text-body">{message}</div>
+      <div className="fixed bottom-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4">
+        <div className="elevated rounded-xl px-4 py-3" role="status" aria-live="polite">
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold tracking-wider text-muted uppercase">
+                {active.label ?? "Walkthrough"}
               </div>
-              <div className="flex shrink-0 items-center justify-end gap-1.5">
-                {waitingToContinue && active && (
-                  <button
-                    onClick={() => workspace.demoControl(active.channel, "continue")}
-                    className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
-                  >
-                    Continue
-                  </button>
-                )}
-                {!done && !waitingToContinue && !composerHandoff && active && (
-                  <button
-                    onClick={() => workspace.demoControl(active.channel, active.paused ? "resume" : "pause")}
-                    className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                  >
-                    {active.paused ? "Resume" : "Pause"}
-                  </button>
-                )}
-                {!composerHandoff && active && (
-                  <button
-                    onClick={() => {
-                      setComposerHandoff(false);
-                      workspace.demoControl(active.channel, "replay");
-                    }}
-                    className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                  >
-                    Replay
-                  </button>
-                )}
-                {!done && !composerHandoff && (
-                  <button
-                    onClick={skip}
-                    className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                  >
-                    Skip
-                  </button>
-                )}
-                {(done || composerHandoff) && (
-                  <button
-                    onClick={() => {
-                      persistDismissed(true);
-                      setComposerHandoff(false);
-                      setDismissed(true);
-                    }}
-                    className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                  >
-                    Close
-                  </button>
-                )}
+              <div className="text-sm text-body">{active.message}</div>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-1.5">
+              {waitingToContinue && (
+                <button
+                  onClick={() => workspace.demoControl(active.channel, "continue")}
+                  className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+                >
+                  Continue
+                </button>
+              )}
+              {!done && !waitingToContinue && (
+                <button
+                  onClick={() => workspace.demoControl(active.channel, active.paused ? "resume" : "pause")}
+                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+                >
+                  {active.paused ? "Resume" : "Pause"}
+                </button>
+              )}
+              <button
+                onClick={() => workspace.demoControl(active.channel, "replay")}
+                className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+              >
+                Replay
+              </button>
+              {!done && (
+                <button
+                  onClick={skip}
+                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+                >
+                  Skip
+                </button>
+              )}
+              {done && (
+                <button
+                  onClick={() => {
+                    persistDismissed(true);
+                    setDismissed(true);
+                  }}
+                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+          {done && (
+            <div className="mt-3 border-t border-divider pt-3">
+              <div className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
+                Bring one piece of work
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <StarterButton onClick={() => startRealWork(WORK_STARTERS.investigate)}>Investigate</StarterButton>
+                <StarterButton onClick={() => startRealWork(WORK_STARTERS.feature)}>Scope a feature</StarterButton>
+                <StarterButton onClick={() => startRealWork(WORK_STARTERS.review)}>Untangle review</StarterButton>
               </div>
             </div>
-            {done && (
-              <div className="mt-3 border-t border-divider pt-3">
-                <div className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
-                  Bring one piece of work
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <StarterButton onClick={() => startRealWork(WORK_STARTERS.investigate)}>Investigate</StarterButton>
-                  <StarterButton onClick={() => startRealWork(WORK_STARTERS.feature)}>Scope a feature</StarterButton>
-                  <StarterButton onClick={() => startRealWork(WORK_STARTERS.review)}>Untangle review</StarterButton>
-                </div>
-              </div>
-            )}
-          </div>
+          )}
         </div>
-      </>
+      </div>
     );
   }
 

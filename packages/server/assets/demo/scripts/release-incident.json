@@ -3,233 +3,164 @@
   "mode": "walkthrough",
   "personas": ["maya", "tom"],
   "agents": ["noodle", "hermes"],
-  "seedDir": "billing",
+  "seedDir": "api-contract",
   "steps": [
     {
       "kind": "message",
       "author": "maya",
-      "say": "@noodle check overnight project activity and the Sentry spike. Read only.",
-      "focus": {
-        "kind": "message",
-        "label": "Shared request",
-        "note": "Work starts in the shared chat.",
-        "holdMs": 4500
-      }
+      "say": "@noodle review the API change from owner_name to owner. Read only.",
+      "label": "Shared request",
+      "note": "Maya asks Noodle to check the API change.",
+      "holdMs": 4000
     },
     {
       "kind": "message",
       "author": "noodle",
-      "say": "The spike started 11 minutes after the billing deploy. Checkout is stable. Two billing paths calculate different totals. I changed nothing.",
-      "focus": {
-        "kind": "message",
-        "label": "Shared evidence",
-        "note": "Both founders can see Noodle's findings.",
-        "holdMs": 5500
-      }
+      "say": "The server can add owner. I only checked the backend, not every client.",
+      "label": "Backend finding",
+      "note": "Noodle knows the backend, but not every consumer.",
+      "holdMs": 4500
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "Both founders now have the same evidence.",
-      "focus": {
-        "kind": "guide",
-        "label": "Shared evidence",
-        "note": "Both founders now have the same evidence."
-      }
+      "prompt": "The backend view is only part of the picture.",
+      "label": "Partial context"
     },
     {
       "kind": "message",
       "author": "tom",
-      "say": "@hermes inspect the billing path and profile the likely cause. Read only.",
-      "focus": {
-        "kind": "message",
-        "label": "Two agents",
-        "note": "Tom brings his independently owned agent into the same investigation.",
-        "holdMs": 4000
-      }
+      "say": "@hermes check the dashboard and mobile clients. What still uses owner_name?",
+      "label": "Second owner",
+      "note": "Tom asks his agent to check the clients.",
+      "holdMs": 4000
     },
     {
       "kind": "message",
       "author": "hermes",
-      "say": "One path rounds each line. The other rounds only the final total. @noodle that matches the deploy timing. Use one shared calculation.",
-      "focus": {
-        "kind": "message",
-        "label": "Shared reasoning",
-        "note": "Hermes uses Noodle's findings.",
-        "holdMs": 5500
-      }
+      "say": "Dashboard and mobile still use owner_name. Mobile cannot update this week. @noodle removing it now breaks clients.",
+      "label": "Client finding",
+      "note": "Hermes adds client context Noodle did not have.",
+      "holdMs": 5000
     },
     {
       "kind": "message",
       "author": "maya",
-      "say": "@noodle build on @hermes's diagnosis and propose one plan.",
-      "focus": {
-        "kind": "message",
-        "label": "Build on it",
-        "note": "Noodle can build on Hermes's work.",
-        "holdMs": 4500
-      }
+      "say": "@noodle build on @hermes's finding and propose a safe rollout.",
+      "label": "Build on it",
+      "note": "Noodle can use Hermes's finding directly.",
+      "holdMs": 4000
     },
     {
       "kind": "message",
       "author": "noodle",
-      "say": "Building on @hermes: use one totals helper across both billing paths. Both investigations point to that fix.",
-      "focus": {
-        "kind": "message",
-        "label": "Combined diagnosis",
-        "note": "Noodle combines both findings.",
-        "holdMs": 5000
-      }
+      "say": "Building on @hermes: add owner, keep owner_name for one release, update web, and test both fields.",
+      "label": "Safe rollout",
+      "note": "The combined context produces a safer rollout.",
+      "holdMs": 4500
     },
     {
       "kind": "action",
       "action": "propose_plan",
       "actor": "noodle",
-      "focus": {
-        "kind": "plan",
-        "label": "One Plan",
-        "note": "Both agents' findings become one Plan.",
-        "holdMs": 5500
-      }
+      "label": "One Plan",
+      "note": "Backend and client findings become one Plan.",
+      "holdMs": 5000
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "Two agents. One shared Plan.",
-      "focus": {
-        "kind": "guide",
-        "label": "One shared Plan",
-        "note": "Two agents. One shared Plan."
-      }
+      "prompt": "Two owners. Two agents. One shared Plan.",
+      "label": "Shared Plan"
     },
     {
       "kind": "message",
       "author": "tom",
-      "say": "@hermes what must this fix not break?",
-      "focus": {
-        "kind": "message",
-        "label": "Constraint check",
-        "note": "Tom checks what the Plan must preserve.",
-        "holdMs": 4500
-      }
+      "say": "@hermes what must stay unchanged?",
+      "label": "Constraint check",
+      "note": "Tom checks the client constraint.",
+      "holdMs": 3500
     },
     {
       "kind": "message",
       "author": "hermes",
-      "say": "@noodle do not change ledger-sync.ts. Stripe reconciliation depends on its current output.",
-      "focus": {
-        "kind": "message",
-        "label": "New constraint",
-        "note": "Hermes adds a constraint.",
-        "holdMs": 5000
-      }
+      "say": "@noodle leave the mobile client unchanged and keep owner_name working for this release.",
+      "label": "Client constraint",
+      "note": "Hermes protects the client that cannot update yet.",
+      "holdMs": 4500
     },
     {
       "kind": "action",
       "action": "add_constraint",
       "actor": "hermes",
-      "constraint": "ledger-sync.ts output must remain identical to existing Stripe charges; do not change it",
-      "focus": {
-        "kind": "plan_change",
-        "label": "Changed before execution",
-        "note": "The new constraint changed the Plan before implementation, not during review.",
-        "holdMs": 5500
-      }
+      "constraint": "Keep owner_name working for one release; do not change the mobile client",
+      "label": "Changed before execution",
+      "note": "The client constraint changes the Plan.",
+      "holdMs": 5000
     },
     {
       "kind": "message",
       "author": "noodle",
-      "say": "Got it, @hermes. I will change the two affected billing paths only. The ledger stays unchanged.",
-      "focus": {
-        "kind": "message",
-        "label": "Plan updated",
-        "note": "Noodle updates the approach.",
-        "holdMs": 4000
-      }
+      "say": "Got it, @hermes. I will add owner, preserve owner_name, update web, and leave mobile unchanged.",
+      "label": "Plan updated",
+      "note": "Noodle updates the rollout.",
+      "holdMs": 4000
     },
     {
       "kind": "gate",
       "gate": "accept_plan",
       "prompt": "Review the Plan, then accept it.",
-      "focus": {
-        "kind": "plan_accept",
-        "label": "Your decision",
-        "note": "Review the Plan, then accept it."
-      }
+      "label": "Your decision"
     },
     {
       "kind": "action",
       "action": "correct_plan",
       "actor": "noodle",
-      "focus": {
-        "kind": "plan",
-        "label": "Accepted Plan",
-        "note": "The shared decision moves with the work.",
-        "holdMs": 1500
-      }
+      "label": "Accepted Plan",
+      "note": "The shared decision moves with the work.",
+      "holdMs": 1500
     },
     {
       "kind": "action",
       "action": "propose_ticket",
       "actor": "noodle",
-      "focus": {
-        "kind": "ticket",
-        "label": "Bounded authority",
-        "note": "The Ticket sets the owner, scope, and checks.",
-        "holdMs": 5500
-      }
+      "label": "Bounded work",
+      "note": "The Ticket limits the files and defines the contract check.",
+      "holdMs": 5000
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "The Plan agrees the approach. The Ticket authorizes the work.",
-      "focus": {
-        "kind": "guide",
-        "label": "Authorize work",
-        "note": "The Plan agrees the approach. The Ticket authorizes the work."
-      }
+      "prompt": "The Plan agrees the rollout. The Ticket authorizes the change.",
+      "label": "Authorize work"
     },
     {
       "kind": "gate",
       "gate": "approve_ticket",
       "prompt": "Review the Ticket, then approve it.",
-      "focus": {
-        "kind": "ticket_approve",
-        "label": "Your decision",
-        "note": "Review the Ticket, then approve it."
-      }
+      "label": "Your decision"
     },
     {
       "kind": "action",
       "action": "execute",
       "actor": "noodle",
-      "focus": {
-        "kind": "result",
-        "label": "Reviewable result",
-        "note": "The result returns here with proof.",
-        "holdMs": 5500
-      }
+      "label": "Reviewable result",
+      "note": "The result proves old and new clients still work.",
+      "holdMs": 5000
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "The result shows what changed and what stayed safe.",
-      "focus": {
-        "kind": "result",
-        "label": "Reviewable result",
-        "note": "The result shows what changed and what stayed safe."
-      }
+      "prompt": "The API changed without breaking the existing client.",
+      "label": "Reviewable result"
     },
     {
       "kind": "message",
       "author": "maya",
-      "say": "The request, both agents, our decision, the work, and the proof all stayed here.",
-      "focus": {
-        "kind": "message",
-        "label": "One thread",
-        "note": "Everything stayed in one thread.",
-        "holdMs": 4500
-      }
+      "say": "Backend context, client context, the decision, and the proof all stayed here.",
+      "label": "One thread",
+      "note": "Everything stayed in one thread.",
+      "holdMs": 4000
     }
   ]
 }

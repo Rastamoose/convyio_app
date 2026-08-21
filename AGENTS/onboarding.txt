@@ -93,103 +93,64 @@ The in-app walkthrough starts directly inside the real Convyio interface. Its op
 The before/after workflow comparison belongs to the landing-page or explanatory video, not the interactive product walkthrough.
 
 
-5. CANONICAL SHARED ENGINEERING-INCIDENT SCENARIO
+5. CANONICAL CROSS-REPO API SCENARIO
 
-The canonical product story is a shared engineering incident involving two founders and their independently owned agents. The billing rounding fixture remains deterministic execution proof inside the story; it is not the category narrative.
+The canonical product story is a cross-repo API compatibility change involving two founders and their independently owned agents.
 
 Scenario:
 
-1. Maya asks @noodle to pull overnight activity across several projects and correlate it with a Sentry spike without changing code.
-2. Noodle reports the deploy correlation and affected billing path directly into the shared conversation.
-3. Both founders see the same evidence without Maya summarizing a private agent session.
-4. Tom asks @hermes, his independently owned agent, to inspect the affected code path read-only.
-5. Hermes identifies the rounding-stage mismatch and references Noodle's deploy evidence.
-6. Maya asks @noodle to build on @hermes's diagnosis rather than starting another isolated prompt.
-7. Noodle combines both agents' findings into one inline PlanCard.
-8. Tom asks Hermes what the change must not break.
-9. Hermes identifies the hidden ledger constraint and addresses Noodle in the shared conversation.
-10. The Plan visibly changes before execution.
-11. The viewer accepts the Plan and approves one bounded Ticket with an explicit owner, scope and verification target.
-12. Convyio routes the work to the responsible implementation agent.
-13. Progress and any permission decision remain in the origin thread.
-14. A ResultCard returns showing:
-    - invoice and PDF agreement;
-    - ledger behavior deliberately unchanged;
-    - affected files;
-    - checks run;
-    - acceptance evidence;
-    - links to Plan, Ticket and full trace.
+1. Maya asks @noodle to review changing the backend project API from `owner_name` to `owner`.
+2. Noodle confirms the server can add `owner`, but has not checked every consumer.
+3. Tom asks @hermes to inspect the independently owned web and mobile clients.
+4. Hermes finds that both still use `owner_name` and that mobile cannot update during this release.
+5. Maya asks Noodle to build on Hermes's finding.
+6. Noodle proposes a safe rollout: add `owner`, preserve `owner_name` for one release, update web, leave mobile unchanged and contract-test both fields.
+7. Noodle produces one inline PlanCard from the backend and client findings.
+8. Hermes adds the client constraint: mobile must remain unchanged and `owner_name` must keep working.
+9. The Plan visibly changes before execution.
+10. The viewer accepts the Plan and approves one bounded Ticket with an explicit owner, file scope and contract check.
+11. Noodle updates the API response and web client.
+12. A ResultCard proves that new and existing clients continue working and that mobile stayed unchanged.
 
 Core captions:
 
-    Both founders and both agents worked from the same evidence.
+    The backend view is only part of the picture.
 
-    The constraint arrived before the code, not in review after it.
+    Two owners. Two agents. One shared Plan.
+
+    The client constraint changed the Plan before execution.
 
     Same agents. Different system of work.
 
 Agent mentions demonstrate shared reasoning and make each contribution legible. They do not replace structured responsibility: executable work still requires one explicit Ticket owner and human-approved authority.
 
-The billing fixture proves the final implementation deterministically. It must remain subordinate to the broader story about shared context, independently owned agents and removed manual relay.
-
-A GTM workflow is a secondary example of the same product value: an overnight GTM agent reports leads in the shared conversation, a cofounder asks their agent to generate lead profiles, both founders review the findings together and the forward plan remains in the same thread instead of moving through copied DMs.
+The fixture demonstrates why separately owned backend and client context must meet before implementation. Neither agent has enough context alone.
 
 The demo must not auto-approve on behalf of the viewer. The user must make at least one consequential decision.
 
-If the landing-page version must remain passive, visibly animate the viewer's decision but label the demo as a product walkthrough. The in-app version should make the decision interactive.
+If the landing-page version must remain passive, visibly animate the viewer's decision but label the demo as a product walkthrough. The in-app version makes the decision interactive.
 
 
 6. DEMO VIDEO STORYBOARD
 
 Suggested narrative spine:
 
-0–8 seconds
+    Shared request -> backend finding -> client finding -> cross-agent synthesis -> compatibility constraint -> changed Plan -> human acceptance -> bounded implementation -> contract evidence
 
-    Agent work normally becomes team work at review.
-    That is too late.
+Show the old workflow contrast in the video, then enter the real Convyio thread. Keep the interactive walkthrough focused on the product itself.
 
-Show the old relay chain: activity report, private agent, WhatsApp summary, second private agent and copied implementation prompt.
+During the walkthrough:
 
-8–20 seconds
-
-Enter the Convyio thread. Maya asks @noodle for the daily project activity and Sentry correlation. Noodle returns the evidence read-only.
-
-Pause at the end of this chapter so the viewer can understand that both founders now share the same source material.
-
-20–35 seconds
-
-Tom asks @hermes to inspect the code path. Hermes references Noodle's evidence. Maya then asks Noodle to build on Hermes's diagnosis.
-
-35–50 seconds
-
-Noodle produces one PlanCard from the combined evidence. Pause again so the viewer can inspect how two independently owned agents contributed to one shared plan.
-
-50–62 seconds
-
-Tom asks Hermes what operations would refuse to let the change break. Hermes supplies the ledger constraint and addresses Noodle. Highlight the exact Plan change:
-
-    Changed before execution
-    Ledger output must remain identical to existing Stripe charges.
-
-62–75 seconds
-
-The viewer accepts the corrected Plan and approves the bounded next Ticket. Show human language:
-
-    Owner: noodle
-    Resource: billing project
-    May change: invoice render and PDF export
-    Must preserve: ledger output
-    Done when: totals agree and ledger fixtures remain unchanged
-
-75–90 seconds
-
-Show the shell routing approved work, live agent status and one concise permission checkpoint if it clarifies the product. Avoid long raw traces.
-
-90–105 seconds
-
-Show the ResultCard with output and verification in the same conversation.
-
-105–112 seconds
+- spotlight Maya's request;
+- spotlight Noodle's backend finding;
+- pause on the partial-context checkpoint;
+- spotlight Tom asking Hermes and Hermes's client finding;
+- spotlight Noodle building on Hermes's result;
+- spotlight the combined PlanCard;
+- spotlight the compatibility constraint and Changed before execution;
+- wait for the real Accept action;
+- spotlight the bounded Ticket and wait for the real Approve action;
+- spotlight the ResultCard showing both contract fields and unchanged mobile behavior.
 
 Close on:
 
@@ -197,7 +158,7 @@ Close on:
 
     Convyio keeps the conversation, the decision, the work and the proof in one thread.
 
-The interactive walkthrough uses readable message pacing and explicit Continue controls between major chapters. Duration may change after user testing. Short landing and social cuts may compress the same sequence, but they must preserve the two-human/two-agent causal story. Clarity outranks a fixed runtime.
+The interactive walkthrough uses readable message pacing and explicit Continue controls between major chapters. Everything outside the current target is blanked so one message or artifact is clear at a time. Short landing and social cuts may compress the same sequence, but they must preserve the two-owner/two-agent causal story. Clarity outranks a fixed runtime.
 
 
 7. DEMO ACCESSIBILITY AND PLAYBACK

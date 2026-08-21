@@ -173,26 +173,26 @@ Definition of done:
 
 # P0 — Canonical demo scenario in the real app
 
-## Make the shared engineering incident the product proof
+## Make the cross-repo API change the product proof
 
 - [x] Use two founders and their independently owned Noodle and Hermes agents as the canonical product story.
-- [x] Show the old relay chain concretely: activity report, private agent, WhatsApp summary, second private agent, copied implementation prompt.
-- [x] Have Noodle report daily project activity and Sentry correlation directly into the shared conversation.
-- [x] Have Tom ask Hermes to inspect the affected code path without mutation.
-- [x] Show Hermes referencing Noodle's evidence and Noodle building on Hermes's diagnosis.
-- [x] Produce one inline PlanCard from both agents' shared findings.
-- [x] Keep the billing inconsistency and hidden ledger constraint as deterministic execution proof underneath the story.
-- [x] Make the initial Plan plausible but incomplete without the ledger constraint.
+- [x] Have Noodle inspect the backend API while making its missing client context explicit.
+- [x] Have Tom ask Hermes to inspect the independently owned web and mobile consumers.
+- [x] Show Hermes identifying the mobile compatibility risk and Noodle building on that finding.
+- [x] Produce one inline PlanCard from the backend and client findings.
+- [x] Make the initial Plan plausible but incomplete without the mobile compatibility constraint.
 - [x] Show the exact Plan change after the constraint arrives.
 - [x] Pause between major chapters so the viewer can read and understand the causal progression.
+- [x] Blank unrelated UI and spotlight one message or artifact at a time.
 - [x] Pause for the real viewer to accept the Plan and approve the Ticket in the app onboarding path.
 - [x] Stop auto-approving the onboarding proof through a scripted persona.
 - [x] Route work through the real authorization/dispatch/project pipeline.
 - [x] Produce the real ResultCard.
-- [x] Verify invoice and PDF agreement while ledger fixtures remain unchanged.
+- [x] Verify that `owner` and `owner_name` both work while the mobile client remains unchanged.
+- [x] Clear previous demo messages, Plans, Tickets, results and events before every run.
 - [ ] Move demo fixtures into an isolated disposable project so playback cannot overwrite similarly named user files.
 - [x] Handle noodle/provider unavailability with an honest deterministic walkthrough.
-- [ ] Ensure demo cleanup never deletes or rewrites unrelated user work.
+- [x] Guard demo cleanup so it can run only against channels marked as demos.
 
 Definition of done:
 
@@ -321,8 +321,8 @@ Landing-specific direction is documented in `/home/harris/Programming/convyio/si
 ## Replace the current primary demo
 
 - [ ] Retire collaborative copywriting as the main product proof.
-- [ ] Use the canonical two-founder/two-agent engineering incident, with the billing fixture only as deterministic execution proof.
-- [ ] Show shared evidence, cross-agent reasoning, PlanCard, Plan change, human decision, bounded execution and ResultCard.
+- [ ] Use the canonical cross-repo API compatibility change with backend and client ownership split across the two agents.
+- [ ] Show partial backend context, client findings, cross-agent reasoning, PlanCard, compatibility constraint, human decision, bounded execution and ResultCard.
 - [ ] Embed the final recording from the real app flow.
 - [ ] Keep an accessible transcript or interactive playback.
 - [ ] Provide captions, replay and reduced-motion poster.
@@ -444,10 +444,10 @@ Do not add an analytics vendor solely for onboarding if current durable records 
 
 Live pressure-test note (2026-08-19, local `test_space`): paired Toolman
 `livetest` plus instantiated `cc` completed the conversation loop on
-`#billing-loop` — Plan filed/constrained/accepted, Ticket approved, file
+`#conversation-loop` — Plan filed/constrained/accepted, Ticket approved, file
 edit through Toolman, ResultCard evidence on the origin thread. Remaining
 dogfood work is still a real Convyio product change reviewed by a second
-human, not this isolated billing fixture.
+human, not an isolated fixture.
 
 - [ ] Select one bounded Convyio product change suitable for the canonical workflow.
 - [ ] Start its discussion in a Convyio thread.

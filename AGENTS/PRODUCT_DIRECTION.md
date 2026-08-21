@@ -525,40 +525,31 @@ One canonical scenario should power:
 
 The story remains consistent across surfaces, but presentation differs. The landing-page or explanatory video owns the before/after workflow comparison. The interactive onboarding starts directly inside Convyio and teaches the product by spotlighting the real conversation, artifacts and consequential controls.
 
-The canonical product story is a shared engineering incident involving two founders and their independently owned agents. The billing rounding fixture remains the deterministic execution proof inside that story; it is not the category narrative.
+The canonical product story is a cross-repo API compatibility change involving two founders and their independently owned agents.
 
 The story proves the category difference:
 
-- a daily activity agent reports project and Sentry evidence directly into the shared conversation;
-- both founders see the same evidence without relaying a private-agent summary;
-- the second founder asks their independently owned agent to inspect the affected code path;
-- that agent references the first agent's evidence;
-- the first agent builds on the second agent's diagnosis and proposes one shared Plan;
-- the founders discuss the trade-off beside both agents;
-- a ledger constraint changes the Plan before execution;
+- Maya asks Noodle to review the backend API change from `owner_name` to `owner`;
+- Noodle understands the server response but does not know every client consumer;
+- Tom asks Hermes to inspect the independently owned web and mobile clients;
+- Hermes discovers that both clients still use `owner_name` and that mobile cannot update during this release;
+- Noodle builds on Hermes's finding and proposes one compatibility Plan;
+- the client constraint changes the Plan before execution;
 - the viewer accepts the Plan and approves one bounded owner, scope and verification target;
-- the responsible implementation agent executes;
-- the result and evidence return to the same conversation.
+- Noodle adds `owner`, preserves `owner_name`, updates web and leaves mobile unchanged;
+- the ResultCard proves that old and new clients continue working.
 
-The billing fixture proves the final authorized implementation deterministically: invoice and PDF totals agree while ledger behavior remains unchanged. A GTM workflow is a secondary example of the same problem: agent results should enter the shared conversation directly instead of being manually relayed through private messages and copied prompts.
+The fixture demonstrates why separately owned backend and client context must meet before implementation. Neither agent has enough context alone.
 
-The demo should focus on removed context relay, agents building on shared findings and the prevented rework—not on message volume or model cleverness.
+The demo should focus on cross-owner context becoming one safe rollout—not on message volume or model cleverness.
 
 Suggested narrative spine:
 
 ```text
-0–8s     Show the old chain: activity report -> private agent -> WhatsApp summary -> another private agent -> copied implementation prompt.
-8–20s    Maya asks @noodle for daily project activity and Sentry correlation; the evidence appears in the shared thread.
-20–35s   Tom asks @hermes to inspect the code path; Hermes references Noodle's evidence.
-35–50s   Maya asks Noodle to build on Hermes's diagnosis; one shared Plan appears.
-50–62s   Hermes identifies the ledger constraint; the Plan visibly changes before execution.
-62–75s   The viewer accepts the Plan and approves one bounded implementation Ticket.
-75–90s   Convyio routes the authorized work; progress stays in the thread.
-90–105s  A ResultCard returns with changes, checks and preserved ledger behavior.
-105–112s Same agents. Different system of work.
+Shared request -> backend finding -> client finding -> cross-agent synthesis -> compatibility constraint -> changed Plan -> human acceptance -> bounded implementation -> contract evidence
 ```
 
-The interactive walkthrough uses semantic spotlight targets and a persistent bottom guide. It pauses between major chapters and at consequential human decisions; Accept and Approve remain real controls that the guide cannot bypass. Short landing and social cuts may compress the same sequence, but they must preserve the two-human/two-agent causal story.
+The interactive walkthrough uses semantic spotlight targets and a persistent bottom guide. It highlights one message or artifact at a time, blanks unrelated UI, pauses between major chapters and waits for the real Accept and Approve controls. Short landing and social cuts may compress the same sequence, but they must preserve the two-owner/two-agent causal story.
 
 The final duration is subordinate to clarity. A shorter cut may be used on the landing page; the complete version should remain available.
 

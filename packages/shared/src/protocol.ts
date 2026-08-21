@@ -795,31 +795,13 @@ export interface RunEndBroadcast {
   reason: "completed" | "aborted";
 }
 
-export type DemoFocusKind =
-  | "guide"
-  | "conversation"
-  | "message"
-  | "plan"
-  | "plan_change"
-  | "plan_accept"
-  | "ticket"
-  | "ticket_approve"
-  | "result"
-  | "composer";
-
-export interface DemoFocusTarget {
-  kind: DemoFocusKind;
-  id?: string;
-  label: string;
-}
-
 export interface DemoProgressEvent {
   type: "demo_progress";
   channel: string;
   stage: string;
   message: string;
   paused: boolean;
-  focus?: DemoFocusTarget;
+  label?: string;
 }
 
 export type ServerEvent =

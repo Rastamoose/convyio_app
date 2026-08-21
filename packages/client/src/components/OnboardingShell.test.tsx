@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { DemoFocusTarget } from "@workspace/shared";
 import { OnboardingShell } from "./OnboardingShell";
 
 const mockWorkspace = {
@@ -12,7 +11,7 @@ const mockWorkspace = {
     stage: string;
     message: string;
     paused: boolean;
-    focus?: DemoFocusTarget;
+    label?: string;
   } | null,
   demoChannels: ["demo"],
   workspaceId: "ws-1",
@@ -66,7 +65,7 @@ describe("OnboardingShell", () => {
       stage: "waiting_continue",
       message: "Shared evidence is visible to both founders.",
       paused: false,
-      focus: { kind: "guide", label: "Shared evidence" },
+      label: "Shared evidence",
     };
     render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 

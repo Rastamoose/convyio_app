@@ -142,9 +142,12 @@ over the shared websocket and HTTP protocols.
   snapshot compiled for a run. Exposed as `GET /api/workspace/prompt-envelope`.
   → WorkspaceSnapshotBuilder
 - `DemoOrchestrator` (`demo/`) — replays JSON demo scripts through the real
-  pipeline. Approves tickets with an owner and can accept plans.
-  → Hub, Roster, BoardService, PlanService
-- `script.ts` (`demo/`) — demo script schema + loader for `assets/demo`.
+  pipeline, emits semantic spotlight targets, pauses for real human Plan/Ticket
+  decisions, executes deterministic authorized fixture work and clears prior
+  records only from channels marked as demos.
+  → Hub, Roster, BoardService, PlanService, Toolman
+- `script.ts` (`demo/`) — demo message/action/gate/focus schema + loader for
+  `assets/demo`.
 
 ### packages/client
 - `App.tsx` — account boot and workspace navigation: sign-in, permanent username and starter-workspace continuation, invite precedence, membership lobby, persisted last-workspace selection and keyed `WorkspaceProvider` remounts.

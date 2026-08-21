@@ -48,7 +48,7 @@ describe("walkthrough demo", async () => {
       effect: "Old output",
       planId: stalePlan.ref,
       owner: staleAgent.id,
-      scopePaths: ["billing/"],
+      scopePaths: ["api-contract/"],
       acceptanceCriteria: ["Old work is gone"],
       impactMap: emptyImpactMap(),
       channel: "general",
@@ -90,16 +90,16 @@ describe("walkthrough demo", async () => {
 
     env.hub.onDemoStart?.("demo", "walkthrough", human.id);
 
-    await progress("waiting_continue", "Both founders");
+    await progress("waiting_continue", "backend view");
     assert.equal(await env.plans.find(env.db.workspaceId, stalePlan.ref), null);
     assert.equal(await env.service.find(env.db.workspaceId, staleTicket.ref), null);
     const firstChapter = (await env.messages.list()).filter((message) => message.channel === "demo");
-    const noodleMessage = firstChapter.find((message) => message.authorName === "noodle" && message.content.includes("The spike started"));
+    const noodleMessage = firstChapter.find((message) => message.authorName === "noodle" && message.content.includes("checked the backend"));
     assert.ok(noodleMessage);
     assert.ok(firstChapter.some((message) => message.authorName === "maya" && message.content.includes("@noodle")));
     env.hub.onDemoControl?.("demo", "continue", human.id);
 
-    await progress("waiting_continue", "Two agents");
+    await progress("waiting_continue", "Two owners");
     assert.ok(planRef, "plan was proposed after both agents contributed");
     const sharedAnalysis = (await env.messages.list()).filter((message) => message.channel === "demo");
     const hermesMessage = sharedAnalysis.find((message) => message.authorName === "hermes" && message.content.includes("@noodle"));
@@ -111,7 +111,7 @@ describe("walkthrough demo", async () => {
     await progress("waiting_accept_plan");
     assert.equal(orchestrator.progress("demo").focus?.kind, "plan_accept");
     const planBeforeAccept = await env.plans.find(env.db.workspaceId, planRef);
-    assert.ok(planBeforeAccept?.constraints.some((c) => c.includes("ledger-sync.ts")), "ledger constraint was added");
+    assert.ok(planBeforeAccept?.constraints.some((c) => c.includes("owner_name")), "client compatibility constraint was added");
     await env.plans.accept(human, planRef);
 
     await progress("waiting_continue", "Ticket authorizes");
@@ -123,10 +123,13 @@ describe("walkthrough demo", async () => {
     assert.equal(orchestrator.progress("demo").focus?.kind, "ticket_approve");
     const ticketBeforeApprove = await env.service.find(env.db.workspaceId, ticketRef);
     assert.equal(ticketBeforeApprove?.status, "proposed");
-    assert.deepEqual(ticketBeforeApprove?.scopePaths, ["billing/"]);
+    assert.deepEqual(ticketBeforeApprove?.scopePaths, [
+      "api-contract/server/project-response.ts",
+      "api-contract/web/project-card.ts",
+    ]);
     await env.service.approve(human, ticketRef);
 
-    await progress("waiting_continue", "result shows");
+    await progress("waiting_continue", "API changed");
     assert.equal(orchestrator.progress("demo").focus?.kind, "result");
     env.hub.onDemoControl?.("demo", "continue", human.id);
     await progress("completed");
@@ -136,11 +139,12 @@ describe("walkthrough demo", async () => {
     assert.ok(ticket?.verificationEvidence, "result has verification evidence");
     assert.match(ticket?.verificationEvidence ?? "", /PASS/);
 
-    // Files were written into the workspace sandbox and ledger was left untouched.
-    const billingDir = path.join(env.workspaceDir, "billing");
-    assert.ok(fs.existsSync(path.join(billingDir, "totals.ts")), "totals.ts was written");
-    const ledger = fs.readFileSync(path.join(billingDir, "ledger-sync.ts"), "utf8");
-    assert.ok(ledger.includes("roundMoney"), "ledger-sync.ts preserved");
+    // Files were written into the workspace sandbox and the mobile client was left untouched.
+    const fixtureDir = path.join(env.workspaceDir, "api-contract");
+    const server = fs.readFileSync(path.join(fixtureDir, "server/project-response.ts"), "utf8");
+    assert.ok(server.includes("owner_name: project.ownerName"), "legacy API field was preserved");
+    const mobile = fs.readFileSync(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
+    assert.ok(mobile.includes("mobileProjectOwner"), "mobile client was preserved");
   });
 
   test("demo can be skipped", async () => {

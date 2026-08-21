@@ -2,20 +2,20 @@ import { describe, expect, it } from "vitest";
 import { projectDemoProgress } from "./demoProgress";
 
 describe("projectDemoProgress", () => {
-  it("preserves the semantic spotlight target", () => {
+  it("preserves the walkthrough label", () => {
     expect(projectDemoProgress({
       type: "demo_progress",
       channel: "demo",
-      stage: "spotlight_1",
-      message: "Both founders can see Noodle's findings.",
+      stage: "step_1",
+      message: "Noodle knows the backend, but not every consumer.",
       paused: false,
-      focus: { kind: "message", id: "message-1", label: "Shared evidence" },
+      label: "Backend finding",
     })).toEqual({
       channel: "demo",
-      stage: "spotlight_1",
-      message: "Both founders can see Noodle's findings.",
+      stage: "step_1",
+      message: "Noodle knows the backend, but not every consumer.",
       paused: false,
-      focus: { kind: "message", id: "message-1", label: "Shared evidence" },
+      label: "Backend finding",
     });
   });
 });

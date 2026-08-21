@@ -976,7 +976,7 @@ export function MessageList({
   const contextMenuMessage = contextMenu ? messages.find((m) => m.id === contextMenu.messageId) : undefined;
 
   return (
-    <div data-onboarding-target="conversation" className="relative flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={containerRef}
         onScroll={handleScroll}
@@ -1116,7 +1116,6 @@ export function MessageList({
             <div
               key={m.id}
               id={`msg-${m.id}`}
-              data-demo-message-id={m.id}
               className={`transition ${highlightId === m.id ? "bg-accent/20" : ""} ${m.pending ? "opacity-50" : ""}`}
             >
               {firstUnread === m.id && (

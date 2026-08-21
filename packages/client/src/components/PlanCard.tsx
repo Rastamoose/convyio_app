@@ -54,7 +54,7 @@ export function PlanCard({
   };
 
   return (
-    <div data-onboarding-target="plan-card" data-demo-plan-ref={plan.ref} className="rounded-lg bg-subtle p-3">
+    <div data-onboarding-target="plan-card" className="rounded-lg bg-subtle p-3">
       <div className="mb-2 flex items-baseline gap-2 text-xs">
         <span className="shrink-0 rounded bg-accent px-1 py-px text-[10px] font-bold text-on-accent">{plan.ref}</span>
         <span className="truncate font-medium text-body">{plan.title}</span>
@@ -75,7 +75,7 @@ export function PlanCard({
       {plan.assumedOwnerName && <WorkCardField label="Proposed owner" value={plan.assumedOwnerName} />}
       {plan.assumedProjectName && <WorkCardField label="Likely resource" value={plan.assumedProjectName} />}
       {latestChange && (
-        <div data-demo-plan-change={plan.ref} className="mb-2 rounded-md bg-input px-2 py-1.5 text-xs text-body">
+        <div className="mb-2 rounded-md bg-input px-2 py-1.5 text-xs text-body">
           <div className="text-[10px] font-bold tracking-wider text-accent uppercase">Changed before execution</div>
           <div>{latestChange.summary}</div>
           {latestChange.actorName && <div className="text-faint">{latestChange.actorName}</div>}
