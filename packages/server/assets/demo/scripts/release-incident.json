@@ -8,33 +8,33 @@
     {
       "kind": "message",
       "author": "maya",
-      "say": "@noodle pull the overnight activity from checkout, billing and alerts. correlate it with the Sentry spike, but keep this read-only",
+      "say": "@noodle check overnight project activity and the Sentry spike. Read only.",
       "focus": {
         "kind": "message",
         "label": "Shared request",
-        "note": "Work starts in the shared conversation, where everyone can see the request and its constraints.",
+        "note": "Work starts in the shared chat.",
         "holdMs": 4500
       }
     },
     {
       "kind": "message",
       "author": "noodle",
-      "say": "Daily scan: the Sentry spike began 11 minutes after yesterday's billing deploy. Checkout is stable. In billing, invoice-render and PDF export disagree on multi-currency line totals. I have not changed anything.",
+      "say": "The spike started 11 minutes after the billing deploy. Checkout is stable. Two billing paths calculate different totals. I changed nothing.",
       "focus": {
         "kind": "message",
         "label": "Shared evidence",
-        "note": "Noodle reports its investigation where both founders can see it.",
+        "note": "Both founders can see Noodle's findings.",
         "holdMs": 5500
       }
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "Both founders now have the same evidence. Nobody needs to relay an agent summary.",
+      "prompt": "Both founders now have the same evidence.",
       "focus": {
         "kind": "guide",
         "label": "Shared evidence",
-        "note": "Both founders now have the same evidence. Nobody needs to relay an agent summary."
+        "note": "Both founders now have the same evidence."
       }
     },
     {
@@ -51,33 +51,33 @@
     {
       "kind": "message",
       "author": "hermes",
-      "say": "The two surfaces round at different stages: invoice-render rounds converted line items, while PDF export rounds only the final sum. @noodle your deploy correlation fits that path. I would centralize the customer-facing total calculation.",
+      "say": "One path rounds each line. The other rounds only the final total. @noodle that matches the deploy timing. Use one shared calculation.",
       "focus": {
         "kind": "message",
         "label": "Shared reasoning",
-        "note": "Hermes reasons from evidence Noodle already placed in the room.",
+        "note": "Hermes uses Noodle's findings.",
         "holdMs": 5500
       }
     },
     {
       "kind": "message",
       "author": "maya",
-      "say": "@noodle riff on @hermes's diagnosis. combine it with the activity evidence and propose one plan we can both review",
+      "say": "@noodle build on @hermes's diagnosis and propose one plan.",
       "focus": {
         "kind": "message",
         "label": "Build on it",
-        "note": "Maya asks one agent to build on another agent's visible result without copying it into a new prompt.",
+        "note": "Noodle can build on Hermes's work.",
         "holdMs": 4500
       }
     },
     {
       "kind": "message",
       "author": "noodle",
-      "say": "Building on @hermes's trace: the smallest fix is one shared customer-facing totals helper used by invoice-render and PDF export. The deploy evidence and code path now point to the same change.",
+      "say": "Building on @hermes: use one totals helper across both billing paths. Both investigations point to that fix.",
       "focus": {
         "kind": "message",
         "label": "Combined diagnosis",
-        "note": "Noodle combines both investigations into one proposed approach.",
+        "note": "Noodle combines both findings.",
         "holdMs": 5000
       }
     },
@@ -88,39 +88,39 @@
       "focus": {
         "kind": "plan",
         "label": "One Plan",
-        "note": "Both agents' findings are now one Plan the founders can review together.",
+        "note": "Both agents' findings become one Plan.",
         "holdMs": 5500
       }
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "Two independently owned agents have contributed to one shared Plan.",
+      "prompt": "Two agents. One shared Plan.",
       "focus": {
         "kind": "guide",
         "label": "One shared Plan",
-        "note": "Two independently owned agents have contributed to one shared Plan."
+        "note": "Two agents. One shared Plan."
       }
     },
     {
       "kind": "message",
       "author": "tom",
-      "say": "Before we accept this: @hermes check the reconciliation path. What would operations refuse to let this change break?",
+      "say": "@hermes what must this fix not break?",
       "focus": {
         "kind": "message",
         "label": "Constraint check",
-        "note": "Tom asks the person and agent closest to operations what the Plan must preserve.",
+        "note": "Tom checks what the Plan must preserve.",
         "holdMs": 4500
       }
     },
     {
       "kind": "message",
       "author": "hermes",
-      "say": "@noodle keep ledger-sync.ts byte-for-byte unchanged. Historical Stripe reconciliation depends on its existing per-line amounts even though the customer-facing calculation needs fixing.",
+      "say": "@noodle do not change ledger-sync.ts. Stripe reconciliation depends on its current output.",
       "focus": {
         "kind": "message",
         "label": "New constraint",
-        "note": "Hermes supplies context that changes the safe implementation scope.",
+        "note": "Hermes adds a constraint.",
         "holdMs": 5000
       }
     },
@@ -139,22 +139,22 @@
     {
       "kind": "message",
       "author": "noodle",
-      "say": "Good constraint, @hermes. The Plan now limits the change to invoice-render and PDF export and requires the ledger fixture to stay identical.",
+      "say": "Got it, @hermes. I will change the two affected billing paths only. The ledger stays unchanged.",
       "focus": {
         "kind": "message",
         "label": "Plan updated",
-        "note": "Noodle acknowledges how the shared constraint changed its approach.",
+        "note": "Noodle updates the approach.",
         "holdMs": 4000
       }
     },
     {
       "kind": "gate",
       "gate": "accept_plan",
-      "prompt": "Review the changed Plan, then accept it when the approach is correct.",
+      "prompt": "Review the Plan, then accept it.",
       "focus": {
         "kind": "plan_accept",
         "label": "Your decision",
-        "note": "This is a real human decision. The walkthrough will not accept the Plan for you."
+        "note": "Review the Plan, then accept it."
       }
     },
     {
@@ -164,7 +164,7 @@
       "focus": {
         "kind": "plan",
         "label": "Accepted Plan",
-        "note": "The accepted Plan now carries the shared decision into the next unit of work.",
+        "note": "The shared decision moves with the work.",
         "holdMs": 1500
       }
     },
@@ -175,28 +175,28 @@
       "focus": {
         "kind": "ticket",
         "label": "Bounded authority",
-        "note": "The Ticket defines the owner, resource, allowed change, preserved behavior, and verification target.",
+        "note": "The Ticket sets the owner, scope, and checks.",
         "holdMs": 5500
       }
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "The Plan established agreement. The Ticket defines responsibility and authority.",
+      "prompt": "The Plan agrees the approach. The Ticket authorizes the work.",
       "focus": {
         "kind": "guide",
         "label": "Authorize work",
-        "note": "The Plan established agreement. The Ticket defines responsibility and authority."
+        "note": "The Plan agrees the approach. The Ticket authorizes the work."
       }
     },
     {
       "kind": "gate",
       "gate": "approve_ticket",
-      "prompt": "Approve one owner, one bounded scope, and explicit verification.",
+      "prompt": "Review the Ticket, then approve it.",
       "focus": {
         "kind": "ticket_approve",
         "label": "Your decision",
-        "note": "Approve one owner, one bounded scope, and explicit verification—not an open-ended agent run."
+        "note": "Review the Ticket, then approve it."
       }
     },
     {
@@ -206,28 +206,28 @@
       "focus": {
         "kind": "result",
         "label": "Reviewable result",
-        "note": "The result returns to the same conversation with changed files, preserved behavior, and verification evidence.",
+        "note": "The result returns here with proof.",
         "holdMs": 5500
       }
     },
     {
       "kind": "gate",
       "gate": "continue",
-      "prompt": "The outcome is reviewable without reconstructing it from logs or copied summaries.",
+      "prompt": "The result shows what changed and what stayed safe.",
       "focus": {
         "kind": "result",
         "label": "Reviewable result",
-        "note": "The outcome is reviewable without reconstructing it from logs or copied summaries."
+        "note": "The result shows what changed and what stayed safe."
       }
     },
     {
       "kind": "message",
       "author": "maya",
-      "say": "That whole loop stayed here: shared evidence, both agents' ideas, our decision, one authorized implementation, and the proof.",
+      "say": "The request, both agents, our decision, the work, and the proof all stayed here.",
       "focus": {
         "kind": "message",
         "label": "One thread",
-        "note": "The request, agent findings, human decisions, implementation, and proof all remain in one thread.",
+        "note": "Everything stayed in one thread.",
         "holdMs": 4500
       }
     }

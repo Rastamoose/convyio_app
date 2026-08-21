@@ -84,18 +84,13 @@ It appears over the connected starter workspace after the welcome frame is ready
 
 The demo should be the same canonical story used on the landing page. The app onboarding implementation is its source of truth.
 
-Opening frame:
+The in-app walkthrough starts directly inside the real Convyio interface. Its opening frame says:
 
-    Agent work usually becomes team work at review.
-    That is too late.
+    See Convyio in one shared conversation.
 
-Visual contrast:
+    Follow two founders and their agents from shared evidence to a reviewed Plan, authorized implementation, and a result with proof.
 
-    Activity report -> private agent -> WhatsApp summary -> another private agent -> copied implementation prompt
-
-    Shared evidence -> two agents build on it -> agreed Plan -> approved owner -> work -> evidence
-
-The video then enters the real Convyio interface and shows one causal thread.
+The before/after workflow comparison belongs to the landing-page or explanatory video, not the interactive product walkthrough.
 
 
 5. CANONICAL SHARED ENGINEERING-INCIDENT SCENARIO
@@ -416,40 +411,38 @@ Do not make setup completion the onboarding goal.
 
 17. VISUAL ONBOARDING LAYER
 
-The first product demo is the main visual education. Spotlight guidance afterward should be brief and contextual.
+The first product demo is the main visual education. The interactive walkthrough begins in the real product rather than replaying the video's before/after explanation.
 
-Use the favicon mascot as noodle's guide identity and mark-yellow as the brand mark.
+During playback, a semantic spotlight dims unrelated UI and highlights the current message, Plan field, decision control, Ticket, ResultCard or composer. The persistent bottom guide explains the current significance. At chapter boundaries, the product dims completely and the guide becomes the primary focus.
 
-Showcase mode:
+The bottom guide has three modes:
 
-- native modal dialog or equivalently accessible modal behavior;
-- background inert;
-- underlying product visible but not keyboard-interactive;
-- focus contained in the guide;
+- compact caption while a product target is highlighted;
+- chapter checkpoint with an explicit Continue action;
+- action prompt that waits for the real Accept or Approve control rather than bypassing it.
+
+Spotlight behavior:
+
+- scroll the semantic target into view without changing document layout;
+- leave the highlighted target clickable while blocking pointer interaction outside it;
+- keep the bottom guide above the dim layer;
+- constrain keyboard focus to the guide and highlighted controls;
 - Escape pauses;
-- explicit skip and replay;
-- focus restored on close.
+- provide explicit pause, skip and replay;
+- respect reduced motion by moving the spotlight without animated transitions;
+- fall back to an unanchored guide if a target is unavailable.
 
-Action mode:
-
-- close the modal;
-- remove blur/inert state;
-- render inline guidance near the real product action;
-- do not obscure the focused control.
-
-Stable targets use data-onboarding-target attributes rather than styling selectors.
-
-Potential targets:
+Stable targets use semantic data attributes rather than styling selectors. Current targets are:
 
 - canonical conversation;
+- individual demo messages;
 - inline PlanCard;
-- approval action;
-- live work state;
+- Changed before execution;
+- real Plan acceptance;
+- bounded Ticket;
+- real Ticket approval;
 - ResultCard;
-- Board origin link;
-- project/resource connection;
-- Add Agent;
-- invite action.
+- real composer for Bring one piece of work.
 
 Do not tour all navigation tabs.
 

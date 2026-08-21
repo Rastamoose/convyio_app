@@ -14,7 +14,7 @@ beforeEach(() => {
 describe("ShowcaseSpotlight", () => {
   it("dims the product when the guide is the primary focus", () => {
     render(<ShowcaseSpotlight focus={{ kind: "guide", label: "Shared evidence" }} />);
-    expect(screen.getByTestId("showcase-dim")).toBeInTheDocument();
+    expect(screen.getByTestId("showcase-dim")).toHaveClass("bg-backdrop/95");
   });
 
   it("cuts out the semantic product target", async () => {

@@ -127,6 +127,7 @@ export async function runAgent(
       case "welcome":
         runner.onWelcome(event.channelInfos);
         selfId = event.self.id;
+        boardClient.setAgentId(event.self.id);
         presence.setSelf(event.self.id);
         memory.seed(event.history);
         console.log(`[agent] joined as ${event.self.name} (${event.self.id})`);

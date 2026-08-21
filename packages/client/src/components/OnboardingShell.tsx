@@ -102,8 +102,8 @@ export function OnboardingShell({
       ? { kind: "composer", label: "Bring one piece of work" }
       : active?.focus;
     const message = composerHandoff
-      ? "Start with something your team is already discussing. Edit the request, then send it when ready."
-      : active?.message ?? "Follow the highlighted work in the conversation.";
+      ? "Edit this request and send it when ready."
+      : active?.message ?? "Follow the highlighted item.";
     return (
       <>
         <ShowcaseSpotlight focus={focus} />
@@ -203,7 +203,7 @@ export function OnboardingShell({
           See Convyio in one shared conversation.
         </h1>
         <p className="mb-6 text-sm text-muted">
-          Follow two founders and their agents from shared evidence to a reviewed Plan, authorized implementation, and a result with proof.
+          Watch two founders and two agents agree a Plan and ship one reviewed fix.
         </p>
 
         {showStarters ? (

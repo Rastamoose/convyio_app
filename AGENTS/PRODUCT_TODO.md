@@ -204,7 +204,7 @@ Definition of done:
 - [x] Deterministic in-app replay mode for support/demo reliability.
 - [ ] Landing-page video/recording mode sourced from the real app.
 - [ ] Accessible transcript/poster mode.
-- [ ] Reduced-motion mode.
+- [x] Reduced-motion mode.
 - [ ] Short social cut derived from the same canonical story.
 
 
@@ -225,17 +225,17 @@ Detailed behavior is specified in `AGENTS/onboarding.txt`.
 
 ## Demo-first opening
 
-- [ ] Offer the canonical demo immediately after the starter workspace connects.
-- [ ] Allow immediate skip.
-- [ ] Explain what the user will learn and the approximate nature of the walkthrough without promising a fixed duration.
-- [ ] Use the same story and language as the landing page.
+- [x] Offer the canonical demo immediately after the starter workspace connects.
+- [x] Allow immediate skip.
+- [x] Explain what the user will learn without replaying the video's before/after comparison.
+- [x] Use the same canonical story as the landing page while adapting the presentation to interactive product guidance.
 - [ ] End with `Same agents. Different system of work.`
 
 ## Real-work activation
 
-- [ ] Transition from demo to `Bring one piece of work`.
-- [ ] Offer job-based starters: investigate before coding, scope a feature, recurring review rework, custom work.
-- [ ] Prefill the real composer and allow editing.
+- [x] Transition from demo to `Bring one piece of work`.
+- [x] Offer job-based starters: investigate before coding, scope a feature and recurring review rework.
+- [x] Prefill and spotlight the real composer while leaving the request editable.
 - [ ] Produce an inline PlanCard.
 - [ ] Ask for one reviewer/PM/customer/security constraint.
 - [ ] Show how it changed the Plan.
@@ -247,12 +247,13 @@ Detailed behavior is specified in `AGENTS/onboarding.txt`.
 
 - [ ] Use noodle/favicon as guide personality.
 - [ ] Build accessible showcase modal behavior.
-- [ ] Add stable onboarding target attributes.
-- [ ] Use spotlight only for the differentiated artifacts/actions.
-- [ ] Do not tour every tab.
-- [ ] Switch to inline non-modal guidance for real actions.
-- [ ] Restore focus and remove every overlay on pause/skip/workspace switch.
-- [ ] Add reduced-motion handling.
+- [x] Add stable semantic onboarding target attributes for messages, Plans, constraints, decisions, Tickets, results and the composer.
+- [x] Use spotlight only for the differentiated artifacts/actions.
+- [x] Keep the persistent bottom guide visible above the dim layer and make it primary at chapter checkpoints.
+- [x] Do not tour every tab.
+- [x] Keep real Accept and Approve controls interactive and impossible to bypass through the guide.
+- [ ] Restore focus and remove every overlay on close, skip and workspace switch; preserve the current spotlight while paused.
+- [x] Add reduced-motion handling.
 - [ ] Verify both app themes, narrow viewport and 200% zoom.
 
 ## Persistent getting-started guide

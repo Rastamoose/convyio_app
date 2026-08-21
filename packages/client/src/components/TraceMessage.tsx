@@ -50,6 +50,8 @@ export function TraceMessageLive({
   agentName,
   chunks,
   startedAt,
+  suspended,
+  suspendedReason,
   interactions = [],
   executions = [],
   onResolveInteraction,
@@ -58,6 +60,8 @@ export function TraceMessageLive({
   agentName: string;
   chunks: TraceChunk[];
   startedAt: number;
+  suspended?: boolean;
+  suspendedReason?: string;
   /** Prompts this run is paused on; answering here is the same act as anywhere. */
   interactions?: InteractionRequest[];
   executions?: ToolExecution[];
@@ -71,7 +75,7 @@ export function TraceMessageLive({
   }, []);
 
   const actions = countActions(chunks);
-  const paused = interactions.length > 0;
+  const paused = interactions.length > 0 || suspended;
 
   return (
     <div id={`trace-${runId}`} className="mt-4 flex gap-4 py-0.5 pr-4 pl-4">
@@ -92,12 +96,15 @@ export function TraceMessageLive({
               className={`relative inline-flex h-2.5 w-2.5 rounded-full ${paused ? "bg-dead" : "bg-working"}`}
             />
           </span>
-          {paused ? "needs your decision" : "is working…"}
+          {suspended ? "is waiting for approval" : paused ? "needs your decision" : "is working…"}
           <span className="text-xs text-faint">
             {actions > 0 && `${actions} action${actions === 1 ? "" : "s"} · `}
             {formatElapsed(now - startedAt)}
           </span>
         </div>
+        {suspended && suspendedReason && (
+          <div className="mb-2 text-xs text-faint">{suspendedReason}</div>
+        )}
         {executions.length > 0 ? (
           <div className="mt-2 space-y-1">
             {executions.map((execution) => (
@@ -107,7 +114,7 @@ export function TraceMessageLive({
         ) : (
           <TraceBody chunks={chunks} />
         )}
-        {paused && onResolveInteraction && (
+        {interactions.length > 0 && onResolveInteraction && (
           <div className="mt-2 space-y-2 pl-[52px]">
             {interactions.map((request) => (
               <PermissionCard

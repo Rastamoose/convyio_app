@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { BoardItem } from "@workspace/shared";
+import { emptyImpactMap, type BoardItem, type BoardPlan } from "@workspace/shared";
 import { useApiSession } from "./useApiSession";
 import { useBoard } from "./useBoard";
 
@@ -13,6 +13,29 @@ const jsonResponse = (status: number, body: unknown): Response =>
     status,
     json: () => Promise.resolve(body),
   }) as Response;
+
+const makePlan = (overrides: Partial<BoardPlan> = {}): BoardPlan => ({
+  id: "plan-id-1",
+  workspaceId: "srv-1",
+  ref: "plan-1",
+  title: "Old demo plan",
+  objective: "Old demo objective",
+  outline: ["Old work"],
+  impactMap: emptyImpactMap(),
+  constraints: [],
+  decisions: [],
+  acceptanceCriteria: ["Old work is gone"],
+  clarifications: ["Old question"],
+  status: "accepted",
+  createdBy: "agent-1",
+  acceptedBy: "human-1",
+  createdAt: Date.now() - 120_000,
+  acceptedAt: Date.now() - 60_000,
+  completedAt: null,
+  originChannelName: "demo",
+  changeLog: [],
+  ...overrides,
+});
 
 const makeItem = (overrides: Partial<BoardItem> = {}): BoardItem => ({
   id: "item-1",
@@ -195,6 +218,16 @@ describe("useBoard optimistic mutations", () => {
 
     expect(result.current.items.some((i) => i.id === "item-2")).toBe(true);
     expect(result.current.lines).toHaveLength(0);
+  });
+
+  it("removes projected work when a demo channel is reset", async () => {
+    const { result } = await renderBoard(makeItem({ planId: "plan-id-1", originChannelName: "general" }));
+    act(() => result.current.applyPlan(makePlan()));
+
+    act(() => result.current.clearChannel("demo"));
+
+    expect(result.current.items).toHaveLength(0);
+    expect(result.current.plans).toHaveLength(0);
   });
 
   it("applies the server's item when the PATCH succeeds", async () => {

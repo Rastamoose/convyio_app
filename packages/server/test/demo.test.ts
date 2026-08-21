@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { after, describe, test } from "node:test";
+import { emptyImpactMap } from "@workspace/shared";
 import { loadDemoScripts } from "../src/demo/script";
 import { DemoOrchestrator } from "../src/demo/DemoOrchestrator";
 import { createWsEnv } from "./helpers";
@@ -29,6 +30,29 @@ describe("walkthrough demo", async () => {
 
   test("shared two-agent incident demo runs to completion with plan constraint and ticket evidence", async () => {
     const human = await env.db.upsertActor("human", "maya");
+    const staleAgent = await env.db.upsertActor("agent", "stale-demo-agent");
+    const stalePlan = await env.plans.create(staleAgent, {
+      title: "Stale demo plan",
+      objective: "Remove this before replay",
+      outline: ["Old work"],
+      clarifications: ["Old clarification"],
+      acceptanceCriteria: ["Old work is gone"],
+      impactMap: emptyImpactMap(),
+      channel: "demo",
+      assumedOwnerId: staleAgent.id,
+    });
+    await env.plans.accept(human, stalePlan.ref);
+    const staleTicket = await env.service.create(staleAgent, {
+      title: "Stale demo ticket",
+      why: "Old demo run",
+      effect: "Old output",
+      planId: stalePlan.ref,
+      owner: staleAgent.id,
+      scopePaths: ["billing/"],
+      acceptanceCriteria: ["Old work is gone"],
+      impactMap: emptyImpactMap(),
+      channel: "general",
+    });
 
     const progress = (stage: string, message?: string) =>
       new Promise<void>((resolve, reject) => {
@@ -67,17 +91,19 @@ describe("walkthrough demo", async () => {
     env.hub.onDemoStart?.("demo", "walkthrough", human.id);
 
     await progress("waiting_continue", "Both founders");
+    assert.equal(await env.plans.find(env.db.workspaceId, stalePlan.ref), null);
+    assert.equal(await env.service.find(env.db.workspaceId, staleTicket.ref), null);
     const firstChapter = (await env.messages.list()).filter((message) => message.channel === "demo");
-    const noodleMessage = firstChapter.find((message) => message.authorName === "noodle");
-    assert.ok(noodleMessage?.content.includes("Sentry spike"));
+    const noodleMessage = firstChapter.find((message) => message.authorName === "noodle" && message.content.includes("The spike started"));
+    assert.ok(noodleMessage);
     assert.ok(firstChapter.some((message) => message.authorName === "maya" && message.content.includes("@noodle")));
     env.hub.onDemoControl?.("demo", "continue", human.id);
 
-    await progress("waiting_continue", "Two independently owned agents");
+    await progress("waiting_continue", "Two agents");
     assert.ok(planRef, "plan was proposed after both agents contributed");
     const sharedAnalysis = (await env.messages.list()).filter((message) => message.channel === "demo");
-    const hermesMessage = sharedAnalysis.find((message) => message.authorName === "hermes");
-    assert.ok(hermesMessage?.content.includes("@noodle"));
+    const hermesMessage = sharedAnalysis.find((message) => message.authorName === "hermes" && message.content.includes("@noodle"));
+    assert.ok(hermesMessage);
     assert.ok(sharedAnalysis.some((message) => message.authorName === "tom" && message.content.includes("@hermes")));
     assert.ok(sharedAnalysis.some((message) => message.authorName === "noodle" && message.content.includes("@hermes")));
     env.hub.onDemoControl?.("demo", "continue", human.id);
@@ -88,7 +114,7 @@ describe("walkthrough demo", async () => {
     assert.ok(planBeforeAccept?.constraints.some((c) => c.includes("ledger-sync.ts")), "ledger constraint was added");
     await env.plans.accept(human, planRef);
 
-    await progress("waiting_continue", "Ticket defines responsibility");
+    await progress("waiting_continue", "Ticket authorizes");
     assert.equal(orchestrator.progress("demo").focus?.kind, "guide");
     assert.ok(ticketRef, "ticket was proposed");
     env.hub.onDemoControl?.("demo", "continue", human.id);
@@ -100,7 +126,7 @@ describe("walkthrough demo", async () => {
     assert.deepEqual(ticketBeforeApprove?.scopePaths, ["billing/"]);
     await env.service.approve(human, ticketRef);
 
-    await progress("waiting_continue", "outcome is reviewable");
+    await progress("waiting_continue", "result shows");
     assert.equal(orchestrator.progress("demo").focus?.kind, "result");
     env.hub.onDemoControl?.("demo", "continue", human.id);
     await progress("completed");

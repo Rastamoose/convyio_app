@@ -11,7 +11,9 @@ import {
   type BoardPlan,
   type ChatMessage,
   type ContextNote,
+  type ProjectAccessRequest,
   type ServerEvent,
+  type ThreadEvent,
   type ToolmanAction,
   type WorkCapability,
   type PromptEnvelope,
@@ -38,8 +40,13 @@ export class BoardClient {
   private token: string | null = null;
   private apiUrl: string | null = null;
   private actionWaiters = new Map<string, (result: ActionResultEvent) => void>();
+  private resourceAccessWaiters = new Map<string, (granted: boolean) => void>();
+  private resourceAccessHistory = new Map<string, "granted" | "denied">();
+  private agentId: string | null = null;
   private lastRequestId: string | null = null;
   private onManifestUpdatedCallback: (() => void) | null = null;
+  private onRunSuspended: ((reason: string) => void) | null = null;
+  private onRunResumed: (() => void) | null = null;
 
   constructor(private socket: AgentSocket) {
     socket.onEvent((event) => {
@@ -58,7 +65,22 @@ export class BoardClient {
           waiter(event);
         }
       }
+      if (event.type === "thread_event") {
+        resolveResourceAccessWaiter(event.event, this.agentId, this.resourceAccessWaiters, this.resourceAccessHistory);
+      }
     });
+  }
+
+  setAgentId(agentId: string): void {
+    this.agentId = agentId;
+  }
+
+  setRunHooks(
+    onRunSuspended: ((reason: string) => void) | null,
+    onRunResumed: (() => void) | null,
+  ): void {
+    this.onRunSuspended = onRunSuspended;
+    this.onRunResumed = onRunResumed;
   }
 
   /**
@@ -113,9 +135,37 @@ export class BoardClient {
     return this.projects;
   }
 
-  async requestProjectAccess(projectId: string, reason: string): Promise<AgentProjectAccess[]> {
-    await this.api("POST", `/api/projects/${projectId}/access-requests`, { reason });
-    return this.refreshProjectAccess();
+  async requestProjectAccess(projectId: string, reason: string): Promise<{ request: ProjectAccessRequest; projects: AgentProjectAccess[] }> {
+    const body = (await this.api("POST", `/api/projects/${projectId}/access-requests`, { reason })) as {
+      request: ProjectAccessRequest;
+    };
+    return { request: body.request, projects: await this.refreshProjectAccess() };
+  }
+
+  /**
+   * Block until a resource or project access grant is resolved.
+   * Keeps a run alive while waiting for a human approval decision.
+   */
+  waitForResourceAccess(key: string, timeoutMs = APPROVAL_WAIT_MS): Promise<boolean> {
+    const prior = this.resourceAccessHistory.get(key);
+    if (prior) {
+      this.resourceAccessHistory.delete(key);
+      return Promise.resolve(prior === "granted");
+    }
+    this.onRunSuspended?.(`awaiting access grant for ${key}`);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.resourceAccessWaiters.delete(key);
+        this.onRunResumed?.();
+        resolve(false);
+      }, timeoutMs);
+      this.resourceAccessWaiters.set(key, (granted) => {
+        clearTimeout(timer);
+        this.resourceAccessWaiters.delete(key);
+        this.onRunResumed?.();
+        resolve(granted);
+      });
+    });
   }
 
   resourceManifest(): AgentResourceManifest | null {
@@ -286,18 +336,23 @@ export class BoardClient {
     boardItemRef: string | null,
     conversationId: string | null = null,
   ): Promise<ActionResultEvent> {
+    const needsApproval = ACTION_CAPABILITY[action.kind];
+    if (needsApproval) this.onRunSuspended?.(`awaiting approval for ${action.kind}`);
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();
       this.lastRequestId = requestId;
       // A mutation may pause on a human decision, so the wait outlasts the
       // server's own approval timeout rather than abandoning an approved run.
-      const timeout = ACTION_CAPABILITY[action.kind] ? APPROVAL_WAIT_MS : 15_000;
+      const timeout = needsApproval ? APPROVAL_WAIT_MS : 15_000;
       const timer = setTimeout(() => {
         this.actionWaiters.delete(requestId);
+        if (needsApproval) this.onRunResumed?.();
         reject(new Error("toolman request timed out"));
       }, timeout);
       this.actionWaiters.set(requestId, (result) => {
         clearTimeout(timer);
+        this.actionWaiters.delete(requestId);
+        if (needsApproval) this.onRunResumed?.();
         resolve(result);
       });
       this.socket.send({ type: "action_request", requestId, boardItemRef, action, conversationId });
@@ -389,4 +444,45 @@ function manifestUpdateEvent(event: ServerEvent): boolean {
     event.type === "project_assignment" ||
     event.type === "project_access"
   );
+}
+
+function resourceAccessKey(kind: string, id: string): string {
+  return `${kind}:${id}`;
+}
+
+function resolveResourceAccessWaiter(
+  event: ThreadEvent,
+  agentId: string | null,
+  waiters: Map<string, (granted: boolean) => void>,
+  history: Map<string, "granted" | "denied">,
+): void {
+  const payload = event.payload as Record<string, unknown> | undefined;
+  if (!payload) return;
+  if (payload.agentId && agentId && payload.agentId !== agentId) return;
+
+  const resolve = (key: string, granted: boolean) => {
+    const waiter = waiters.get(key);
+    if (waiter) {
+      waiters.delete(key);
+      waiter(granted);
+    } else {
+      history.set(key, granted ? "granted" : "denied");
+    }
+  };
+
+  if (event.kind === "resource.access.granted") {
+    const kind = String(payload.resourceKind ?? "");
+    const id = String(payload.resourceId ?? "");
+    if (kind && id) resolve(resourceAccessKey(kind, id), true);
+  } else if (event.kind === "resource.access.denied") {
+    const kind = String(payload.resourceKind ?? "");
+    const id = String(payload.resourceId ?? "");
+    if (kind && id) resolve(resourceAccessKey(kind, id), false);
+  } else if (event.kind === "project.access.resolved") {
+    const projectId = String(payload.projectId ?? "");
+    if (projectId) resolve(resourceAccessKey("project", projectId), payload.decision === "approved");
+  } else if (event.kind === "project.assignment.granted") {
+    const projectId = String(payload.projectId ?? "");
+    if (projectId) resolve(resourceAccessKey("project", projectId), true);
+  }
 }

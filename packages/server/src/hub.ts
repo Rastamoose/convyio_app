@@ -40,6 +40,8 @@ import {
   type ThreadEvent,
   type ToolExecution,
   type TraceChunk,
+  type TraceResumedEvent,
+  type TraceSuspendedEvent,
   type WorkClaimEvent,
   type WorkCompleteEvent,
   type WorkspaceInfo,
@@ -718,6 +720,12 @@ export class Hub {
         break;
       case "trace_chunk":
         await this.agentOnly(conn, () => this.handleTraceChunk(event.runId, event.chunk));
+        break;
+      case "trace_suspended":
+        await this.agentOnly(conn, () => this.handleTraceSuspended(participant, event));
+        break;
+      case "trace_resumed":
+        await this.agentOnly(conn, () => this.handleTraceResumed(participant, event));
         break;
       case "summary":
         await this.agentOnly(conn, () => this.handleSummary(participant, event));
@@ -1402,6 +1410,27 @@ export class Hub {
   private handleTraceChunk(runId: string, chunk: TraceChunk): void {
     this.traceBuffers.get(runId)?.push(chunk);
     this.broadcastHumans({ type: "trace_chunk", runId, chunk });
+  }
+
+  private handleTraceSuspended(participant: Participant, event: TraceSuspendedEvent): void {
+    this.broadcastHumans({
+      type: "trace_suspended",
+      runId: event.runId,
+      agentId: participant.id,
+      agentName: participant.name,
+      reason: event.reason,
+      timestamp: Date.now(),
+    });
+  }
+
+  private handleTraceResumed(participant: Participant, event: TraceResumedEvent): void {
+    this.broadcastHumans({
+      type: "trace_resumed",
+      runId: event.runId,
+      agentId: participant.id,
+      agentName: participant.name,
+      timestamp: Date.now(),
+    });
   }
 
   private async handleSummary(participant: Participant, event: SummaryEvent): Promise<void> {

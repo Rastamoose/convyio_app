@@ -226,6 +226,10 @@ export class AgentRunner {
       resumedItem?.id ?? null,
     );
     this.socket.send({ type: "trace_start", runId });
+    this.board.setRunHooks?.(
+      (reason) => this.socket.send({ type: "trace_suspended", runId, reason }),
+      () => this.socket.send({ type: "trace_resumed", runId }),
+    );
 
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
@@ -320,6 +324,7 @@ export class AgentRunner {
       this.setExternalToolExecutor?.(null);
       activity?.flush();
       this.abortController = null;
+      this.board.setRunHooks?.(null, null);
     }
 
     usage ??= reportedUsage;

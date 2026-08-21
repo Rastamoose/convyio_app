@@ -85,6 +85,17 @@ export const traceChunkEventSchema = z.object({
   }),
 });
 
+export const traceSuspendedEventSchema = z.object({
+  type: z.literal("trace_suspended"),
+  runId: z.string(),
+  reason: z.string().max(256),
+});
+
+export const traceResumedEventSchema = z.object({
+  type: z.literal("trace_resumed"),
+  runId: z.string(),
+});
+
 export const summaryEventSchema = z.object({
   type: z.literal("summary"),
   runId: z.string(),
@@ -448,6 +459,8 @@ export const clientEventSchema = z
     statusUpdateEventSchema,
     traceStartEventSchema,
     traceChunkEventSchema,
+    traceSuspendedEventSchema,
+    traceResumedEventSchema,
     summaryEventSchema,
     interruptEventSchema,
     demoStartEventSchema,
@@ -483,6 +496,8 @@ export type StatusSetEvent = z.infer<typeof statusSetEventSchema>;
 export type StatusUpdateEvent = z.infer<typeof statusUpdateEventSchema>;
 export type TraceStartEvent = z.infer<typeof traceStartEventSchema>;
 export type TraceChunkEvent = z.infer<typeof traceChunkEventSchema>;
+export type TraceSuspendedEvent = z.infer<typeof traceSuspendedEventSchema>;
+export type TraceResumedEvent = z.infer<typeof traceResumedEventSchema>;
 export type SummaryEvent = z.infer<typeof summaryEventSchema>;
 export type ClearEvent = z.infer<typeof clearEventSchema>;
 export type InterruptEvent = z.infer<typeof interruptEventSchema>;
@@ -701,10 +716,28 @@ export interface TraceChunkBroadcast {
   chunk: TraceChunk;
 }
 
+export interface TraceSuspendedBroadcast {
+  type: "trace_suspended";
+  runId: string;
+  agentId: string;
+  agentName: string;
+  reason: string;
+  timestamp: number;
+}
+
+export interface TraceResumedBroadcast {
+  type: "trace_resumed";
+  runId: string;
+  agentId: string;
+  agentName: string;
+  timestamp: number;
+}
+
 export interface ClearBroadcast {
   type: "clear";
   /** When set, only messages in this channel were cleared. */
   channel?: string;
+  work?: boolean;
 }
 
 /** A new chat channel exists; clients append it to their channel list. */
@@ -806,6 +839,8 @@ export type ServerEvent =
   | ErrorEvent
   | TraceStartBroadcast
   | TraceChunkBroadcast
+  | TraceSuspendedBroadcast
+  | TraceResumedBroadcast
   | ClearBroadcast
   | ChannelCreatedEvent
   | ChannelRenamedEvent

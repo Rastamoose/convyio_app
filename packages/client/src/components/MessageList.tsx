@@ -1101,6 +1101,8 @@ export function MessageList({
                 agentName={entry.run.agentName}
                 chunks={entry.run.chunks}
                 startedAt={entry.run.startedAt}
+                suspended={entry.run.suspended}
+                suspendedReason={entry.run.suspendedReason}
                 interactions={pendingInteractions.filter(
                   (request) => request.agentId === entry.run.agentId,
                 )}

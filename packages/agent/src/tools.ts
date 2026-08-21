@@ -210,7 +210,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     name: "context_channel_read",
     description:
       "Read at most 20 recent messages from a granted channel. " +
-      "If you do not have access, this will automatically request it; tell the human the request is pending. " +
+      "If you do not have access, this will automatically request it and pause until approved. " +
       "Use the exact channel_id from context_manifest.",
     parameters: {
       type: "object",
@@ -225,7 +225,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     name: "context_channel_search",
     description:
       "Search message text in a granted channel and return at most 20 matches. " +
-      "If you do not have access, this will automatically request it; tell the human the request is pending. " +
+      "If you do not have access, this will automatically request it and pause until approved. " +
       "Use the exact channel_id from context_manifest.",
     parameters: {
       type: "object",
@@ -241,7 +241,8 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
     description:
       "Request durable read/list/search access to one protected resource from the manifest. " +
       "Use the exact resource_id returned by context_manifest. " +
-      "Call this immediately when the user asks you to use a resource you cannot access; do not ask the human for permission first.",
+      "Call this immediately when the user asks you to use a resource you cannot access; do not ask the human for permission first. " +
+      "The run will pause and continue automatically once the grant is approved.",
     parameters: {
       type: "object",
       properties: {
@@ -273,7 +274,9 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_request_access",
-    description: "Request access to an unassigned shared project. The folder owner must approve it.",
+    description:
+      "Request access to an unassigned shared project. The folder owner must approve it. " +
+      "The run will pause and continue automatically once the access is approved.",
     parameters: {
       type: "object",
       properties: {
@@ -486,6 +489,10 @@ export interface ToolHooks {
   channel?: string | null;
   /** Channel id used as the origin for resource access requests. */
   channelId?: string | null;
+  /** Fired when the run pauses for a human approval decision. */
+  onRunSuspended?(reason: string): void;
+  /** Fired when a paused run resumes after approval or denial. */
+  onRunResumed?(): void;
 }
 
 async function findManifestEntry(
@@ -509,6 +516,64 @@ async function findManifestEntry(
   );
   if (byName2 && byName2.length === 1) return byName2[0];
   return null;
+}
+
+interface AccessWaitResult {
+  granted: boolean;
+  message: string;
+}
+
+async function ensureResourceAccess(
+  board: BoardClient,
+  resourceKind: ProtectedResourceKind,
+  resourceId: string,
+  resourceName: string,
+  reason: string,
+  originChannelId?: string | null,
+): Promise<AccessWaitResult> {
+  if (resourceKind === "git_project" || resourceKind === "local_project") {
+    return ensureProjectAccess(board, resourceId, reason);
+  }
+  const denied: AccessWaitResult = {
+    granted: false,
+    message: `Access to '${resourceName}' was denied or not granted in time.`,
+  };
+  try {
+    await board.requestResourceAccess({ resourceKind, resourceId, reason, originChannelId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("ALREADY_GRANTED")) return { granted: true, message: "" };
+    if (!message.includes("ALREADY_PENDING")) throw err;
+  }
+  return (await board.waitForResourceAccess(`${resourceKind}:${resourceId}`))
+    ? { granted: true, message: "" }
+    : denied;
+}
+
+async function ensureProjectAccess(
+  board: BoardClient,
+  projectId: string,
+  reason: string,
+): Promise<AccessWaitResult> {
+  const denied: AccessWaitResult = {
+    granted: false,
+    message: "Project access was denied or not granted in time.",
+  };
+  try {
+    const { request } = await board.requestProjectAccess(projectId, reason);
+    if (request.status === "approved") return { granted: true, message: "" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("ALREADY_ASSIGNED")) return { granted: true, message: "" };
+    if (message.includes("ALREADY_PENDING")) {
+      // already pending; wait for the grant
+    } else {
+      throw err;
+    }
+  }
+  return (await board.waitForResourceAccess(`project:${projectId}`))
+    ? { granted: true, message: "" }
+    : denied;
 }
 
 export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolExecutor {
@@ -615,25 +680,10 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             const messages = await board.readChannel(channel.id, before);
             return { messages };
           }
-          if (channel.access === "pending") {
-            return {
-              requested: true,
-              status: "pending",
-              message: `My access request for the '${channel.name}' channel is still pending. Please approve it and ask again.`,
-            };
-          }
-          const request = await board.requestResourceAccess({
-            resourceKind: "channel",
-            resourceId: channel.id,
-            reason: "User asked to read messages from this channel.",
-            originChannelId: hooks.channelId,
-          });
-          return {
-            requested: true,
-            request_id: request.id,
-            status: request.status,
-            message: `I don't have access to the '${channel.name}' channel yet, so I've requested it. Please approve and ask again.`,
-          };
+          const access = await ensureResourceAccess(board, "channel", channel.id, channel.name, "User asked to read messages from this channel.", hooks.channelId);
+          if (!access.granted) return { requested: true, status: "pending", message: access.message };
+          const messages = await board.readChannel(channel.id, before);
+          return { messages };
         }
         case "context_channel_search": {
           const channel = await findManifestEntry(board, "channel", str("channel_id"));
@@ -643,25 +693,10 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             const messages = await board.searchChannel(channel.id, str("query"));
             return { messages };
           }
-          if (channel.access === "pending") {
-            return {
-              requested: true,
-              status: "pending",
-              message: `My access request for the '${channel.name}' channel is still pending. Please approve it and ask again.`,
-            };
-          }
-          const request = await board.requestResourceAccess({
-            resourceKind: "channel",
-            resourceId: channel.id,
-            reason: "User asked to search messages in this channel.",
-            originChannelId: hooks.channelId,
-          });
-          return {
-            requested: true,
-            request_id: request.id,
-            status: request.status,
-            message: `I don't have access to the '${channel.name}' channel yet, so I've requested it. Please approve and ask again.`,
-          };
+          const access = await ensureResourceAccess(board, "channel", channel.id, channel.name, "User asked to search messages in this channel.", hooks.channelId);
+          if (!access.granted) return { requested: true, status: "pending", message: access.message };
+          const messages = await board.searchChannel(channel.id, str("query"));
+          return { messages };
         }
         case "context_request_access": {
           const resourceKind = str("resource_kind");
@@ -669,37 +704,21 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
             return { error: "resource_kind must be channel, git_project, local_project, or workspace_file" };
           }
           let resourceId = str("resource_id");
+          let resourceName = resourceId;
           if (resourceKind === "channel") {
             const channel = await findManifestEntry(board, "channel", resourceId);
             if (!channel) throw new Error("NOT_FOUND: no such channel; check context_manifest");
             resourceId = channel.id;
+            resourceName = channel.name;
             if (channel.access === "granted") {
               return { granted: true, status: "granted", message: `You already have access to the '${channel.name}' channel.` };
             }
-            if (channel.access === "pending") {
-              return { requested: true, status: "pending", message: `My access request for the '${channel.name}' channel is still pending.` };
-            }
           }
           hooks.onActivity(`context_request_access ${resourceKind}:${resourceId}`);
-          if (resourceKind === "git_project" || resourceKind === "local_project") {
-            await board.requestProjectAccess(resourceId, str("reason"));
-            return { requested: true, status: "pending" };
-          }
-          try {
-            const request = await board.requestResourceAccess({
-              resourceKind: resourceKind as ProtectedResourceKind,
-              resourceId,
-              reason: str("reason"),
-              originChannelId: hooks.channelId,
-            });
-            return { requested: true, request_id: request.id, status: request.status };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (message.includes("ALREADY_PENDING")) {
-              return { requested: true, status: "pending", message: "An access request for this resource is already pending." };
-            }
-            throw err;
-          }
+          const access = await ensureResourceAccess(board, resourceKind as ProtectedResourceKind, resourceId, resourceName, str("reason"), hooks.channelId);
+          return access.granted
+            ? { granted: true, status: "granted", message: `Access to '${resourceName}' has been approved.` }
+            : { requested: true, status: "pending", message: access.message };
         }
         case "context_note_list": {
           hooks.onActivity("context_note_list");
@@ -727,9 +746,13 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           };
         }
         case "project_request_access": {
-          hooks.onActivity(`project_request_access ${str("project_id")}`);
-          await board.requestProjectAccess(str("project_id"), str("reason"));
-          return { requested: true, note: "The folder owner must approve this request before project tools can run." };
+          const projectId = str("project_id");
+          const reason = str("reason");
+          hooks.onActivity(`project_request_access ${projectId}`);
+          const access = await ensureProjectAccess(board, projectId, reason);
+          return access.granted
+            ? { granted: true, status: "approved", message: `Access to the project has been approved.` }
+            : { requested: true, status: "pending", message: access.message };
         }
         case "project_read_file": {
           hooks.onActivity(`${name} ${str("path")}`);

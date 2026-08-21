@@ -165,6 +165,12 @@ export function useBoard(onError: (message: string) => void, api: ApiSession) {
     },
     /** A board event envelope arrived on the websocket. */
     applyPlan: (plan: BoardPlan) => upsertPlan(plan),
+    clearChannel: (channel: string) => {
+      const planIds = new Set(plans.filter((plan) => plan.originChannelName === channel).map((plan) => plan.id));
+      setItems((prev) => prev.filter((item) => item.originChannelName !== channel && !planIds.has(item.planId ?? "")));
+      setPlans((prev) => prev.filter((plan) => plan.originChannelName !== channel));
+      setLines([]);
+    },
     applyEnvelope: (envelope: BoardEventEnvelope) => {
       upsertItem(envelope.item);
       const text = boardLineText(envelope);

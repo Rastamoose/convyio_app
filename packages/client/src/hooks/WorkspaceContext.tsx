@@ -15,7 +15,6 @@ import type {
   ContextEntry,
   ChatMessage,
   ClientEvent,
-  DemoFocusTarget,
   InteractionRequest,
   PermissionMode,
   Participant,
@@ -34,6 +33,7 @@ import {
   type AttachmentDraft,
 } from "./useAttachmentDrafts";
 import { useBoard, type BoardItemEdit, type BoardLine, type PlanDraft, type TicketDraft } from "./useBoard";
+import { projectDemoProgress, type DemoProgressState } from "../lib/demoProgress";
 import { useToasts, type Toast } from "./useToasts";
 import { useTyping, type Typist } from "./useTyping";
 import { useUnreads } from "./useUnreads";
@@ -109,7 +109,7 @@ export interface WorkspaceState {
   interrupt: (target: string, content: string) => void;
   startDemo: (channel: string, mode?: "walkthrough" | "live") => void;
   demoControl: (channel: string, action: "pause" | "resume" | "continue" | "skip" | "replay") => void;
-  demoProgress: { channel: string; stage: string; message: string; paused: boolean; focus?: DemoFocusTarget } | null;
+  demoProgress: DemoProgressState | null;
   /** Resolves to the created channel's normalized name, or null on failure. */
   createChannel: (name: string, sectionId?: string | null) => Promise<string | null>;
   /** Resolves to the channel's new normalized name, or null on failure. */
@@ -196,7 +196,7 @@ export function WorkspaceProvider({
   const chat = useChatMessages();
   const traces = useAgentTraces();
   const [executions, setExecutions] = useState<ToolExecution[]>([]);
-  const [demoProgress, setDemoProgress] = useState<{ channel: string; stage: string; message: string; paused: boolean; focus?: DemoFocusTarget } | null>(null);
+  const [demoProgress, setDemoProgress] = useState<DemoProgressState | null>(null);
   const interactions = useInteractions();
   const [resourceAccessRequests, setResourceAccessRequests] = useState<AgentResourceAccessRequest[]>([]);
   const api = useApiSession();
@@ -262,6 +262,12 @@ export function WorkspaceProvider({
       case "trace_chunk":
         traces.appendChunk(event.runId, event.chunk);
         break;
+      case "trace_suspended":
+        traces.suspendRun(event.runId, event.reason);
+        break;
+      case "trace_resumed":
+        traces.resumeRun(event.runId);
+        break;
       case "run_end":
         traces.endRun(event.runId);
         break;
@@ -272,7 +278,7 @@ export function WorkspaceProvider({
         });
         break;
       case "demo_progress":
-        setDemoProgress({ channel: event.channel, stage: event.stage, message: event.message, paused: event.paused });
+        setDemoProgress(projectDemoProgress(event));
         break;
       case "interaction_request":
         interactions.open(event.request);
@@ -293,6 +299,7 @@ export function WorkspaceProvider({
         break;
       case "clear":
         chat.clearChannel(event.channel);
+        if (event.work && event.channel) board.clearChannel(event.channel);
         break;
       case "error":
         if (event.error === "unauthenticated") {

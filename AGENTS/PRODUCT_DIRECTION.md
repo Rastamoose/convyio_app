@@ -523,6 +523,8 @@ One canonical scenario should power:
 - usability tests;
 - product regression/dogfooding demonstrations.
 
+The story remains consistent across surfaces, but presentation differs. The landing-page or explanatory video owns the before/after workflow comparison. The interactive onboarding starts directly inside Convyio and teaches the product by spotlighting the real conversation, artifacts and consequential controls.
+
 The canonical product story is a shared engineering incident involving two founders and their independently owned agents. The billing rounding fixture remains the deterministic execution proof inside that story; it is not the category narrative.
 
 The story proves the category difference:
@@ -556,7 +558,7 @@ Suggested narrative spine:
 105–112s Same agents. Different system of work.
 ```
 
-The interactive walkthrough pauses between major chapters and at consequential human decisions. Short landing and social cuts may compress the same sequence, but they must preserve the two-human/two-agent causal story.
+The interactive walkthrough uses semantic spotlight targets and a persistent bottom guide. It pauses between major chapters and at consequential human decisions; Accept and Approve remain real controls that the guide cannot bypass. Short landing and social cuts may compress the same sequence, but they must preserve the two-human/two-agent causal story.
 
 The final duration is subordinate to clarity. A shorter cut may be used on the landing page; the complete version should remain available.
 

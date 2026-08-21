@@ -9,6 +9,8 @@ export interface ActiveRun {
   agentName: string;
   chunks: TraceChunk[];
   startedAt: number;
+  suspended?: boolean;
+  suspendedReason?: string;
 }
 
 /**
@@ -34,7 +36,7 @@ export function useAgentTraces() {
       startTimes.current.set(runId, timestamp);
       setActiveRuns((prev) => {
         if (prev.some((r) => r.runId === runId)) return prev;
-        return [...prev, { runId, agentId, agentName, chunks: [], startedAt: timestamp }];
+        return [...prev, { runId, agentId, agentName, chunks: [], startedAt: timestamp, suspended: false }];
       });
     },
     appendChunk: (runId: string, chunk: TraceChunk) => {
@@ -42,6 +44,16 @@ export function useAgentTraces() {
         prev.map((r) =>
           r.runId === runId ? { ...r, chunks: [...r.chunks, chunk] } : r,
         ),
+      );
+    },
+    suspendRun: (runId: string, reason: string) => {
+      setActiveRuns((prev) =>
+        prev.map((r) => (r.runId === runId ? { ...r, suspended: true, suspendedReason: reason } : r)),
+      );
+    },
+    resumeRun: (runId: string) => {
+      setActiveRuns((prev) =>
+        prev.map((r) => (r.runId === runId ? { ...r, suspended: false, suspendedReason: undefined } : r)),
       );
     },
     /** run_end without a summary message: drop the run, record nothing. */

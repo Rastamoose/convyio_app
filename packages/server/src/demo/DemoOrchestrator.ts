@@ -190,7 +190,8 @@ export class DemoOrchestrator {
     await this.cleanupOldDemoWork();
     for (const name of script.personas) await this.requireActor(name, "human");
     for (const name of script.agents) await this.requireActor(name, "agent");
-    await this.hub.clearChannel(startedBy, channel);
+    await this.hub.clearChannel(startedBy, channel, true);
+    await this.purgeDemoChannelWork(channel);
     if (script.seedDir) {
       await this.seedWorkspace(script.seedDir);
     }
@@ -214,6 +215,83 @@ export class DemoOrchestrator {
       }
     }
     this.demoRefs.clear();
+  }
+
+  private async purgeDemoChannelWork(channel: string): Promise<void> {
+    const [row] = await this.db.sql<{ id: string }[]>`
+      SELECT id FROM channels
+      WHERE workspace_id = ${this.db.workspaceId} AND lower(name) = lower(${channel}) AND is_demo = true
+    `;
+    if (!row) throw new Error(`${channel} is not a demo channel`);
+    await this.db.transaction(async (sql) => {
+      await sql`
+        DELETE FROM context_entries
+        WHERE workspace_id = ${this.db.workspaceId} AND (
+          (scope = 'channel' AND subject_id = ${row.id}) OR
+          (scope = 'plan' AND subject_id IN (
+            SELECT id FROM board_plans WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+          )) OR
+          (scope = 'ticket' AND subject_id IN (
+            SELECT id FROM board_items
+            WHERE workspace_id = ${this.db.workspaceId} AND (
+              origin_channel_id = ${row.id} OR plan_id IN (
+                SELECT id FROM board_plans WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+              )
+            )
+          ))
+        )
+      `;
+      await sql`
+        DELETE FROM interaction_requests
+        WHERE workspace_id = ${this.db.workspaceId} AND (
+          channel_id = ${row.id} OR board_item_ref IN (
+            SELECT ref FROM board_items
+            WHERE workspace_id = ${this.db.workspaceId} AND (
+              origin_channel_id = ${row.id} OR plan_id IN (
+                SELECT id FROM board_plans WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+              )
+            )
+          )
+        )
+      `;
+      await sql`
+        DELETE FROM agent_resource_access_requests
+        WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+      `;
+      await sql`
+        DELETE FROM thread_events
+        WHERE workspace_id = ${this.db.workspaceId} AND channel_id = ${row.id}
+      `;
+      await sql`
+        DELETE FROM board_events
+        WHERE workspace_id = ${this.db.workspaceId} AND item_id IN (
+          SELECT id FROM board_items
+          WHERE workspace_id = ${this.db.workspaceId} AND (
+            origin_channel_id = ${row.id} OR plan_id IN (
+              SELECT id FROM board_plans WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+            )
+          )
+        )
+      `;
+      await sql`
+        DELETE FROM board_items
+        WHERE workspace_id = ${this.db.workspaceId} AND (
+          origin_channel_id = ${row.id} OR plan_id IN (
+            SELECT id FROM board_plans WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+          )
+        )
+      `;
+      await sql`
+        DELETE FROM board_plans
+        WHERE workspace_id = ${this.db.workspaceId} AND origin_channel_id = ${row.id}
+      `;
+      await sql`
+        DELETE FROM agent_conversations
+        WHERE workspace_id = ${this.db.workspaceId} AND channel_id = ${row.id}
+      `;
+    });
+    this.demoRefs.clear();
+    this.demoPlanRefs.clear();
   }
 
   private async cleanupParticipants(): Promise<void> {
@@ -260,7 +338,7 @@ export class DemoOrchestrator {
       if (step.kind !== "gate") await this.delay(this.stepDelayMs === 0 ? 0 : step.focus?.holdMs ?? this.stepDelayMs);
     }
     if (this.isCurrent(gen)) {
-      this.setStage("completed", "The request, decisions, implementation and proof are all in one thread.", {
+      this.setStage("completed", "Everything stayed in one thread.", {
         kind: "guide",
         label: "Reviewable result",
       });

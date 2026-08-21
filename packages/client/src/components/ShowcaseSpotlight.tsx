@@ -97,15 +97,14 @@ export function ShowcaseSpotlight({ focus }: { focus?: DemoFocusTarget }) {
   }, [focus?.kind, focus?.id]);
 
   if (!focus) return null;
-  if (focus.kind === "guide") return <div data-testid="showcase-dim" aria-hidden="true" className="fixed inset-0 z-40 bg-backdrop/70" />;
-  if (!rect) return null;
+  if (focus.kind === "guide" || !rect) return <div data-testid="showcase-dim" aria-hidden="true" className="fixed inset-0 z-40 bg-backdrop/95" />;
 
   return (
     <>
-      <div aria-hidden="true" className="fixed top-0 right-0 left-0 z-40 bg-backdrop/70" style={{ height: rect.top }} />
-      <div aria-hidden="true" className="fixed left-0 z-40 bg-backdrop/70" style={{ top: rect.top, width: rect.left, height: rect.height }} />
-      <div aria-hidden="true" className="fixed right-0 z-40 bg-backdrop/70" style={{ top: rect.top, left: rect.right, height: rect.height }} />
-      <div aria-hidden="true" className="fixed right-0 bottom-0 left-0 z-40 bg-backdrop/70" style={{ top: rect.bottom }} />
+      <div aria-hidden="true" className="fixed top-0 right-0 left-0 z-40 bg-backdrop/95" style={{ height: rect.top }} />
+      <div aria-hidden="true" className="fixed left-0 z-40 bg-backdrop/95" style={{ top: rect.top, width: rect.left, height: rect.height }} />
+      <div aria-hidden="true" className="fixed right-0 z-40 bg-backdrop/95" style={{ top: rect.top, left: rect.right, height: rect.height }} />
+      <div aria-hidden="true" className="fixed right-0 bottom-0 left-0 z-40 bg-backdrop/95" style={{ top: rect.bottom }} />
       <div
         data-testid="showcase-spotlight"
         aria-hidden="true"
