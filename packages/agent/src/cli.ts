@@ -142,6 +142,13 @@ async function unpair(out: (message: string) => void): Promise<void> {
     out("No paired agents to clear.");
     return;
   }
+  const { uninstallService } = await import("./service");
+  for (const name of names) {
+    // Credentials are already gone, so a login service left running would
+    // just crash-loop forever trying to use them. Best-effort: a service
+    // may never have been installed for this agent.
+    await uninstallService(name).catch(() => undefined);
+  }
   out(`Cleared ${names.length} paired agent${names.length === 1 ? "" : "s"}:`);
   for (const name of names) out(`  ${name}`);
 }

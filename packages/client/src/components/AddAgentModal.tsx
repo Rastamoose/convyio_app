@@ -543,8 +543,17 @@ function PairStep({
       <p className="mb-4 text-sm text-muted">
         {apiKeyAgent ? (
           <>
-            Set <code>OPENAI_API_KEY</code> in the shell, then run the command below to pair{" "}
-            <span className="text-body">{agent.name}</span> and start it. The key stays on that
+            Get a key at{" "}
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:underline"
+            >
+              platform.openai.com/api-keys
+            </a>
+            , set it below in the same terminal you'll pair from, then run the pairing command to
+            start <span className="text-body">{agent.name}</span>. The key stays on that
             machine — Convyio never sees it.
           </>
         ) : (
@@ -566,7 +575,19 @@ function PairStep({
               </p>
             )}
             <div className="space-y-2">
-              <PairingCopyRow label="CLI" value={cliCommand} />
+              {apiKeyAgent && (
+                <>
+                  <PairingCopyRow
+                    label="1. Set the key (macOS / Linux)"
+                    value={'export OPENAI_API_KEY="sk-your-key-here"'}
+                  />
+                  <p className="pl-1 text-xs text-faint">
+                    Windows PowerShell: <code>setx OPENAI_API_KEY "sk-your-key-here"</code> — then
+                    open a new PowerShell window before continuing.
+                  </p>
+                </>
+              )}
+              <PairingCopyRow label={apiKeyAgent ? "2. Run this to pair" : "CLI"} value={cliCommand} />
               <PairingCopyRow label="Pairing code" value={pairingCode} />
             </div>
           </div>

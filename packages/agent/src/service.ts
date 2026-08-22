@@ -125,7 +125,12 @@ export async function installService(
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(unitPath, systemdUnit(target), "utf8");
     await execFileAsync("systemctl", ["--user", "daemon-reload"]);
-    await execFileAsync("systemctl", ["--user", "enable", "--now", `convyio-agent-${slug}.service`]);
+    await execFileAsync("systemctl", ["--user", "enable", `convyio-agent-${slug}.service`]);
+    // `enable --now` only starts a unit that isn't already running, so a
+    // re-pair of an already-installed agent would leave the old process
+    // (old installation, old code) running forever. `restart` starts it
+    // either way and always picks up the rewritten unit file.
+    await execFileAsync("systemctl", ["--user", "restart", `convyio-agent-${slug}.service`]);
     return unitPath;
   }
   if (platform === "darwin") {
