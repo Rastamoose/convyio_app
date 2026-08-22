@@ -17,7 +17,7 @@ import { PairingCopyRow, SetupPromptCard } from "./PairingCopy";
 const NAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
 const DEFAULT_INSTRUCTIONS =
-  "You are a workspace teammate. Propose board items with a clear, narrow scope before you touch anything, and ask a human when you're blocked.";
+  "You are a workspace teammate. Do the work directly instead of proposing a plan first — there's no board or ticket workflow here. Ask a human only when you're genuinely blocked.";
 
 /** Plain-language gloss for the diagnostic codes runner_status carries; an
  *  unrecognized code (new server/agent code shipped later) still reads as a
