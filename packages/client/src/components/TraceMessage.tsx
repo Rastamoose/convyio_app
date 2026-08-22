@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ChatMessage, InteractionRequest, ToolExecution, TraceChunk } from "@workspace/shared";
+import { TOOLMAN_READ_ACTIONS, type ChatMessage, type InteractionRequest, type ToolExecution, type TraceChunk } from "@workspace/shared";
 import { formatElapsed } from "../lib/format";
 import { renderMessageContent } from "../lib/markdown";
 import { Avatar } from "./Avatar";
@@ -14,12 +14,22 @@ function countActions(chunks: TraceChunk[]): number {
   return chunks.filter((c) => TOOL_LINE.test(c.content)).length;
 }
 
-/** Consecutive same-action calls collapse into one row instead of spamming the trace. */
+function isReadAction(action: ToolExecution["action"]): boolean {
+  return (TOOLMAN_READ_ACTIONS as readonly string[]).includes(action);
+}
+
+/**
+ * Consecutive calls collapse into one row instead of spamming the trace: same
+ * action always groups, and read-only actions (file/list/search/status) group
+ * with each other too, since a burst of reads is one gesture to a human reader.
+ */
 function groupExecutions(executions: ToolExecution[]): ToolExecution[][] {
   const groups: ToolExecution[][] = [];
   for (const execution of executions) {
     const last = groups[groups.length - 1];
-    if (last && last[0].action === execution.action) last.push(execution);
+    const sameAction = last && last[0].action === execution.action;
+    const bothReads = last && isReadAction(last[0].action) && isReadAction(execution.action);
+    if (sameAction || bothReads) last!.push(execution);
     else groups.push([execution]);
   }
   return groups;

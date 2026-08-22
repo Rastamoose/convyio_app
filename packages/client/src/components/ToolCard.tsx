@@ -22,6 +22,8 @@ export function ToolCardGroup({ executions }: { executions: ToolExecution[] }) {
     (sum, e) => sum + (e.completedAt ? e.completedAt - e.startedAt : 0),
     0,
   );
+  const sameAction = executions.every((e) => e.action === executions[0].action);
+  const label = sameAction ? executions[0].action : "read";
 
   return (
     <div className="my-1 overflow-hidden rounded-lg border border-divider bg-subtle/50">
@@ -31,7 +33,7 @@ export function ToolCardGroup({ executions }: { executions: ToolExecution[] }) {
       >
         <span className={markClass(status)}>{statusMark(status)}</span>
         <span className="min-w-0 flex-1 truncate text-body">
-          {executions[0].action} <span className="text-faint">×{executions.length}</span>
+          {label} <span className="text-faint">×{executions.length}</span>
         </span>
         <span className="shrink-0 text-faint">{anyRunning ? "running" : `${(totalMs / 1000).toFixed(1)}s`}</span>
       </button>
