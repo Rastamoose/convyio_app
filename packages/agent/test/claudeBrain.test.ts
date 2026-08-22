@@ -267,7 +267,7 @@ describe("ClaudeBrain", () => {
           system: "sys",
           context: "ctx",
           prompt: "hi",
-          tools: [{ name: "board_propose", description: "Propose", parameters: { type: "object", properties: {} } }],
+          tools: [{ name: "todo_write", description: "Propose", parameters: { type: "object", properties: {} } }],
         },
         noopCallbacks,
         {

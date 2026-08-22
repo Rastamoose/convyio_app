@@ -78,7 +78,7 @@ describe("GeminiBrain", () => {
                 candidates: [{ content: { parts: [{
                   functionCall: {
                     id: "call-1",
-                    name: "board_propose",
+                    name: "todo_write",
                     args: { title: "Ship it" },
                   },
                 }] } }],
@@ -108,7 +108,7 @@ describe("GeminiBrain", () => {
         context: "ctx",
         prompt: "hi",
         tools: [{
-          name: "board_propose",
+          name: "todo_write",
           description: "Propose",
           parameters: { type: "object", properties: { title: { type: "string" } } },
         }],

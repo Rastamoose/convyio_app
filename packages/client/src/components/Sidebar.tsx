@@ -747,7 +747,7 @@ export function Sidebar({
               setRoomsOpen(true);
               setCreatingRoomFor("rooms");
             }}
-            className="cursor-pointer rounded px-1 text-sm leading-none text-muted opacity-0 transition-opacity select-none group-hover:opacity-100 hover:text-body focus-visible:opacity-100"
+            className="cursor-pointer rounded px-1 text-sm leading-none text-muted select-none hover:text-body"
           >
             +
           </button>
@@ -786,7 +786,7 @@ export function Sidebar({
                   setOpenSections((prev) => ({ ...prev, [section.id]: true }));
                   setCreatingRoomFor(section.id);
                 }}
-                className="cursor-pointer rounded px-1 text-sm leading-none text-muted opacity-0 transition-opacity select-none group-hover:opacity-100 hover:text-body focus-visible:opacity-100"
+                className="cursor-pointer rounded px-1 text-sm leading-none text-muted select-none hover:text-body"
               >
                 +
               </button>

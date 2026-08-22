@@ -1,19 +1,17 @@
 import type {
   AuthzDenyCode,
-  BoardItem,
   ProjectAction,
   ProtectedResourceKind,
   ResourceManifestEntry,
-  WorkCapability,
 } from "@workspace/shared";
 import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
-// The board (board_list/board_propose*/board_start/board_complete/board_block) is
-// intentionally not declared here — agents no longer see it at all. Every mutating
-// action below omits board_item_ref, which the server already treats as a request
-// for a normal human chat-grant approval (see Toolman.authorizeMutation's chatGrant
-// branch) rather than requiring an approved board ticket. The board's own
+// The board (board_list/board_propose*/board_start/board_complete/board_block) has
+// no tool declaration and no executor case — agents have no path to it at all, not
+// even a dead one. Every mutating action below always requests a normal human
+// chat-grant approval (see Toolman.authorizeMutation's chatGrant branch); nothing
+// here can supply a board item ref to route around it. The board's own
 // implementation (BoardService, board/api.ts, the Board tab) is untouched — humans
 // can still use it — agents just have no tool that references it.
 export const TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -148,7 +146,9 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "context_note_save",
-    description: "Save one concise persistent note to your own Convyio notebook.",
+    description:
+      "Save one concise persistent note to your own Convyio notebook, scoped to the channel you're in. " +
+      "It resurfaces only in this channel, not others — it's about this channel's work, not general knowledge.",
     parameters: {
       type: "object",
       properties: { body: { type: "string" } },
@@ -401,16 +401,10 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
 };
 
 export interface ToolHooks {
-  /** Fired when the agent files a proposal. */
-  onProposed(item: BoardItem): void;
-  /** Fired when a tool call runs against a workable item (current task). */
-  onTaskActive(item: BoardItem): void;
   /** Fired so tool activity shows up in the visible run trace. */
   onActivity(line: string): void;
   /** Conversation the actions belong to; selects the server-side permission mode. */
   conversationId?: string | null;
-  /** Channel name used as the origin thread for Plans and Tickets. */
-  channel?: string | null;
   /** Channel id used as the origin for resource access requests. */
   channelId?: string | null;
   /** Fired when the run pauses for a human approval decision. */
@@ -506,71 +500,6 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
     const num = (key: string): number => Number(args[key] ?? 0);
     try {
       switch (name) {
-        case "board_list": {
-          hooks.onActivity("board_list");
-          return { board: board.summary() };
-        }
-        case "board_propose_plan": {
-          const plan = await board.proposePlan({
-            title: str("title"),
-            objective: str("objective"),
-            outline: Array.isArray(args.outline) ? args.outline.map(String) : [],
-            clarifications: Array.isArray(args.clarifications) ? args.clarifications.map(String) : [],
-            ...(Array.isArray(args.constraints) ? { constraints: args.constraints.map(String) } : {}),
-            ...(str("assumed_owner_id") ? { assumedOwnerId: str("assumed_owner_id") } : {}),
-            ...(str("assumed_project_id") ? { assumedProjectId: str("assumed_project_id") } : {}),
-            ...(hooks.channel ? { channel: hooks.channel } : {}),
-          });
-          hooks.onActivity(`proposed plan ${plan.ref}: ${plan.title}`);
-          return {
-            ref: plan.ref,
-            status: plan.status,
-            note: "Plan filed. A human must accept it; acceptance grants no mutating authority.",
-          };
-        }
-        case "board_propose": {
-          const item = await board.propose({
-            title: str("title"),
-            why: str("why"),
-            effect: str("effect"),
-            planId: str("plan_id"),
-            ...(str("owner") ? { owner: str("owner") } : {}),
-            acceptanceCriteria: Array.isArray(args.acceptance_criteria)
-              ? args.acceptance_criteria.map(String)
-              : [],
-            // An omitted/empty scope goes through as [] so the server's
-            // SCOPE_REQUIRED rejection reaches the model verbatim.
-            scopePaths: Array.isArray(args.scope_paths) ? args.scope_paths.map(String) : [],
-            ...(str("project_id") ? { projectId: str("project_id") } : {}),
-            ...(hooks.channel ? { channel: hooks.channel } : {}),
-            ...(Array.isArray(args.capabilities)
-              ? { capabilities: args.capabilities.map(String) as WorkCapability[] }
-              : {}),
-          });
-          hooks.onProposed(item);
-          hooks.onActivity(`proposed ${item.ref}: ${item.title}`);
-          return {
-            ref: item.ref,
-            status: item.status,
-            note: "Proposal filed; a human must approve it. Tell the team briefly, then continue on another approved item or end your turn.",
-          };
-        }
-        case "board_start": {
-          const item = await board.start(str("ref"));
-          hooks.onTaskActive(item);
-          hooks.onActivity(`started ${item.ref}`);
-          return { ref: item.ref, status: item.status };
-        }
-        case "board_complete": {
-          const item = await board.complete(str("ref"), str("evidence"));
-          hooks.onActivity(`completed ${item.ref}`);
-          return { ref: item.ref, status: item.status };
-        }
-        case "board_block": {
-          const item = await board.block(str("ref"), str("reason"));
-          hooks.onActivity(`blocked ${item.ref}: ${str("reason")}`);
-          return { ref: item.ref, status: item.status };
-        }
         case "read_file": {
           hooks.onActivity(`read_file ${str("path")}`);
           const result = await board.requestAction({ kind: "read_file", path: str("path") }, null);
@@ -647,12 +576,12 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         }
         case "context_note_list": {
           hooks.onActivity("context_note_list");
-          const notes = await board.listContextNotes();
+          const notes = await board.listContextNotes(hooks.channelId);
           return { notes };
         }
         case "context_note_save": {
           hooks.onActivity("context_note_save");
-          const note = await board.saveContextNote(str("body"));
+          const note = await board.saveContextNote(str("body"), hooks.channelId);
           return { saved: true, note_id: note.id };
         }
         case "project_list": {
@@ -725,10 +654,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         case "project_git_push":
         case "project_git_branch":
         case "project_git_commit": {
-          const ref = str("board_item_ref");
-          const item = board.resolve(ref);
-          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
-          hooks.onActivity(`${name} ${str("project_id")} (${ref || "no ref"})`);
+          hooks.onActivity(`${name} ${str("project_id")}`);
           const action = name === "project_git_branch"
             ? {
                 kind: "project_git_branch" as const,
@@ -743,7 +669,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
                 : name === "project_git_pull"
                   ? { kind: "project_git_pull" as const, projectId: str("project_id") }
                   : { kind: "project_git_push" as const, projectId: str("project_id") };
-          const result = await board.requestAction(action, ref || null, hooks.conversationId ?? null);
+          const result = await board.requestAction(action, null, hooks.conversationId ?? null);
           if (!result.ok && result.code) {
             hooks.onActivity(`toolman denied ${name}: ${result.code}`);
             return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
@@ -752,10 +678,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         }
         case "project_git_open_pull":
         case "project_git_merge_pull": {
-          const ref = str("board_item_ref");
-          const item = board.resolve(ref);
-          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
-          hooks.onActivity(`${name} ${str("project_id")} (${ref || "no ref"})`);
+          hooks.onActivity(`${name} ${str("project_id")}`);
           const action = name === "project_git_open_pull"
             ? {
                 kind: "project_git_open_pull" as const,
@@ -766,7 +689,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
                 ...(args.base ? { base: str("base") } : {}),
               }
             : { kind: "project_git_merge_pull" as const, projectId: str("project_id"), number: num("number") };
-          const result = await board.requestAction(action, ref || null, hooks.conversationId ?? null);
+          const result = await board.requestAction(action, null, hooks.conversationId ?? null);
           if (!result.ok && result.code) {
             hooks.onActivity(`toolman denied ${name}: ${result.code}`);
             return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
@@ -778,11 +701,8 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         case "project_delete_file":
         case "project_move_file":
         case "project_run_command": {
-          const ref = str("board_item_ref");
-          const item = board.resolve(ref);
-          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
           const target = str("path") || str("from") || str("command");
-          hooks.onActivity(`${name} ${target} (${ref || "chat grant"})`);
+          hooks.onActivity(`${name} ${target}`);
           let action: ProjectAction;
           if (name === "project_run_command") {
             action = { kind: name, projectId: str("project_id"), command: str("command") };
@@ -803,7 +723,7 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
           }
           const result = await board.requestAction(
             action,
-            ref || null,
+            null,
             hooks.conversationId ?? null,
           );
           if (!result.ok && result.code) {
@@ -815,18 +735,13 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
         case "write_file":
         case "append_file":
         case "run_shell": {
-          const ref = str("board_item_ref");
-          const item = board.resolve(ref);
-          if (item && (item.status === "approved" || item.status === "in_progress")) {
-            hooks.onTaskActive(item);
-          }
           const target = name === "run_shell" ? str("command") : str("path");
-          hooks.onActivity(`${name} ${target} (${ref || "no ref"})`);
+          hooks.onActivity(`${name} ${target}`);
           const result = await board.requestAction(
             name === "run_shell"
               ? { kind: "run_shell", command: str("command") }
               : { kind: name, path: str("path"), content: str("content") },
-            ref || null,
+            null,
             hooks.conversationId ?? null,
           );
           if (!result.ok && result.code) {

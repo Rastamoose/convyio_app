@@ -9,14 +9,12 @@ import {
   type AgentResourceAccessRequest,
   type AgentResourceManifest,
   type BoardItem,
-  type BoardPlan,
   type ChatMessage,
   type ContextNote,
   type ProjectAccessRequest,
   type ServerEvent,
   type ThreadEvent,
   type ToolmanAction,
-  type WorkCapability,
   type PromptEnvelope,
   type ProtectedResourceKind,
   type WorkspaceSnapshot,
@@ -28,10 +26,12 @@ import type { AgentSocket } from "./socket";
 const APPROVAL_WAIT_MS = 11 * 60 * 1000;
 
 /**
- * The agent's view of the canonical board plus its channels to the server:
- * board lifecycle over the HTTP API (authenticated with the session token
- * from the welcome frame), world actions over the websocket toolman. The
- * agent has no other write path; every mutating action is judged server-side.
+ * The agent's channels to the server: workspace/channel/project state over
+ * the HTTP API (authenticated with the session token from the welcome
+ * frame), world actions over the websocket toolman. The agent has no other
+ * write path; every mutating action is judged server-side. Board items are
+ * tracked read-only, for a human-assigned task's status only — the agent has
+ * no tool that creates, starts, or resolves one itself.
  */
 export class BoardClient {
   private items = new Map<string, BoardItem>();
@@ -217,13 +217,14 @@ export class BoardClient {
     return body.messages;
   }
 
-  async listContextNotes(): Promise<ContextNote[]> {
-    const body = (await this.api("GET", "/api/context/notes")) as { notes: ContextNote[] };
+  async listContextNotes(channelId?: string | null): Promise<ContextNote[]> {
+    const query = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : "";
+    const body = (await this.api("GET", `/api/context/notes${query}`)) as { notes: ContextNote[] };
     return body.notes;
   }
 
-  async saveContextNote(body: string): Promise<ContextNote> {
-    const response = (await this.api("POST", "/api/context/notes", { scope: "agent", body })) as {
+  async saveContextNote(body: string, channelId?: string | null): Promise<ContextNote> {
+    const response = (await this.api("POST", "/api/context/notes", { scope: "agent", channelId, body })) as {
       note: ContextNote;
     };
     return response.note;
@@ -233,67 +234,15 @@ export class BoardClient {
   // Board lifecycle (HTTP)
   // -------------------------------------------------------------------------
 
-  async refreshEnvelope(): Promise<PromptEnvelope | null> {
+  async refreshEnvelope(channelId?: string | null): Promise<PromptEnvelope | null> {
     try {
-      const body = (await this.api("GET", "/api/workspace/prompt-envelope")) as { envelope: PromptEnvelope };
+      const query = channelId ? `?channel_id=${encodeURIComponent(channelId)}` : "";
+      const body = (await this.api("GET", `/api/workspace/prompt-envelope${query}`)) as { envelope: PromptEnvelope };
       this.envelope = body.envelope;
       return this.envelope;
     } catch {
       return this.envelope;
     }
-  }
-
-  async proposePlan(fields: {
-    title: string;
-    objective: string;
-    outline: string[];
-    clarifications: string[];
-    constraints?: string[];
-    assumedOwnerId?: string;
-    assumedProjectId?: string;
-    channel?: string;
-  }): Promise<BoardPlan> {
-    const { plan } = (await this.api("POST", "/api/board/plans", fields)) as { plan: BoardPlan };
-    return plan;
-  }
-
-  async propose(fields: {
-    title: string;
-    why: string;
-    effect: string;
-    scopePaths: string[];
-    capabilities?: WorkCapability[];
-    planId: string;
-    owner?: string;
-    acceptanceCriteria?: string[];
-    projectId?: string;
-  }): Promise<BoardItem> {
-    const { item } = (await this.api("POST", "/api/board/items", fields)) as { item: BoardItem };
-    this.items.set(item.id, item);
-    return item;
-  }
-
-  async start(ref: string): Promise<BoardItem> {
-    return this.transition(ref, "start");
-  }
-
-  async complete(ref: string, evidence?: string): Promise<BoardItem> {
-    return this.transition(ref, "complete", evidence ? { evidence } : undefined);
-  }
-
-  async block(ref: string, reason: string): Promise<BoardItem> {
-    return this.transition(ref, "block", { reason });
-  }
-
-  private async transition(ref: string, action: string, body?: unknown): Promise<BoardItem> {
-    const target = this.resolve(ref);
-    const { item } = (await this.api(
-      "POST",
-      `/api/board/items/${target?.id ?? ref}/${action}`,
-      body,
-    )) as { item: BoardItem };
-    this.items.set(item.id, item);
-    return item;
   }
 
   /**
@@ -395,7 +344,12 @@ function scopeEnvelope(envelope: PromptEnvelope, channelId: string): PromptEnvel
   const context = envelope.context.filter(
     (entry) => entry.scope === "workspace" || (entry.scope === "channel" && entry.subjectId === channelId),
   );
-  return { ...envelope, context };
+  // Defense in depth: the server already scopes notes to the requested channel_id,
+  // but this.envelope can be a stale cache from a different channel's refresh.
+  const notes = envelope.notes.filter(
+    (note) => note.scope === "workspace" || note.channelId === null || note.channelId === channelId,
+  );
+  return { ...envelope, context, notes };
 }
 
 /** Returns true when the event indicates the workspace resource manifest may have changed. */

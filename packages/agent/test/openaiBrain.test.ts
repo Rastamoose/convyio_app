@@ -97,7 +97,7 @@ describe("OpenAIBrain", () => {
                   index: 0,
                   id: "call-1",
                   type: "function",
-                  function: { name: "board_propose", arguments: JSON.stringify({ title: "Ship it" }) },
+                  function: { name: "todo_write", arguments: JSON.stringify({ title: "Ship it" }) },
                 }],
               },
             }],
@@ -124,7 +124,7 @@ describe("OpenAIBrain", () => {
         context: "ctx",
         prompt: "hi",
         tools: [{
-          name: "board_propose",
+          name: "todo_write",
           description: "Propose",
           parameters: { type: "object", properties: { title: { type: "string" } } },
         }],

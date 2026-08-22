@@ -51,10 +51,26 @@ function Chevron({ expanded }: { expanded: boolean }) {
   );
 }
 
+/**
+ * Providers stream at different granularities — some brains deliver whole
+ * sentences per delta, others (e.g. raw OpenAI token streaming) deliver a
+ * word or less. Merge consecutive same-kind chunks into one paragraph so the
+ * trace reads the same regardless of how finely the source brain streamed it.
+ */
+function mergeChunks(chunks: TraceChunk[]): TraceChunk[] {
+  const merged: TraceChunk[] = [];
+  for (const chunk of chunks) {
+    const last = merged[merged.length - 1];
+    if (last && last.kind === chunk.kind) last.content += chunk.content;
+    else merged.push({ ...chunk });
+  }
+  return merged;
+}
+
 function TraceBody({ chunks }: { chunks: TraceChunk[] }) {
   return (
     <div className="space-y-1 pl-[52px]">
-      {chunks.map((chunk, i) => (
+      {mergeChunks(chunks).map((chunk, i) => (
         <div
           key={i}
           className={`text-sm ${chunk.kind === "thought" ? "italic text-muted" : "text-body"}`}

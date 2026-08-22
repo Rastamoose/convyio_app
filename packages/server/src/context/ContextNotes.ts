@@ -12,11 +12,15 @@ export class ContextNotes {
     private events: ThreadEventStore,
   ) {}
 
-  async create(actor: Actor, input: { scope: ContextNoteScope; agentId?: string | null; body: string }): Promise<ContextNote> {
+  async create(
+    actor: Actor,
+    input: { scope: ContextNoteScope; agentId?: string | null; channelId?: string | null; body: string },
+  ): Promise<ContextNote> {
     const body = input.body.trim();
     if (!body) throw new ApiError(400, "BODY_REQUIRED", "note body is required");
     if (body.length > 4000) throw new ApiError(400, "BODY_TOO_LONG", "note exceeds 4000 characters");
     const agentId = input.scope === "agent" ? input.agentId ?? actor.id : null;
+    const channelId = input.scope === "agent" ? input.channelId ?? null : null;
     if (input.scope === "workspace" && actor.kind !== "human") {
       throw new ApiError(403, "HUMAN_ONLY", "only humans can publish workspace guidance");
     }
@@ -32,9 +36,9 @@ export class ContextNotes {
     const result = await this.store.transaction(async (sql) => {
       const [row] = await sql<NoteRow[]>`
         INSERT INTO context_notes (
-          id, workspace_id, scope, agent_id, body, created_by, created_at, superseded_by
+          id, workspace_id, scope, agent_id, channel_id, body, created_by, created_at, superseded_by
         ) VALUES (
-          ${id}, ${this.store.workspaceId}, ${input.scope}, ${agentId}, ${body}, ${actor.id}, ${now}, NULL
+          ${id}, ${this.store.workspaceId}, ${input.scope}, ${agentId}, ${channelId}, ${body}, ${actor.id}, ${now}, NULL
         )
         RETURNING *
       `;
@@ -52,18 +56,27 @@ export class ContextNotes {
     return result.note;
   }
 
-  async listFor(actor: Actor): Promise<ContextNote[]> {
-    return actor.kind === "agent" ? this.listForAgent(actor.id) : this.listAll();
+  async listFor(actor: Actor, channelId?: string | null): Promise<ContextNote[]> {
+    return actor.kind === "agent" ? this.listForAgent(actor.id, channelId) : this.listAll();
   }
 
-  async listForAgent(agentId: string): Promise<ContextNote[]> {
+  /**
+   * A note-to-self written while working a channel is about that channel's
+   * task, not general knowledge — so it should only resurface there. Notes
+   * saved with no channel in scope (channelId null) count as general and
+   * show up everywhere, same as before this distinction existed.
+   */
+  async listForAgent(agentId: string, channelId?: string | null): Promise<ContextNote[]> {
     const rows = await this.store.sql<NamedNoteRow[]>`
       SELECT n.*, author.display_name AS created_by_name
       FROM context_notes n
       JOIN actors author ON author.id = n.created_by
       WHERE n.workspace_id = ${this.store.workspaceId}
         AND n.superseded_by IS NULL
-        AND (n.scope = 'workspace' OR (n.scope = 'agent' AND n.agent_id = ${agentId}))
+        AND (
+          n.scope = 'workspace'
+          OR (n.scope = 'agent' AND n.agent_id = ${agentId} AND (n.channel_id IS NULL OR n.channel_id = ${channelId ?? null}))
+        )
       ORDER BY n.created_at ASC
     `;
     return rows.map((row) => toNote(row, row.created_by_name));
@@ -86,6 +99,7 @@ interface NoteRow {
   workspace_id: string;
   scope: ContextNoteScope;
   agent_id: string | null;
+  channel_id: string | null;
   body: string;
   created_by: string;
   created_at: number;
@@ -102,6 +116,7 @@ function toNote(row: NoteRow, createdByName?: string): ContextNote {
     workspaceId: row.workspace_id,
     scope: row.scope,
     agentId: row.agent_id,
+    channelId: row.channel_id,
     body: row.body,
     createdBy: row.created_by,
     ...(createdByName ? { createdByName } : {}),

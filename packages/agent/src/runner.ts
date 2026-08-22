@@ -265,7 +265,7 @@ export class AgentRunner {
       }
     };
 
-    await (this.board as { refreshEnvelope?: () => Promise<unknown> }).refreshEnvelope?.();
+    await (this.board as { refreshEnvelope?: (channelId?: string | null) => Promise<unknown> }).refreshEnvelope?.(channelId);
     try {
       await (this.board as { refreshManifest?: () => Promise<unknown> }).refreshManifest?.();
     } catch (err) {
@@ -275,15 +275,8 @@ export class AgentRunner {
       );
     }
     const executeTool = withContextBudget(createToolExecutor(this.board, {
-      onProposed: () => {},
-      onTaskActive: (item) => {
-        if (this.activeTask?.id === item.id) return;
-        this.activeTask = item;
-        this.presence.working(`Working on ${item.ref}…`, item.id);
-      },
       onActivity: (line) => onBrainEvent({ type: "thought.delta", text: `[toolman] ${line}` }),
       conversationId,
-      channel,
       channelId,
     }));
 

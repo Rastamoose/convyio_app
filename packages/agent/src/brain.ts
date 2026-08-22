@@ -80,7 +80,7 @@ export function summarizedToolOutput(value: unknown): JsonValue {
 }
 
 export function isPlanTool(name: string): boolean {
-  return /(?:^|__|_)(?:todo(?:write)?|plan)(?:$|_)/i.test(name) || /board_propose$/i.test(name);
+  return /(?:^|__|_)(?:todo(?:write)?|plan)(?:$|_)/i.test(name);
 }
 
 function boundedValue(value: unknown, includeStrings: boolean, depth: number): JsonValue {

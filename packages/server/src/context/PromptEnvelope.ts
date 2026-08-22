@@ -43,10 +43,14 @@ export class PromptEnvelopeBuilder {
     return this.policy;
   }
 
-  async build(actor: Actor, permissionMode: PermissionMode = "default"): Promise<PromptEnvelope> {
+  async build(
+    actor: Actor,
+    permissionMode: PermissionMode = "default",
+    channelId?: string | null,
+  ): Promise<PromptEnvelope> {
     const [snapshot, notes] = await Promise.all([
       this.snapshot.buildFor(actor, this.resourceAccess),
-      actor.kind === "agent" && this.notes ? this.notes.listForAgent(actor.id) : Promise.resolve([]),
+      actor.kind === "agent" && this.notes ? this.notes.listForAgent(actor.id, channelId) : Promise.resolve([]),
     ]);
     return {
       generatedAt: Date.now(),

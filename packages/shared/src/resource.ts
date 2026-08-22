@@ -21,6 +21,8 @@ export interface ContextNote {
   workspaceId: string;
   scope: ContextNoteScope;
   agentId: string | null;
+  /** Channel the note was written in; null means it applies to every channel this agent works in. */
+  channelId: string | null;
   body: string;
   createdBy: string;
   createdByName?: string;
