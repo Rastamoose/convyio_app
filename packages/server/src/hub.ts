@@ -57,6 +57,7 @@ import type { Roster } from "./roster";
 import type { Sessions } from "./board/sessions";
 import type { BoardService } from "./board/BoardService";
 import type { ProjectAction } from "@workspace/shared";
+import { isProjectAction } from "@workspace/shared";
 import type { Toolman, ToolmanResult } from "./board/Toolman";
 import type { GitRepositories } from "./projects/GitRepositories";
 import type { ProjectStore } from "./projects/ProjectStore";

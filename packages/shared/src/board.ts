@@ -196,6 +196,10 @@ export type ToolmanAction =
   | { kind: "search_files"; query: string; path?: string }
   | ProjectAction;
 
+export function isProjectAction(action: ToolmanAction): action is ProjectAction {
+  return action.kind.startsWith("project_");
+}
+
 /**
  * Which capability each action class consumes. Absent from this map = mutating
  * and ungrantable, so new tools fail closed until they are classified.

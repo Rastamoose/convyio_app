@@ -308,15 +308,12 @@ function StatusRow({
   approvalCount,
   onSelect,
   onContextMenu,
-  rowRef,
 }: {
   participant: Participant;
   /** Requests attributed to this agent (permission, resource, project) still waiting on a human. */
   approvalCount: number;
   onSelect: (participant: Participant, anchor: DOMRect) => void;
   onContextMenu: (participant: Participant, e: React.MouseEvent) => void;
-  /** Lets the parent grab this row's rect to auto-pop the card without a click. */
-  rowRef?: (el: HTMLDivElement | null) => void;
 }) {
   const isAgent = participant.kind === "agent";
   const working = isAgent && participant.runState === "working";
@@ -326,7 +323,6 @@ function StatusRow({
   const needsApproval = isAgent && approvalCount > 0;
   return (
     <div
-      ref={rowRef}
       className={`flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 select-none hover:bg-input ${
         offline ? "opacity-40 hover:opacity-100" : ""
       }`}
@@ -585,24 +581,6 @@ export function Sidebar({
   const online = participants.filter((p) => p.online).sort(byName);
   const offline = participants.filter((p) => !p.online).sort(byName);
 
-  // Auto-pop the card the moment an agent's approval count rises above what
-  // it was last render — the sidebar badge alone is easy to miss, and the
-  // user asked for it to "pop out" rather than stay a passive flash.
-  const rowRefs = useRef(new Map<string, HTMLDivElement>());
-  const prevApprovalCounts = useRef(new Map<string, number>());
-  useEffect(() => {
-    for (const p of participants) {
-      if (p.kind !== "agent") continue;
-      const count = approvalCountFor(p.id);
-      const prev = prevApprovalCounts.current.get(p.id) ?? 0;
-      prevApprovalCounts.current.set(p.id, count);
-      if (count > prev) {
-        const el = rowRefs.current.get(p.id);
-        if (el) setSelected({ participantId: p.id, anchor: el.getBoundingClientRect() });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingInteractions, pendingResourceAccessRequests, pendingProjectAccessRequests]);
   const selectedMember = selected
     ? (participants.find((p) => p.id === selected.participantId) ?? null)
     : null;
@@ -722,10 +700,6 @@ export function Sidebar({
             approvalCount={approvalCountFor(p.id)}
             onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
             onContextMenu={openMemberMenu}
-            rowRef={(el) => {
-              if (el) rowRefs.current.set(p.id, el);
-              else rowRefs.current.delete(p.id);
-            }}
           />
         ))}
         {offline.length > 0 && (
@@ -740,10 +714,6 @@ export function Sidebar({
                 approvalCount={approvalCountFor(p.id)}
                 onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
                 onContextMenu={openMemberMenu}
-                rowRef={(el) => {
-                  if (el) rowRefs.current.set(p.id, el);
-                  else rowRefs.current.delete(p.id);
-                }}
               />
             ))}
           </>

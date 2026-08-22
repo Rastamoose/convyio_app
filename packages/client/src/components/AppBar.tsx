@@ -3,16 +3,16 @@ import type { WorkspaceSummary } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
 import { ChevronIcon } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { PendingApprovalsButton } from "./PendingApprovalsButton";
 
 export type WorkspaceView = "chat" | "board" | "projects" | "resources";
 
 /**
  * The app-level strip on the canvas above the content panel: brand on the
- * left, the view switch dead-center, demo playback + theme on the right.
- * Chrome that operates on the app lives here; the panel's own header
- * (PanelHeader) carries only the room name and the sidebar toggle — each
- * control exists in exactly one place. Pending approvals live on the
- * requesting agent's profile in the sidebar, not here.
+ * left, the view switch dead-center, demo playback + approvals + theme on
+ * the right. Chrome that operates on the app lives here; the panel's own
+ * header (PanelHeader) carries only the room name and the sidebar toggle —
+ * each control exists in exactly one place.
  */
 export function AppBar({
   view,
@@ -158,6 +158,7 @@ export function AppBar({
             Run demo
           </button>
         )}
+        <PendingApprovalsButton />
         <ThemeToggle />
       </div>
     </header>

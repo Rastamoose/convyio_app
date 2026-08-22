@@ -8,6 +8,13 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     workspace: { id: "ws-1", name: "test" },
     demoChannels: [],
     startDemo: vi.fn(),
+    participants: [],
+    pendingInteractions: [],
+    resolveInteraction: vi.fn(),
+    pendingResourceAccessRequests: [],
+    resolveResourceAccessRequest: vi.fn(),
+    pendingProjectAccessRequests: [],
+    resolveProjectAccessRequest: vi.fn(),
   }),
 }));
 
