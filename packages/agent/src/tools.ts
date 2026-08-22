@@ -9,117 +9,14 @@ import type {
 import type { ToolDeclaration, ToolExecutor } from "./brain";
 import type { BoardClient } from "./boardClient";
 
+// The board (board_list/board_propose*/board_start/board_complete/board_block) is
+// intentionally not declared here — agents no longer see it at all. Every mutating
+// action below omits board_item_ref, which the server already treats as a request
+// for a normal human chat-grant approval (see Toolman.authorizeMutation's chatGrant
+// branch) rather than requiring an approved board ticket. The board's own
+// implementation (BoardService, board/api.ts, the Board tab) is untouched — humans
+// can still use it — agents just have no tool that references it.
 export const TOOL_DECLARATIONS: ToolDeclaration[] = [
-  {
-    name: "board_list",
-    description: "List the current board items with their refs and statuses.",
-    parameters: { type: "object", properties: {} },
-  },
-  {
-    name: "board_propose_plan",
-    description:
-      "Propose a read-only megaplan: objective, outline, impact map and at least one clarification. " +
-      "Acceptance does not authorize mutations. After proposing, wait for a human to accept it.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Short plan title" },
-        objective: { type: "string", description: "What done looks like" },
-        outline: { type: "array", items: { type: "string" }, description: "Ordered high-level steps" },
-        clarifications: {
-          type: "array",
-          items: { type: "string" },
-          description: "At least one clarifying question you asked, and the answer",
-        },
-        constraints: {
-          type: "array",
-          items: { type: "string" },
-          description: "Known constraints that must remain true",
-        },
-        assumed_owner_id: { type: "string", description: "Proposed owner actor id" },
-        assumed_project_id: { type: "string", description: "Likely project or resource id" },
-      },
-      required: ["title", "objective", "outline", "clarifications"],
-    },
-  },
-  {
-    name: "board_propose",
-    description:
-      "Propose a new board item when needed work is not covered by any approved item. " +
-      "Propose scopes, not steps. A human must approve it before the work can happen; " +
-      "after proposing, tell the team briefly and either continue on another approved item or stop.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "What you want to add/change (one short line)" },
-        why: { type: "string", description: "Why this is needed (one line)" },
-        effect: { type: "string", description: "Expected effect once done (one line)" },
-        plan_id: { type: "string", description: "Accepted plan this ticket belongs to, e.g. plan-1" },
-        owner: { type: "string", description: "Actor id that will own the work" },
-        acceptance_criteria: {
-          type: "array",
-          items: { type: "string" },
-          description: "How we will know this ticket is done",
-        },
-        project_id: { type: "string", description: "Project this ticket authorizes, when the work is in a mounted project" },
-        scope_paths: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "Workspace-relative paths the work will touch. An entry ending in \"/\" grants " +
-            "that directory subtree; otherwise exactly that file. Approval authorizes only " +
-            "this scope — mutations outside it are refused. Paths are relative to the project root when project_id is set.",
-        },
-        capabilities: {
-          type: "array",
-          items: { type: "string", enum: ["file_write", "shell_repo", "network"] },
-          description:
-            "What the work needs to do. Omit for plain file edits (the default). " +
-            "Ask for shell_repo only if you must run commands — it is coarse, since a " +
-            "command's writes cannot be bounded by scope_paths — and network only if " +
-            "the work installs packages or reaches outside the machine.",
-        },
-      },
-      required: ["title", "why", "effect", "scope_paths", "plan_id", "acceptance_criteria"],
-    },
-  },
-  {
-    name: "board_start",
-    description: "Mark an approved board item as in_progress before working on it.",
-    parameters: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "Board item ref, e.g. task-3" },
-      },
-      required: ["ref"],
-    },
-  },
-  {
-    name: "board_complete",
-    description: "Mark a board item's work as done once it is finished.",
-    parameters: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "Board item ref, e.g. task-3" },
-        evidence: { type: "string", description: "How the acceptance criteria were verified" },
-      },
-      required: ["ref", "evidence"],
-    },
-  },
-  {
-    name: "board_block",
-    description:
-      "Mark an in_progress board item as blocked while you wait on a human " +
-      "(e.g. an open question or an approval on another proposal).",
-    parameters: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "Board item ref, e.g. task-3" },
-        reason: { type: "string", description: "What you are waiting on" },
-      },
-      required: ["ref", "reason"],
-    },
-  },
   {
     name: "read_file",
     description: "Read a file from the shared workspace. Read-only; needs no board item.",
@@ -156,46 +53,37 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "write_file",
-    description:
-      "Write a file in the shared workspace. Mutating: requires board_item_ref for an " +
-      "approved or in_progress board item, or the toolman will refuse.",
+    description: "Write a file in the shared workspace. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path relative to the workspace root" },
         content: { type: "string", description: "Full file content to write" },
-        board_item_ref: { type: "string", description: "Backing board item ref, e.g. task-3" },
       },
-      required: ["path", "content", "board_item_ref"],
+      required: ["path", "content"],
     },
   },
   {
     name: "append_file",
-    description:
-      "Append to a file in the shared workspace. Mutating: requires board_item_ref for an " +
-      "approved or in_progress board item, or the toolman will refuse.",
+    description: "Append to a file in the shared workspace. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path relative to the workspace root" },
         content: { type: "string", description: "Content to append" },
-        board_item_ref: { type: "string", description: "Backing board item ref, e.g. task-3" },
       },
-      required: ["path", "content", "board_item_ref"],
+      required: ["path", "content"],
     },
   },
   {
     name: "run_shell",
-    description:
-      "Run a shell command in the workspace root (tests, builds, git). Mutating: requires " +
-      "board_item_ref for an item that grants the shell_repo capability, or it will be refused.",
+    description: "Run a shell command in the workspace root (tests, builds, git). Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         command: { type: "string", description: "Command line to run via sh -c" },
-        board_item_ref: { type: "string", description: "Backing board item ref, e.g. task-3" },
       },
-      required: ["command", "board_item_ref"],
+      required: ["command"],
     },
   },
   {
@@ -325,21 +213,20 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: "project_write_file",
-    description: "Write a text file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit so the server can request the required human grant.",
+    description: "Write a text file in an assigned folder. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         path: { type: "string" },
         content: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "path", "content"],
     },
   },
   {
     name: "project_edit_file",
-    description: "Replace one exact string in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
+    description: "Replace one exact string in an assigned folder. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
@@ -347,34 +234,31 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         path: { type: "string" },
         old_string: { type: "string" },
         new_string: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "path", "old_string", "new_string"],
     },
   },
   {
     name: "project_delete_file",
-    description: "Delete one file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
+    description: "Delete one file in an assigned folder. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         path: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "path"],
     },
   },
   {
     name: "project_move_file",
-    description: "Move or rename one file in an assigned folder. Include board_item_ref for ticket work; omit it for a bounded chat edit.",
+    description: "Move or rename one file in an assigned folder. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         from: { type: "string" },
         to: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "from", "to"],
     },
@@ -382,14 +266,13 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: "project_run_command",
     description:
-      "Run a non-interactive command in the assigned project checkout. Include board_item_ref for ticket work; " +
-      "omit it for a bounded chat action that may request approval. This is not an OS sandbox.",
+      "Run a non-interactive command in the assigned project checkout. Mutating: a human will be asked to " +
+      "approve it. This is not an OS sandbox.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         command: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "command"],
     },
@@ -405,39 +288,36 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   ...["fetch", "pull", "push"].map((operation): ToolDeclaration => ({
     name: `project_git_${operation}`,
-    description: `${operation} the assigned Git project. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.`,
+    description: `${operation} the assigned Git project. Mutating: a human will be asked to approve it.`,
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id"],
     },
   })),
   {
     name: "project_git_branch",
-    description: "Create and publish a branch in an assigned Git project. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.",
+    description: "Create and publish a branch in an assigned Git project. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         name: { type: "string" },
         start_point: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "name"],
     },
   },
   {
     name: "project_git_commit",
-    description: "Commit all approved working-tree changes as the current agent. Include board_item_ref for ticket work; omit it for a bounded chat action that may request approval.",
+    description: "Commit all approved working-tree changes as the current agent. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
         project_id: { type: "string" },
         message: { type: "string" },
-        board_item_ref: { type: "string" },
       },
       required: ["project_id", "message"],
     },

@@ -55,6 +55,10 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     removeMember,
     pendingInteractions: [],
     resolveInteraction: vi.fn(),
+    pendingResourceAccessRequests: [],
+    resolveResourceAccessRequest: vi.fn(),
+    pendingProjectAccessRequests: [],
+    resolveProjectAccessRequest: vi.fn(),
     setPermissionMode: vi.fn(),
   }),
 }));

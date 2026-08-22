@@ -305,10 +305,13 @@ function PresenceDot({ participant }: { participant: Participant }) {
 
 function StatusRow({
   participant,
+  approvalCount,
   onSelect,
   onContextMenu,
 }: {
   participant: Participant;
+  /** Requests attributed to this agent (permission, resource, project) still waiting on a human. */
+  approvalCount: number;
   onSelect: (participant: Participant, anchor: DOMRect) => void;
   onContextMenu: (participant: Participant, e: React.MouseEvent) => void;
 }) {
@@ -317,6 +320,7 @@ function StatusRow({
   const blocked = isAgent && participant.runState === "blocked";
   const dead = isAgent && participant.runState === "dead";
   const offline = !participant.online;
+  const needsApproval = isAgent && approvalCount > 0;
   return (
     <div
       className={`flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 select-none hover:bg-input ${
@@ -329,6 +333,15 @@ function StatusRow({
       <div className="relative">
         <Avatar name={participant.name} size={32} grayscale={offline} mascot={participant.managedAgent === "noodle"} />
         <PresenceDot participant={participant} />
+        {needsApproval && (
+          <span
+            title={`${approvalCount} awaiting your approval`}
+            className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full border-2 border-canvas bg-accent"
+          >
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+            <span className="relative text-[9px] leading-none font-bold text-on-accent">!</span>
+          </span>
+        )}
       </div>
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-body">
@@ -337,19 +350,23 @@ function StatusRow({
         </div>
         <div
           className={`truncate text-xs ${
-            working
-              ? "font-medium text-working"
-              : blocked || dead
-                ? "font-medium text-dead"
-                : "text-muted"
+            needsApproval
+              ? "font-bold text-accent"
+              : working
+                ? "font-medium text-working"
+                : blocked || dead
+                  ? "font-medium text-dead"
+                  : "text-muted"
           }`}
         >
           {dead
             ? `Dead${participant.status ? ` — ${participant.status}` : ""}`
-            : blocked
-              ? participant.status || "Blocked — waiting on a human"
-              : participant.status ||
-                (participant.online ? "Online" : "Offline")}
+            : needsApproval
+              ? `Needs your approval${approvalCount > 1 ? ` (${approvalCount})` : ""}`
+              : blocked
+                ? participant.status || "Blocked — waiting on a human"
+                : participant.status ||
+                  (participant.online ? "Online" : "Offline")}
         </div>
       </div>
     </div>
@@ -395,7 +412,14 @@ export function Sidebar({
     agentInvites,
     revokeAgent,
     removeMember,
+    pendingInteractions,
+    pendingResourceAccessRequests,
+    pendingProjectAccessRequests,
   } = useWorkspace();
+  const approvalCountFor = (agentId: string) =>
+    pendingInteractions.filter((r) => r.agentId === agentId).length +
+    pendingResourceAccessRequests.filter((r) => r.agentId === agentId).length +
+    pendingProjectAccessRequests.filter((r) => r.agentId === agentId).length;
   const [editingStatus, setEditingStatus] = useState(false);
   const [statusDraft, setStatusDraft] = useState("");
   const [selected, setSelected] = useState<{
@@ -672,6 +696,7 @@ export function Sidebar({
           <StatusRow
             key={p.id}
             participant={p}
+            approvalCount={approvalCountFor(p.id)}
             onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
             onContextMenu={openMemberMenu}
           />
@@ -685,6 +710,7 @@ export function Sidebar({
               <StatusRow
                 key={p.id}
                 participant={p}
+                approvalCount={approvalCountFor(p.id)}
                 onSelect={(m, anchor) => setSelected({ participantId: m.id, anchor })}
                 onContextMenu={openMemberMenu}
               />

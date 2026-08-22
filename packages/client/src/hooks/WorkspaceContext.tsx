@@ -5,6 +5,7 @@ import type {
   AgentInvite,
   AgentProvider,
   AgentResourceAccessRequest,
+  ProjectAccessRequest,
   AgentSummary,
   Attachment,
   ChannelInfo,
@@ -62,6 +63,9 @@ export interface WorkspaceState {
   /** Channel/project/workspace file access requests from agents that a human can approve or deny. */
   pendingResourceAccessRequests: AgentResourceAccessRequest[];
   resolveResourceAccessRequest: (requestId: string, decision: "approved" | "denied") => Promise<boolean>;
+  /** Git/local project access requests — a separate legacy system from resource access, same "waiting on you" bucket. */
+  pendingProjectAccessRequests: ProjectAccessRequest[];
+  resolveProjectAccessRequest: (requestId: string, decision: "approved" | "denied") => Promise<boolean>;
   setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
   board: BoardItem[];
   plans: BoardPlan[];
@@ -201,6 +205,7 @@ export function WorkspaceProvider({
   const [demoProgress, setDemoProgress] = useState<DemoProgressState | null>(null);
   const interactions = useInteractions();
   const [resourceAccessRequests, setResourceAccessRequests] = useState<AgentResourceAccessRequest[]>([]);
+  const [projectAccessRequests, setProjectAccessRequests] = useState<ProjectAccessRequest[]>([]);
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
@@ -259,7 +264,7 @@ export function WorkspaceProvider({
         typing.onTyping(event);
         break;
       case "trace_start":
-        traces.startRun(event.runId, event.agentId, event.agentName, event.timestamp);
+        traces.startRun(event.runId, event.agentId, event.agentName, event.channelId, event.timestamp);
         break;
       case "trace_chunk":
         traces.appendChunk(event.runId, event.chunk);
@@ -296,6 +301,13 @@ export function WorkspaceProvider({
           const payload = event.event.payload as { requestId: string } | undefined;
           if (payload) {
             setResourceAccessRequests((prev) => prev.filter((r) => r.id !== payload.requestId));
+          }
+        } else if (event.event.kind === "project.access.requested") {
+          if (connection.self?.kind === "human") void refreshProjectAccessRequests();
+        } else if (event.event.kind === "project.access.resolved") {
+          const payload = event.event.payload as { requestId: string } | undefined;
+          if (payload) {
+            setProjectAccessRequests((prev) => prev.filter((r) => r.id !== payload.requestId));
           }
         }
         break;
@@ -370,10 +382,49 @@ export function WorkspaceProvider({
     }
   };
 
+  const refreshProjectAccessRequests = async (): Promise<void> => {
+    const request = api.fetch("/api/project-access-requests");
+    if (!request) return;
+    try {
+      const res = await request;
+      if (!res.ok) return;
+      const data = (await res.json()) as { requests: ProjectAccessRequest[] };
+      setProjectAccessRequests(data.requests);
+    } catch (err) {
+      console.warn("[workspace] failed to load project access requests:", err);
+    }
+  };
+
+  const resolveProjectAccessRequest = async (requestId: string, decision: "approved" | "denied"): Promise<boolean> => {
+    setProjectAccessRequests((prev) => prev.filter((r) => r.id !== requestId));
+    const request = api.fetch(`/api/project-access-requests/${encodeURIComponent(requestId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+    if (!request) return false;
+    try {
+      const res = await request;
+      if (!res.ok) {
+        pushToast(`Could not ${decision} access request: ${await api.errorMessage(res)}`);
+        await refreshProjectAccessRequests();
+        return false;
+      }
+      await refreshProjectAccessRequests();
+      return true;
+    } catch (err) {
+      pushToast(`Could not ${decision} access request: ${String(err)}`);
+      await refreshProjectAccessRequests();
+      return false;
+    }
+  };
+
   useEffect(() => {
     if (!connection.self) return;
     void refreshAgents();
-    if (connection.self.kind === "human") void refreshResourceAccessRequests();
+    if (connection.self.kind === "human") {
+      void refreshResourceAccessRequests();
+      void refreshProjectAccessRequests();
+    }
   }, [connection.self]);
 
   const typing = useTyping(connection.self?.id, (channel) =>
@@ -730,6 +781,8 @@ export function WorkspaceProvider({
       connection.send({ type: "interaction_resolve", requestId, decision }),
     pendingResourceAccessRequests: resourceAccessRequests,
     resolveResourceAccessRequest,
+    pendingProjectAccessRequests: projectAccessRequests,
+    resolveProjectAccessRequest,
     setPermissionMode: (agentId, channel, mode) =>
       connection.send({ type: "conversation_mode_set", agentId, channel, mode }),
     setStatus: (status) => connection.send({ type: "status_set", status }),

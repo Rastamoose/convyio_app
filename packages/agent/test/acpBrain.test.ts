@@ -252,7 +252,7 @@ describe("ACP read-only client security", () => {
       assert.deepEqual(await decision({ toolCallId: kind, kind }), { outcome: { outcome: "selected", optionId: "allow" } });
     }
     assert.deepEqual(
-      await decision({ toolCallId: "board", kind: "other", name: "mcp__convyio-toolman__board_propose_plan" }),
+      await decision({ toolCallId: "declared", kind: "other", name: "mcp__convyio-toolman__project_write_file" }),
       { outcome: { outcome: "selected", optionId: "allow" } },
     );
     assert.deepEqual(

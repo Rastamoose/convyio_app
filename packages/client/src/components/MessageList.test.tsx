@@ -98,7 +98,7 @@ const proposal = (overrides: Partial<BoardItem> = {}): BoardItem => ({
 const interaction = (overrides: Partial<InteractionRequest> = {}): InteractionRequest => ({
   id: "req-1",
   workspaceId: "srv-1",
-  channelId: "general",
+  channelId: "ch-general",
   agentId: "agent-1",
   conversationId: null,
   summary: "write_file billing/round.ts",

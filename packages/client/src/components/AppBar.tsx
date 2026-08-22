@@ -8,15 +8,15 @@ export type WorkspaceView = "chat" | "board" | "projects" | "resources";
 
 /**
  * The app-level strip on the canvas above the content panel: brand on the
- * left, the view switch dead-center, demo playback + the pending-approval
- * signal + theme on the right. Chrome that operates on the app lives here;
- * the panel's own header (PanelHeader) carries only the room name and the
- * sidebar toggle — each control exists in exactly one place.
+ * left, the view switch dead-center, demo playback + theme on the right.
+ * Chrome that operates on the app lives here; the panel's own header
+ * (PanelHeader) carries only the room name and the sidebar toggle — each
+ * control exists in exactly one place. Pending approvals live on the
+ * requesting agent's profile in the sidebar, not here.
  */
 export function AppBar({
   view,
   onSetView,
-  onToggleQueue,
   channel,
   activeWorkspace,
   workspaces = [],
@@ -26,7 +26,6 @@ export function AppBar({
 }: {
   view: WorkspaceView;
   onSetView: (view: WorkspaceView) => void;
-  onToggleQueue: () => void;
   channel: string;
   activeWorkspace?: WorkspaceSummary;
   workspaces?: WorkspaceSummary[];
@@ -34,11 +33,9 @@ export function AppBar({
   onOpenLobby?: () => void;
   onOpenSettings?: () => void;
 }) {
-  const { workspace, board, pendingInteractions, pendingResourceAccessRequests, demoChannels, startDemo } = useWorkspace();
+  const { workspace, demoChannels, startDemo } = useWorkspace();
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
-  const pendingCount =
-    board.filter((i) => i.status === "proposed").length + pendingInteractions.length + pendingResourceAccessRequests.length;
 
   useEffect(() => {
     if (!workspaceMenuOpen) return;
@@ -159,19 +156,6 @@ export function AppBar({
               <path d="M8 5v14l11-7z" />
             </svg>
             Run demo
-          </button>
-        )}
-        {pendingCount > 0 && (
-          <button
-            onClick={onToggleQueue}
-            aria-label={`Review ${pendingCount} pending approvals`}
-            className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent/15 px-2.5 py-1 text-sm font-bold text-accent transition select-none hover:bg-accent/25"
-          >
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
-            </span>
-            {pendingCount} waiting
           </button>
         )}
         <ThemeToggle />

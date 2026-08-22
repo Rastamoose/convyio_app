@@ -11,7 +11,6 @@ import { MessageInput, type Prefill } from "./components/MessageInput";
 import { BoardView } from "./components/BoardView";
 import { ResourcesView } from "./components/ResourcesView";
 import { GitProjectsView } from "./components/GitProjectsView";
-import { ApprovalQueue } from "./components/ApprovalQueue";
 import { PanelHeader } from "./components/PanelHeader";
 import { StatusBar } from "./components/StatusBar";
 import { QuickSwitcher } from "./components/QuickSwitcher";
@@ -622,7 +621,6 @@ function Workspace({
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
@@ -779,7 +777,6 @@ function Workspace({
       <AppBar
         view={view}
         onSetView={setView}
-        onToggleQueue={() => setQueueOpen((o) => !o)}
         channel={channel}
         activeWorkspace={activeWorkspace}
         workspaces={workspaces}
@@ -859,20 +856,6 @@ function Workspace({
         </main>
       </div>
       <StatusBar channel={channel} view={view} />
-      {queueOpen && (
-        <ApprovalQueue
-          items={workspace.board.filter((i) => i.status === "proposed")}
-          interactions={workspace.pendingInteractions}
-          resourceAccessRequests={workspace.pendingResourceAccessRequests}
-          onResolveInteraction={workspace.resolveInteraction}
-          onResolveResourceAccess={workspace.resolveResourceAccessRequest}
-          onDiscuss={(item) => {
-            setQueueOpen(false);
-            discussItem(item);
-          }}
-          onClose={() => setQueueOpen(false)}
-        />
-      )}
       {!workspace.connected && (
         <div
           role="status"

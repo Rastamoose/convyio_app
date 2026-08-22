@@ -9,11 +9,11 @@ describe("LocalMcpBridge", () => {
   const bridge = new LocalMcpBridge();
   after(() => bridge.close());
 
-  test("exposes board tools over Streamable HTTP MCP and executes them", async () => {
+  test("exposes project tools over Streamable HTTP MCP and executes them", async () => {
     const calls: { name: string; args: Record<string, unknown> }[] = [];
     bridge.setExecutor(async (name, args) => {
       calls.push({ name, args });
-      return { ref: "plan-1", status: "proposed" };
+      return { done: "wrote 5 bytes to notes.txt" };
     });
     const { url, token } = await bridge.listen(TOOL_DECLARATIONS);
     const client = new Client({ name: "mcp-bridge-test", version: "0.1.0" });
@@ -23,30 +23,28 @@ describe("LocalMcpBridge", () => {
     await client.connect(transport);
     try {
       const listed = await client.listTools();
-      assert.ok(listed.tools.some((tool) => tool.name === "board_propose_plan"));
+      assert.ok(listed.tools.some((tool) => tool.name === "project_write_file"));
       assert.ok(listed.tools.some((tool) => tool.name === "project_list"));
       const result = await client.callTool({
-        name: "board_propose_plan",
+        name: "project_write_file",
         arguments: {
-          title: "Align totals",
-          objective: "Invoice and ledger agree",
-          outline: ["Inspect both files"],
-          clarifications: ["Asked whether ledger may change"],
+          project_id: "proj-1",
+          path: "notes.txt",
+          content: "hello",
         },
       });
       assert.deepEqual(calls, [{
-        name: "board_propose_plan",
+        name: "project_write_file",
         args: {
-          title: "Align totals",
-          objective: "Invoice and ledger agree",
-          outline: ["Inspect both files"],
-          clarifications: ["Asked whether ledger may change"],
+          project_id: "proj-1",
+          path: "notes.txt",
+          content: "hello",
         },
       }]);
       const content = result.content as Array<{ type: string; text?: string }>;
       const text = content.find((part) => part.type === "text");
       assert.ok(text?.text);
-      assert.deepEqual(JSON.parse(text.text), { ref: "plan-1", status: "proposed" });
+      assert.deepEqual(JSON.parse(text.text), { done: "wrote 5 bytes to notes.txt" });
     } finally {
       await client.close();
     }

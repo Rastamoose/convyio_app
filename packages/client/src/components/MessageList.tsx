@@ -687,11 +687,19 @@ export function MessageList({
       ),
     [board, channel],
   );
-  const orphanInteractions = useMemo(() => {
-    const liveAgents = new Set(activeRuns.map((run) => run.agentId));
-    return pendingInteractions.filter((request) => !liveAgents.has(request.agentId));
-  }, [pendingInteractions, activeRuns]);
   const channelId = channelInfos.find((info) => info.name === channel)?.id ?? channel;
+  const channelRuns = useMemo(
+    () => activeRuns.filter((run) => run.channelId === channelId),
+    [activeRuns, channelId],
+  );
+  const channelInteractions = useMemo(
+    () => pendingInteractions.filter((request) => request.channelId === channelId),
+    [pendingInteractions, channelId],
+  );
+  const orphanInteractions = useMemo(() => {
+    const liveAgents = new Set(channelRuns.map((run) => run.agentId));
+    return channelInteractions.filter((request) => !liveAgents.has(request.agentId));
+  }, [channelInteractions, channelRuns]);
   const channelResourceRequests = useMemo(
     () =>
       pendingResourceAccessRequests.filter(
@@ -704,7 +712,7 @@ export function MessageList({
     const entries: TimelineEntry[] = [
       ...layout(messages).map((r) => ({ kind: "message" as const, ...r })),
       ...boardLines.map((line) => ({ kind: "board" as const, line })),
-      ...activeRuns.map((run) => ({ kind: "trace" as const, run })),
+      ...channelRuns.map((run) => ({ kind: "trace" as const, run })),
       ...channelPlans.map((plan) => ({ kind: "plan" as const, plan })),
       ...proposedItems.map((item) => ({ kind: "proposal" as const, item })),
       ...completedItems.map((item) => ({ kind: "result" as const, item })),
@@ -736,7 +744,7 @@ export function MessageList({
       withRequests.splice(insertAt, 0, { kind: "resource_request", request });
     }
     return withRequests;
-  }, [messages, boardLines, activeRuns, channelPlans, proposedItems, completedItems, orphanInteractions, channelResourceRequests]);
+  }, [messages, boardLines, channelRuns, channelPlans, proposedItems, completedItems, orphanInteractions, channelResourceRequests]);
 
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -995,7 +1003,7 @@ export function MessageList({
           </h2>
           <p className="mt-1 max-w-md text-sm text-muted">
             {messages.length === 0 &&
-            activeRuns.length === 0 &&
+            channelRuns.length === 0 &&
             channelPlans.length === 0 &&
             proposedItems.length === 0 &&
             completedItems.length === 0 &&
@@ -1103,7 +1111,7 @@ export function MessageList({
                 startedAt={entry.run.startedAt}
                 suspended={entry.run.suspended}
                 suspendedReason={entry.run.suspendedReason}
-                interactions={pendingInteractions.filter(
+                interactions={channelInteractions.filter(
                   (request) => request.agentId === entry.run.agentId,
                 )}
                 executions={executions.filter((execution) => execution.runId === entry.run.runId || !execution.runId)}

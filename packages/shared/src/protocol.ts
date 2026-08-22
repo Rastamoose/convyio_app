@@ -720,6 +720,7 @@ export interface TraceStartBroadcast {
   runId: string;
   agentId: string;
   agentName: string;
+  channelId: string;
   timestamp: number;
 }
 

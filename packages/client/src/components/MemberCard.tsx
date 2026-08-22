@@ -6,6 +6,9 @@ import { presenceLabel } from "../lib/status";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { ProposalCard } from "./ProposalCard";
+import { PermissionCard } from "./PermissionCard";
+import { ResourceAccessRequestCard } from "./ResourceAccessRequestCard";
+import { ProjectAccessRequestCard } from "./ProjectAccessRequestCard";
 
 /**
  * How much of an item's board grant runs without asking. The grant is the
@@ -46,6 +49,12 @@ export function MemberCard({
     self,
     setAgentActive,
     refreshAgents,
+    pendingInteractions,
+    pendingResourceAccessRequests,
+    pendingProjectAccessRequests,
+    resolveInteraction,
+    resolveResourceAccessRequest,
+    resolveProjectAccessRequest,
   } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
@@ -106,6 +115,20 @@ export function MemberCard({
       )
     : undefined;
 
+  // Same requests the channel and the board already render — this is a
+  // shortcut to them, not a second copy.
+  const myInteractions = isAgent
+    ? pendingInteractions.filter((r) => r.agentId === participant.id)
+    : [];
+  const myResourceRequests = isAgent
+    ? pendingResourceAccessRequests.filter((r) => r.agentId === participant.id)
+    : [];
+  const myProjectRequests = isAgent
+    ? pendingProjectAccessRequests.filter((r) => r.agentId === participant.id)
+    : [];
+  const needsApproval =
+    myInteractions.length + myResourceRequests.length + myProjectRequests.length > 0;
+
   const liveRun = activeRuns.find((r) => r.agentName === participant.name);
   const lastRunMessage = [...messages]
     .reverse()
@@ -146,6 +169,32 @@ export function MemberCard({
       </div>
       {isAgent && (
         <>
+          {needsApproval && (
+            <div className="mb-3 space-y-2">
+              <div className="text-[10px] font-bold tracking-wider text-accent uppercase">
+                Needs your approval
+              </div>
+              {myInteractions.map((request) => (
+                <PermissionCard key={request.id} request={request} onResolve={resolveInteraction} />
+              ))}
+              {myResourceRequests.map((request) => (
+                <ResourceAccessRequestCard
+                  key={request.id}
+                  request={request}
+                  onResolve={resolveResourceAccessRequest}
+                  compact
+                />
+              ))}
+              {myProjectRequests.map((request) => (
+                <ProjectAccessRequestCard
+                  key={request.id}
+                  request={request}
+                  onResolve={resolveProjectAccessRequest}
+                  compact
+                />
+              ))}
+            </div>
+          )}
           <div className="mb-3">
             <div className="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">
               Permissions in #{channel}

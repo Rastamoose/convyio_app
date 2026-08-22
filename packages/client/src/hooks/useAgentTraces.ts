@@ -7,6 +7,7 @@ export interface ActiveRun {
   /** Identity, not display name: permission prompts are keyed on the actor. */
   agentId: string;
   agentName: string;
+  channelId: string;
   chunks: TraceChunk[];
   startedAt: number;
   suspended?: boolean;
@@ -32,11 +33,17 @@ export function useAgentTraces() {
       setActiveRuns([]);
       setRunDurations(new Map());
     },
-    startRun: (runId: string, agentId: string, agentName: string, timestamp: number) => {
+    startRun: (
+      runId: string,
+      agentId: string,
+      agentName: string,
+      channelId: string,
+      timestamp: number,
+    ) => {
       startTimes.current.set(runId, timestamp);
       setActiveRuns((prev) => {
         if (prev.some((r) => r.runId === runId)) return prev;
-        return [...prev, { runId, agentId, agentName, chunks: [], startedAt: timestamp, suspended: false }];
+        return [...prev, { runId, agentId, agentName, channelId, chunks: [], startedAt: timestamp, suspended: false }];
       });
     },
     appendChunk: (runId: string, chunk: TraceChunk) => {
