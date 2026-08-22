@@ -76,9 +76,9 @@ alter table agent_invites add column api_key_ciphertext text;
 
 Nullable — only set for `provider = 'openai'` agents created through this
 flow. Never selected into any client-facing response; `AgentInvites.list()`
-/`toInvite()` continues to omit it, `board/api.ts`'s `GET /api/agents`
-response only ever needs to say `hasApiKey: boolean` for the settings UI to
-show "key set" vs. not.
+/`toInvite()` continues to omit it entirely — nothing in the client needs to
+know a key is set (there's no rotation UI in this version, see "Accepted
+debt" below), so there's no reason to expose even a boolean.
 
 ### 3. `AgentInvites`: factor the installation-minting half out
 
@@ -215,14 +215,8 @@ if `body.provider === "openai" && body.apiKey`:
 
 `DELETE /api/agents/:id` (line 834): `onRevokeAgent` (`index.ts:108`)
 becomes `(actorId) => { runtime.hub.closeAgentConnection(actorId); runtime.stopApiKeyAgent(actorId); }`.
-
-`GET /api/agents` (line 775): each agent gains `hasApiKey: boolean`
-(`invite.apiKeyCiphertext !== null` — a field the DB layer exposes without
-ever exposing the ciphertext itself in the shared `AgentInvite` type).
-
-A key-rotation path (`PATCH /api/agents/:id` gaining an optional `apiKey`)
-is small enough to fold into this same change: on patch, if `apiKey` is
-present, stop the existing connection, re-encrypt/store, re-`start()`.
+The supervisor's map is keyed by `actorId` (not invite id) so this lookup
+needs no extra join — `actorId` is exactly what both call sites already have.
 
 ### 8. Client (`packages/client/src`)
 
@@ -309,10 +303,17 @@ anything real:
 
 ## Accepted debt / follow-ups
 
-- No key-rotation UI in the modal itself for v1 (the PATCH endpoint
-  supports it per §7, but wiring a "change key" affordance into the
-  agent's settings view is left for a follow-up — not required for "paste
-  a key and it works").
+- No key rotation/removal in v1 — changing a mistyped or expired key means
+  revoking the agent and creating a new one. A `PATCH` path for this is
+  natural to add later (the ciphertext column and `AgentInvites.setApiKey`
+  already support it), but nothing calls it yet, so it isn't built now.
 - `AGENT_SECRET_KEY` is a single static key read from the environment —
   no rotation/versioning scheme. Fine for a first cut; would need a
   key-id prefix on the ciphertext before this key is ever rotated.
+- `AGENT_SECRET_KEY` is optional at the config layer (like `AGENT_TOKEN`),
+  not required at boot — most deployments won't use this feature and
+  shouldn't be blocked from starting without it. `secretBox.encrypt`/
+  `decrypt` throw clearly the moment something actually needs the key
+  (an openai-agent creation with a pasted key, or boot-time
+  reconciliation finding a stored ciphertext) and that key isn't
+  configured.
