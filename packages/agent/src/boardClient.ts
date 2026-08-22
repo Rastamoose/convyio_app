@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   ACTION_CAPABILITY,
   isBoardEnvelope,
+  isProjectAction,
   mergeLiveItems,
   type ActionResultEvent,
   type AgentProjectAccess,
@@ -336,7 +337,10 @@ export class BoardClient {
     boardItemRef: string | null,
     conversationId: string | null = null,
   ): Promise<ActionResultEvent> {
-    const needsApproval = ACTION_CAPABILITY[action.kind];
+    // Project actions all pass through the server's folder-consent gate
+    // (gateFolderAccess), which can prompt the owner even for reads under
+    // "ask" policy — not just the mutating kinds ACTION_CAPABILITY lists.
+    const needsApproval = Boolean(ACTION_CAPABILITY[action.kind]) || isProjectAction(action);
     if (needsApproval) this.onRunSuspended?.(`awaiting approval for ${action.kind}`);
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();

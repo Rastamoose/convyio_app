@@ -1729,10 +1729,6 @@ export class Hub {
   }
 }
 
-function isProjectAction(action: ActionRequestEvent["action"]): action is ProjectAction {
-  return action.kind.startsWith("project_");
-}
-
 function folderLeaseKey(agentId: string, projectId: string, conversationId: string | null): string {
   return `${agentId}:${projectId}:${conversationId ?? "-"}`;
 }
