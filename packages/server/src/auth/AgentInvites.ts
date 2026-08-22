@@ -376,11 +376,15 @@ export class AgentInvites {
     return rows.map((row) => ({ invite: toInvite(row), apiKeyCiphertext: row.api_key_ciphertext! }));
   }
 
+  /** Removing an agent deletes its invite row outright (cascading to
+   *  agent_pairings/agent_installations) rather than soft-revoking it — a
+   *  pasted API key lives in api_key_ciphertext on this same row, and
+   *  "remove this agent" must take the key out of the database completely,
+   *  not just stop using it. */
   async revoke(id: string): Promise<AgentInvite | null> {
     const rows = await this.db.sql<InviteRow[]>`
-      UPDATE agent_invites i
-      SET revoked_at = ${Date.now()}
-      FROM actors a
+      DELETE FROM agent_invites i
+      USING actors a
       WHERE i.id = ${id}
         AND i.workspace_id = ${this.db.workspaceId}
         AND i.revoked_at IS NULL
