@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
  * has stopped being something a normal user can set up unattended.
  *
  * Machine off means agent off, which is the intended behaviour — the runner
- * joins asleep and only its creator can wake it from the web.
+ * joins active and only its creator can put it to sleep or wake it again from the web.
  */
 
 export interface ServiceTarget {

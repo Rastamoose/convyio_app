@@ -63,7 +63,7 @@ async function pair(args: string[], out: (message: string) => void): Promise<voi
 /**
  * The one-command path: pair, then hand the runner to the OS supervisor so it
  * is simply *there* on every login instead of something to remember to start.
- * It joins asleep — activation is the creator's call, from the web.
+ * It joins active by default — putting it to sleep is the creator's call, from the web.
  */
 async function connect(args: string[], out: (message: string) => void): Promise<void> {
   const options = parsePairArgs(args);

@@ -14,17 +14,17 @@ interface RuntimeState extends AgentRuntimeSummary {
 
 export class RunnerRuntime {
   private states = new Map<string, RuntimeState>();
-  /** Creators who have woken their runner. Deliberately outlives `clear()`
+  /** Creators who have put their runner to sleep. Deliberately outlives `clear()`
    *  so a crash-restart or a laptop re-login comes back in the state its
-   *  creator chose, rather than silently falling asleep again.
-   *  ponytail: in-memory, so a *server* restart drops everyone to dormant —
+   *  creator chose, rather than silently waking again.
+   *  ponytail: in-memory, so a *server* restart wakes everyone by default —
    *  move to a column on agent_invites if that turns out to matter. */
-  private activated = new Set<string>();
+  private deactivated = new Set<string>();
 
   connect(profile: AgentInvite): void {
     this.states.set(profile.actorId, {
       connected: true,
-      health: this.activated.has(profile.actorId) ? "checking" : "dormant",
+      health: this.deactivated.has(profile.actorId) ? "dormant" : "checking",
       configRevision: profile.configRevision,
       options: [],
       expectedHarness: profile.provider,
@@ -32,14 +32,14 @@ export class RunnerRuntime {
     });
   }
 
-  /** True once the creator has activated this runner and not put it back to sleep. */
+  /** True unless the creator has put this runner to sleep. New connections default active. */
   isActivated(actorId: string): boolean {
-    return this.activated.has(actorId);
+    return !this.deactivated.has(actorId);
   }
 
   setActivated(actorId: string, active: boolean): void {
-    if (active) this.activated.add(actorId);
-    else this.activated.delete(actorId);
+    if (active) this.deactivated.delete(actorId);
+    else this.deactivated.add(actorId);
     const state = this.states.get(actorId);
     if (!state) return;
     // Reflect the intent immediately so the roster stops advertising a
@@ -49,9 +49,9 @@ export class RunnerRuntime {
     if (!active) state.workSentRevision = undefined;
   }
 
-  /** Drop activation intent for an agent that is gone for good (revoked/removed). */
+  /** Drop sleep intent for an agent that is gone for good (revoked/removed). */
   forget(actorId: string): void {
-    this.activated.delete(actorId);
+    this.deactivated.delete(actorId);
     this.states.delete(actorId);
   }
 
@@ -80,7 +80,7 @@ export class RunnerRuntime {
     // Activation is a permission barrier, not a hint: without this a runner
     // that was never woken could announce itself ready and start taking work,
     // leaving the creator's approval advisory.
-    if (!this.activated.has(actorId)) return false;
+    if (this.deactivated.has(actorId)) return false;
     state.health = event.health;
     state.effectiveModel = event.effectiveModel;
     state.diagnosticCode = event.diagnosticCode;
@@ -130,6 +130,6 @@ export class RunnerRuntime {
 
   clearAll(): void {
     this.states.clear();
-    this.activated.clear();
+    this.deactivated.clear();
   }
 }

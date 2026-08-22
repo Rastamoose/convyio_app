@@ -96,8 +96,8 @@ describe("installation runner readiness", () => {
   test("checking gates queued work until current ready status", async () => {
     const human = await connectHuman("human-checking", "checking-human");
     const installation = await connectInstallation(human.welcome.self.id, "checking-agent");
-    // Runners now join asleep; this test is about the readiness gate that
-    // follows activation, so wake it and leave the rest of the flow unchanged.
+    // Runners join active by default; this call is a no-op here but keeps the
+    // test explicit about the precondition the readiness gate below assumes.
     env.runnerRuntime.setActivated(installation.actorId, true);
     const workFrames: any[] = [];
     installation.client.ws.on("message", (raw) => {

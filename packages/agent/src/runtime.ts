@@ -80,11 +80,12 @@ export async function runAgent(
   const lifecycle = new ProposalLifecycle(runner, presence);
   let ready = configuration.mode === "legacy";
   let selfId: string | null = null;
-  // A paired runner joins asleep: connected and visible, but with no harness
-  // process, no tool bridge and no filesystem reach until its creator says so
-  // from the web. Legacy/hosted runners have no such switch and start awake.
+  // A paired runner starts with no harness process, no tool bridge and no
+  // filesystem reach until the server confirms activation, which now happens
+  // automatically on connect unless the creator has put it to sleep. Legacy/
+  // hosted runners have no such switch and start awake immediately.
   let activated = configuration.mode === "legacy";
-  // Held so activation can apply the profile that arrived while asleep.
+  // Held so activation can apply the profile that arrived before confirmation.
   let latestProfile: AgentInvite | null = null;
 
   const profileUpdates = new ProfileUpdateQueue(async (profile, isCurrent) => {
@@ -149,11 +150,11 @@ export async function runAgent(
           // agent stays unavailable forever and is silently never sent work.
           profileUpdates.reset();
           latestProfile = event.agentConfig ?? configuration.installation.agent;
-          // While asleep the profile is only recorded. Announcing readiness
-          // would advertise a harness that is not running and start pulling
-          // work the agent cannot do.
+          // Until the server's activation confirmation lands, the profile is
+          // only recorded. Announcing readiness would advertise a harness
+          // that is not running and start pulling work the agent cannot do.
           if (activated) void profileUpdates.enqueue(latestProfile);
-          else console.log("[agent] asleep — waiting for its creator to activate it from Convyio.");
+          else console.log("[agent] waiting for activation confirmation from Convyio.");
         } else {
           reportLegacyReady(socket, event.agentConfig?.configRevision ?? 1, local.harness, local.options, local.effectiveModel);
         }
