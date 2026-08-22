@@ -9,6 +9,9 @@
   "bin": {
     "convyio-agent": "dist/cli.js"
   },
+  "exports": {
+    "./runtime": "./src/runtime.ts"
+  },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --banner:js=\"import { createRequire as __convyRequire } from 'node:module';const require = __convyRequire(import.meta.url);\" --outfile=dist/cli.js && chmod 755 dist/cli.js",
     "prepublishOnly": "npm run build",
@@ -17,7 +20,8 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.64.2"
+    "@agentclientprotocol/claude-agent-acp": "0.64.2",
+    "openai": "^7.5.0"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
@@ -28,7 +32,6 @@
     "@types/ws": "^8.5.13",
     "@workspace/shared": "*",
     "dotenv": "^17.4.2",
-    "openai": "^7.5.0",
     "tsx": "^4.23.5",
     "ws": "^8.18.0",
     "zod": "^4.4.3"
