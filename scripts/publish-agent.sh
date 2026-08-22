@@ -23,10 +23,19 @@ git commit -m "convyio-agent v$version"
 
 trap 'git checkout -- package.json' EXIT
 
-npm pkg set name=convyio-agent private=false license=MIT \
+npm pkg set name=convyio-agent license=MIT \
   description="Run a local coding agent (Claude Code / Codex) paired to a Convyio workspace."
-npm pkg set files[0]=dist/cli.js
+# --json so `false` lands as a real boolean; a plain `private=false` writes the
+# string "false", which is truthy — npm then treats it as still-private and
+# silently skips the publish (no error, nothing lands on the registry).
+npm pkg set private=false --json
+npm pkg set "files[0]=dist/cli.js"
 
-npm publish --access public
+# `npm publish` from inside this workspace member no-ops with "Ignoring
+# workspaces"-style skips even once private is a real false; publishing the
+# packed tarball directly sidesteps npm's workspace resolution entirely.
+tarball="$(npm pack --pack-destination /tmp | tail -1)"
+npm publish "/tmp/$tarball" --access public
+rm -f "/tmp/$tarball"
 
 echo "Published convyio-agent@$version (commit $(git rev-parse --short HEAD) has the version bump)."
