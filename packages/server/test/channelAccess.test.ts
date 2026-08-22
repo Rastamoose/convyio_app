@@ -104,6 +104,10 @@ describe("agent channel confidentiality", () => {
       2000,
     );
     assert.match(occupancy.message.content, /#general/);
+    // The pending request is for #general itself — the same channel the
+    // mention came from — so the reply must not name it twice as if it were
+    // a different place ("waiting in this channel to access #general").
+    assert.doesNotMatch(occupancy.message.content, /in this channel to access #general/);
     await assert.rejects(agent.next((event) => event.type === "work_available", 200), /timeout/);
 
     const requests = (await env.resourceAccess.requestsForAgent(agent.welcome.self.id))

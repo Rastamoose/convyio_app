@@ -363,10 +363,13 @@ export class Hub {
           });
           occupiedAgents.push({
             agent,
+            // No `target`: the request is for this very channel (a first
+            // mention always requests access to the channel it happened in),
+            // so naming it separately would read as if two channels were
+            // involved when there's only one.
             occupancy: {
               kind: "waiting",
               location: "this channel",
-              target: `#${channelInfo.name}`,
               reason: `waiting for access approval to #${channelInfo.name}`,
             },
           });
@@ -443,10 +446,15 @@ export class Hub {
       if (request) {
         const originName = await this.lookupChannelName(request.originChannelId);
         const target = this.formatAccessTarget(request);
+        // A request for the very channel the agent is stuck in names the same
+        // place twice ("waiting in this channel to access #general" when
+        // #general *is* this channel) — omit target then so the reply
+        // doesn't read as if two different channels were involved.
+        const sameChannel = request.resourceKind === "channel" && request.resourceId === currentChannelId;
         return {
           kind: "waiting",
           location: this.formatChannelLocation(currentChannelId, request.originChannelId, originName),
-          target,
+          ...(sameChannel ? {} : { target }),
           reason: `waiting for access approval to ${target}`,
         };
       }
@@ -1429,13 +1437,15 @@ export class Hub {
     this.broadcastPresence();
   }
 
-  private handleTraceStart(participant: Participant, runId: string): void {
+  private async handleTraceStart(participant: Participant, runId: string): Promise<void> {
     this.traceBuffers.set(runId, []);
+    const active = await this.agentWork.listActive(participant.id);
     this.broadcastHumans({
       type: "trace_start",
       runId,
       agentId: participant.id,
       agentName: participant.name,
+      channelId: active[0]?.channelId ?? "general",
       timestamp: Date.now(),
     });
   }
