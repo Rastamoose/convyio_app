@@ -62,6 +62,9 @@ export interface BrainRunOptions {
 /** A concrete LLM backend the agent can run a batch of work through. */
 export interface Brain {
   run(input: BrainInput, callbacks: BrainCallbacks, options?: BrainRunOptions): Promise<BrainResult>;
+  /** Only implemented by brains whose model can change without reconnecting
+   *  (currently OpenAI). Absent on brains where model is fixed at construction. */
+  setModel?(model: string): void;
 }
 
 export function buildPromptText(input: BrainInput): string {

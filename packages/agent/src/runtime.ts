@@ -44,12 +44,24 @@ type LegacyConfiguration = {
   ownProcess?: boolean;
 };
 
-type InstallationConfiguration = { mode: "installation"; installation: StoredInstallation; ownProcess?: boolean };
+type InstallationConfiguration = {
+  mode: "installation";
+  installation: StoredInstallation;
+  apiKey?: string;
+  ownProcess?: boolean;
+};
+
+export const OPENAI_MODEL_CHOICES = ["gpt-5", "gpt-5-mini", "gpt-5-nano"] as const;
+
+export function resolveOpenAiModel(requestedModel: string | null): string {
+  return requestedModel ?? OPENAI_MODEL_CHOICES[0];
+}
 
 export async function runAgent(
   configuration: LegacyConfiguration | InstallationConfiguration,
 ): Promise<{ close(): void }> {
   const local = await localConfiguration(configuration);
+  let currentModel = local.effectiveModel;
   const socket = new AgentSocket(local.wsUrl);
   const boardClient = new BoardClient(socket);
   const bridge = local.acp ? new LocalMcpBridge() : null;
@@ -117,7 +129,11 @@ export async function runAgent(
         });
       } else {
         runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions));
-        reportLegacyReady(socket, revision, local.harness, local.options, local.effectiveModel);
+        if (configuration.mode === "installation" && configuration.installation.agent.provider === "openai") {
+          currentModel = resolveOpenAiModel(profile.requestedModel);
+          local.brain.setModel?.(currentModel);
+        }
+        reportLegacyReady(socket, revision, local.harness, local.options, currentModel);
       }
       ready = true;
     } catch (error) {
@@ -157,7 +173,7 @@ export async function runAgent(
           if (activated) void profileUpdates.enqueue(latestProfile);
           else console.log("[agent] waiting for activation confirmation from Convyio.");
         } else {
-          reportLegacyReady(socket, event.agentConfig?.configRevision ?? 1, local.harness, local.options, local.effectiveModel);
+          reportLegacyReady(socket, event.agentConfig?.configRevision ?? 1, local.harness, local.options, currentModel);
         }
         break;
       case "agent_config":
@@ -242,9 +258,9 @@ async function localConfiguration(configuration: LegacyConfiguration | Installat
     const dataDir = stateDirectory(item.agent.id);
     await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
     if (item.agent.provider === "openai") {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) throw new Error("OPENAI_API_KEY environment variable is required for an OpenAI agent.");
-      const model = item.agent.requestedModel ?? "gpt-5";
+      const apiKey = configuration.apiKey ?? process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error("An OpenAI API key is required for this agent.");
+      const model = resolveOpenAiModel(item.agent.requestedModel);
       return {
         name: item.agent.name,
         wsUrl: item.wsUrl,
@@ -260,7 +276,7 @@ async function localConfiguration(configuration: LegacyConfiguration | Installat
           category: "model",
           kind: "select",
           value: model,
-          choices: [{ value: model, label: model }],
+          choices: OPENAI_MODEL_CHOICES.map((choice) => ({ value: choice, label: choice })),
         }] as RunnerConfigOption[],
         effectiveModel: model as string | undefined,
       };
@@ -280,7 +296,7 @@ async function localConfiguration(configuration: LegacyConfiguration | Installat
     };
   }
   await fs.mkdir(configuration.workspace, { recursive: true });
-  const brain = configuration.provider === "claude"
+  const brain: Brain = configuration.provider === "claude"
     ? new ClaudeBrain(configuration.model, configuration.workspace)
     : new GeminiBrain(configuration.geminiApiKey!, configuration.model!);
   const options: RunnerConfigOption[] = configuration.model ? [{

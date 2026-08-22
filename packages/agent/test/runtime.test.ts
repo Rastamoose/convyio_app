@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AgentInvite } from "@workspace/shared";
 import { AcpFailure } from "../src/acpBrain";
-import { ProfileUpdateQueue, readinessFailure } from "../src/runtime";
+import { OPENAI_MODEL_CHOICES, ProfileUpdateQueue, readinessFailure, resolveOpenAiModel } from "../src/runtime";
 
 describe("paired runner readiness", () => {
   test("reports typed preflight failures instead of ready", () => {
@@ -64,6 +64,16 @@ describe("paired runner readiness", () => {
     queue.reset();
     await queue.enqueue(profile(3));
     assert.deepEqual(applied, [3, 3], "reconnect re-applies");
+  });
+});
+
+describe("OpenAI model resolution", () => {
+  test("falls back to the default when no model was requested", () => {
+    assert.equal(resolveOpenAiModel(null), OPENAI_MODEL_CHOICES[0]);
+  });
+
+  test("uses the requested model when set", () => {
+    assert.equal(resolveOpenAiModel("gpt-5-nano"), "gpt-5-nano");
   });
 });
 

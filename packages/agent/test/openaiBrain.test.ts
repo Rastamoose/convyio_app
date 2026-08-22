@@ -9,6 +9,7 @@ import type { BrainCallbacks } from "../src/brain";
 // leaves the process because chat.completions.create is replaced before any run.
 
 interface RecordedRequest {
+  model: string;
   messages: ChatCompletionMessageParam[];
 }
 
@@ -61,6 +62,16 @@ describe("OpenAIBrain", () => {
     assert.equal(content[2].type, "text");
     assert.match(String(content[2].text), /<context>\nctx\n<\/context>/);
     assert.match(String(content[2].text), /what is pictured\?/);
+  });
+
+  test("setModel changes the model used in the next request", async () => {
+    const { brain, requests } = stubbedBrain(() => stream([{ choices: [{ delta: { content: "ok" }, index: 0, finish_reason: null }] }]));
+    await brain.run({ system: "sys", context: "ctx", prompt: "hi" }, noopCallbacks);
+    brain.setModel("gpt-5-mini");
+    await brain.run({ system: "sys", context: "ctx", prompt: "hi again" }, noopCallbacks);
+
+    assert.equal(requests[0]!.model, "fake-model");
+    assert.equal(requests[1]!.model, "gpt-5-mini");
   });
 
   test("no images means a plain string user message", async () => {

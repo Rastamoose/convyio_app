@@ -29,6 +29,10 @@ export class OpenAIBrain implements Brain {
     this.client = new OpenAI({ apiKey });
   }
 
+  setModel(model: string): void {
+    this.model = model;
+  }
+
   async run(input: BrainInput, callbacks: BrainCallbacks, options?: BrainRunOptions): Promise<BrainResult> {
     const messages: ChatCompletionMessageParam[] = [
       { role: "system", content: input.system },
