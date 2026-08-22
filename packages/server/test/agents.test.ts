@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { createEnv, createWsEnv } from "./helpers";
 
 const PROVIDER = "claude";
+process.env.AGENT_SECRET_KEY ??= randomBytes(32).toString("base64");
 
 async function exchange(baseUrl: string, pairingCode: string) {
   const response = await fetch(`${baseUrl}/api/agent-pairings/exchange`, {
@@ -479,5 +481,81 @@ describe("hosted agent workspace manifest", async () => {
     });
     const emptyBody = (await empty.json()) as { workspaces: unknown[] };
     assert.equal(emptyBody.workspaces.length, 0);
+  });
+});
+
+describe("hosted OpenAI agents (paste a key, no local pairing)", async () => {
+  test("a valid key creates the agent, stores it encrypted, and starts it — no pairing code returned", async () => {
+    const started: Array<{ actorId: string; apiKey: string }> = [];
+    const env = await createEnv({
+      onCreateAgent: (invite, apiKey) => started.push({ actorId: invite.actorId, apiKey }),
+      validateOpenAiKey: async () => true,
+    });
+    try {
+      const human = await env.actor("human", "hosted-owner");
+      const created = await env.api("POST", "/api/agents", human.token, {
+        name: "hosted-agent",
+        provider: "openai",
+        apiKey: "sk-valid-key",
+      });
+      assert.equal(created.status, 201, created.body.message);
+      assert.equal("pairingCode" in created.body, false);
+      assert.equal(started.length, 1);
+      assert.equal(started[0]!.actorId, created.body.actorId);
+      assert.equal(started[0]!.apiKey, "sk-valid-key");
+
+      const [row] = await env.db.sql<{ api_key_ciphertext: string | null }[]>`
+        SELECT api_key_ciphertext FROM agent_invites WHERE id = ${created.body.id}
+      `;
+      assert.ok(row.api_key_ciphertext);
+      assert.notEqual(row.api_key_ciphertext, "sk-valid-key");
+
+      const list = await env.api("GET", "/api/agents", human.token);
+      const serialized = JSON.stringify(list.body);
+      assert.equal(serialized.includes("sk-valid-key"), false);
+      assert.equal(serialized.includes(row.api_key_ciphertext!), false);
+    } finally {
+      await env.close();
+    }
+  });
+
+  test("an invalid key is rejected and no agent is created", async () => {
+    const started: unknown[] = [];
+    const env = await createEnv({
+      onCreateAgent: (invite, apiKey) => started.push({ invite, apiKey }),
+      validateOpenAiKey: async () => false,
+    });
+    try {
+      const human = await env.actor("human", "hosted-bad-key-owner");
+      const created = await env.api("POST", "/api/agents", human.token, {
+        name: "hosted-bad-key-agent",
+        provider: "openai",
+        apiKey: "sk-bad-key",
+      });
+      assert.equal(created.status, 400);
+      assert.equal(created.body.error, "INVALID_API_KEY");
+      assert.equal(started.length, 0);
+      const list = await env.api("GET", "/api/agents", human.token);
+      assert.equal(list.body.agents.length, 0);
+    } finally {
+      await env.close();
+    }
+  });
+
+  test("an openai agent created without an apiKey falls back to the normal pairing flow", async () => {
+    const started: unknown[] = [];
+    const env = await createEnv({ onCreateAgent: (invite, apiKey) => started.push({ invite, apiKey }) });
+    try {
+      const human = await env.actor("human", "no-key-owner");
+      const created = await env.api("POST", "/api/agents", human.token, {
+        name: "no-key-agent",
+        provider: "openai",
+      });
+      assert.equal(created.status, 201, created.body.message);
+      assert.equal(typeof created.body.pairingCode, "string");
+      assert.equal(started.length, 0);
+    } finally {
+      await env.close();
+    }
   });
 });

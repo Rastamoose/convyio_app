@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { WebSocket } from "ws";
-import { emptyImpactMap, type Actor, type BoardEventEnvelope, type BoardItem, type EcosystemImpact } from "@workspace/shared";
+import { emptyImpactMap, type Actor, type AgentInvite, type BoardEventEnvelope, type BoardItem, type EcosystemImpact } from "@workspace/shared";
 import type { WorkspaceDb } from "../src/db";
 import { Attachments } from "../src/chat/Attachments";
 import { AgentWorkStore } from "../src/chat/AgentWorkStore";
@@ -108,7 +108,11 @@ export interface Env {
 }
 
 /** An isolated Postgres schema + board + HTTP API on an ephemeral port, shared by every suite. */
-export async function createEnv(options: { hostedAgentToken?: string | null } = {}): Promise<Env> {
+export async function createEnv(options: {
+  hostedAgentToken?: string | null;
+  onCreateAgent?: (invite: AgentInvite, apiKey: string) => void;
+  validateOpenAiKey?: (apiKey: string) => Promise<boolean>;
+} = {}): Promise<Env> {
   const { db, drop } = await createTestDb();
   const threadEvents = new ThreadEventStore(db);
   const channels = new Channels(db);
@@ -150,6 +154,8 @@ export async function createEnv(options: { hostedAgentToken?: string | null } = 
     hostedAgentToken: options.hostedAgentToken ?? null,
     agentInvites,
     runnerRuntime,
+    onCreateAgent: options.onCreateAgent ?? null,
+    validateOpenAiKey: options.validateOpenAiKey,
     snapshot,
     plans,
     envelope,
