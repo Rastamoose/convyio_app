@@ -60,6 +60,10 @@ export const config = {
   emailAuthEnabled: process.env.EMAIL_AUTH === "1",
   /** Shared secret the agent joins with when auth is enabled. */
   agentToken: process.env.AGENT_TOKEN ?? null,
+  /** Symmetric key (32 bytes, base64) for encrypting pasted API keys at
+   *  rest. Optional — only needed by workspaces that use hosted API-key
+   *  agents; secretBox throws clearly if used without it. */
+  agentSecretKey: process.env.AGENT_SECRET_KEY ?? null,
   github: githubConfig(),
   /** Built client to serve as the single origin; absent = API only (dev). */
   clientDist: process.env.CLIENT_DIST ?? path.resolve(__dirname, "../../client/dist"),

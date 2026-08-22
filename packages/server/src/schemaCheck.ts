@@ -53,6 +53,7 @@ const REQUIRED: readonly { table: string; column?: string }[] = [
   { table: "board_items", column: "capabilities" },
   { table: "board_events" },
   { table: "agent_invites" },
+  { table: "agent_invites", column: "api_key_ciphertext" },
   { table: "thread_events" },
   { table: "agent_conversations" },
   { table: "agent_run_requests" },

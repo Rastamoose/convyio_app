@@ -167,6 +167,77 @@ describe("agent HTTP invites", async () => {
     assert.notEqual(stored.token_hash, success.body.installationToken);
   });
 
+  test("mintInstallation issues a fresh installation without a pairing code", async () => {
+    const human = await env.actor("human", "mint-owner");
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "mint-agent",
+      provider: PROVIDER,
+    });
+    const { AgentInvites } = await import("../src/auth/AgentInvites");
+    const invites = new AgentInvites(env.db);
+    const minted = await invites.mintInstallation(created.body.id);
+    assert.ok(minted);
+    assert.equal(minted!.invite.id, created.body.id);
+    assert.equal(minted!.installationToken.length, 64);
+    const [installationCount] = await env.db.sql<{ count: number }[]>`
+      SELECT count(*) AS count FROM agent_installations WHERE invite_id = ${created.body.id}
+    `;
+    assert.equal(installationCount.count, 1);
+  });
+
+  test("mintInstallation returns null for a revoked invite", async () => {
+    const human = await env.actor("human", "mint-revoked-owner");
+    const created = await env.api("POST", "/api/agents", human.token, {
+      name: "mint-revoked-agent",
+      provider: PROVIDER,
+    });
+    await env.api("DELETE", `/api/agents/${created.body.id}`, human.token);
+    const { AgentInvites } = await import("../src/auth/AgentInvites");
+    const invites = new AgentInvites(env.db);
+    const minted = await invites.mintInstallation(created.body.id);
+    assert.equal(minted, null);
+  });
+
+  test("create() can store an encrypted API key, never returned by list/get", async () => {
+    const human = await env.actor("human", "keyed-owner");
+    const { AgentInvites } = await import("../src/auth/AgentInvites");
+    const invites = new AgentInvites(env.db);
+    const { invite } = await invites.create(
+      "keyed-agent",
+      "openai",
+      human.actor,
+      { instructions: "", requestedModel: null, access: { mode: "workspace", selectedActorIds: [] } },
+      "fake-ciphertext",
+    );
+    const serialized = JSON.stringify(invite);
+    assert.equal(serialized.includes("fake-ciphertext"), false);
+    const [row] = await env.db.sql<{ api_key_ciphertext: string | null }[]>`
+      SELECT api_key_ciphertext FROM agent_invites WHERE id = ${invite.id}
+    `;
+    assert.equal(row.api_key_ciphertext, "fake-ciphertext");
+  });
+
+  test("listOpenAiWithKeys returns only openai invites with a stored key", async () => {
+    const human = await env.actor("human", "list-keys-owner");
+    const { AgentInvites } = await import("../src/auth/AgentInvites");
+    const invites = new AgentInvites(env.db);
+    const withKey = await invites.create(
+      "with-key",
+      "openai",
+      human.actor,
+      { instructions: "", requestedModel: null, access: { mode: "workspace", selectedActorIds: [] } },
+      "ciphertext-a",
+    );
+    const withoutKey = await invites.create("without-key", "openai", human.actor);
+    await invites.create("claude-agent", "claude", human.actor);
+    const listed = await invites.listOpenAiWithKeys();
+    const ids = listed.map((entry) => entry.invite.id);
+    assert.ok(ids.includes(withKey.invite.id));
+    assert.equal(ids.includes(withoutKey.invite.id), false);
+    const entry = listed.find((candidate) => candidate.invite.id === withKey.invite.id);
+    assert.equal(entry!.apiKeyCiphertext, "ciphertext-a");
+  });
+
   test("a machine can forget only its own installation credential", async () => {
     const human = await env.actor("human", "unpair-owner");
     const created = await env.api("POST", "/api/agents", human.token, {
