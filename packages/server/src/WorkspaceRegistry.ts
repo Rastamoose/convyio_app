@@ -20,6 +20,7 @@ export class WorkspaceRegistry {
     private supabase: SupabaseClient,
     private github: GitHub,
     private dataDir: string,
+    private port: number,
     private defaultWorkspaceId: string,
     private demoScripts: Map<string, DemoScript>,
     private demoSeedRoot: string,
@@ -38,6 +39,7 @@ export class WorkspaceRegistry {
       supabase: this.supabase,
       github: this.github,
       dataDir: this.dataDir,
+      port: this.port,
       demoScripts: this.demoScripts,
       demoSeedRoot: this.demoSeedRoot,
     });

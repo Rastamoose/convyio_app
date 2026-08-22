@@ -86,6 +86,7 @@ async function main() {
     supabase,
     github,
     config.dataDir,
+    config.port,
     db.workspaceId,
     scripts,
     path.join(ASSETS_DIR, "demo/seed"),
@@ -105,7 +106,11 @@ async function main() {
     agentInvites: runtime.agentInvites,
     runnerRuntime: runtime.runnerRuntime,
     onUpdateAgent: (profile) => runtime.updateAgent(profile),
-    onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
+    onRevokeAgent: (actorId) => {
+      runtime.hub.closeAgentConnection(actorId);
+      runtime.stopApiKeyAgent(actorId);
+    },
+    onCreateAgent: (invite, apiKey) => void runtime.startApiKeyAgent(invite, apiKey),
     onRemoveMember: (actorId) => {
       runtime.hub.closeAgentConnection(actorId);
       runtime.hub.closeHumanConnection(actorId);

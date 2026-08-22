@@ -34,6 +34,8 @@ import { ToolmanGateway } from "./projects/ToolmanGateway";
 import { ToolmanNodes } from "./projects/ToolmanNodes";
 import { Roster } from "./roster";
 import { RunnerRuntime } from "./RunnerRuntime";
+import { runAgent } from "@workspace/agent/runtime";
+import { ApiKeyAgentSupervisor } from "./agents/ApiKeyAgentSupervisor";
 
 export interface WorkspaceRuntimeOptions {
   db: WorkspaceDb;
@@ -43,6 +45,7 @@ export interface WorkspaceRuntimeOptions {
   supabase: SupabaseClient;
   github: GitHub;
   dataDir: string;
+  port: number;
   demoScripts?: Map<string, DemoScript>;
   demoSeedRoot?: string;
 }
@@ -74,6 +77,7 @@ export class WorkspaceRuntime {
   readonly toolmanGateway!: ToolmanGateway;
   readonly roster!: Roster;
   readonly hub!: Hub;
+  readonly apiKeyAgents!: ApiKeyAgentSupervisor;
 
   private constructor() {}
 
@@ -89,6 +93,12 @@ export class WorkspaceRuntime {
     const contextCursors = new ContextCursorStore(db, threadEvents);
     const notes = new ContextNotes(db, threadEvents);
     const agentInvites = new AgentInvites(db);
+    const apiKeyAgents = new ApiKeyAgentSupervisor(
+      agentInvites,
+      { id: db.workspaceId, name: db.workspaceName },
+      options.port,
+      runAgent,
+    );
     const resourceAccess = new ResourceAccessStore(
       db,
       threadEvents,
@@ -186,6 +196,7 @@ export class WorkspaceRuntime {
       toolmanGateway,
       roster,
       hub,
+      apiKeyAgents,
     });
     board.onEvent = (event) => hub.broadcastBoardEvent(event);
     plans.onEvent = (event) => hub.broadcastPlanEvent(event);
@@ -218,6 +229,11 @@ export class WorkspaceRuntime {
         demoScripts,
       );
     }
+    // Fire-and-forget: AgentSocket.connect() is itself async and retries with
+    // backoff if nothing is listening yet, exactly like every other agent
+    // connection at boot — this only restarts agents that were already
+    // running before a server restart.
+    void apiKeyAgents.syncAll();
     return runtime;
   }
 
@@ -225,7 +241,16 @@ export class WorkspaceRuntime {
     this.hub.updateAgentConfig(profile);
   }
 
+  async startApiKeyAgent(invite: AgentInvite, apiKey: string): Promise<void> {
+    await this.apiKeyAgents.start(invite, apiKey);
+  }
+
+  stopApiKeyAgent(actorId: string): void {
+    this.apiKeyAgents.stop(actorId);
+  }
+
   async close(): Promise<void> {
+    this.apiKeyAgents.closeAll();
     await Promise.all([this.hub.close(), this.toolmanGateway.close()]);
   }
 }

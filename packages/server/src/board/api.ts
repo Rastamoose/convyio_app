@@ -22,7 +22,9 @@ import {
   WORKSPACE_INVITE_MAX_AGE_SECONDS,
   WORKSPACE_INVITE_MAX_USES,
 } from "@workspace/shared";
+import OpenAI from "openai";
 import { ApiError, type BoardService } from "./BoardService";
+import { encrypt } from "../crypto/secretBox";
 import type { PlanService } from "./PlanService";
 import type { Sessions } from "./sessions";
 import type { AgentInvites } from "../auth/AgentInvites";
@@ -131,6 +133,7 @@ const createAgentBodySchema = z.object({
   instructions: z.string().max(20000).default(""),
   model: z.string().trim().min(1).max(200).nullable().default(null),
   access: agentAccessSchema.default({ mode: "workspace", selectedActorIds: [] }),
+  apiKey: z.string().trim().min(1).max(500).optional(),
 });
 const patchAgentBodySchema = z
   .object({
@@ -163,6 +166,7 @@ const resourceAccessResolveBodySchema = z.object({ decision: z.enum(["approved",
 const contextNoteBodySchema = z.object({
   scope: z.enum(["workspace", "agent"] as const),
   agentId: z.string().min(1).max(200).nullable().optional(),
+  channelId: z.string().min(1).max(200).nullable().optional(),
   body: z.string().min(1).max(4000),
 });
 const projectAssignBodySchema = z.object({
@@ -234,6 +238,8 @@ export interface ApiServices {
   runnerRuntime?: RunnerRuntime | null;
   onUpdateAgent?: ((profile: AgentInvite) => void) | null;
   onRevokeAgent?: ((actorId: string) => void) | null;
+  onCreateAgent?: ((invite: AgentInvite, apiKey: string) => void) | null;
+  validateOpenAiKey?: (apiKey: string) => Promise<boolean>;
   onRemoveMember?: ((actorId: string) => void) | null;
   onAddMember?: ((actorId: string) => void) | null;
   snapshot?: WorkspaceSnapshotBuilder | null;
@@ -270,6 +276,8 @@ export function createApiHandler(services: ApiServices) {
     runnerRuntime = null,
     onUpdateAgent = null,
     onRevokeAgent = null,
+    onCreateAgent = null,
+    validateOpenAiKey = defaultValidateOpenAiKey,
     onRemoveMember = null,
     onAddMember = null,
     snapshot = null,
@@ -571,7 +579,7 @@ export function createApiHandler(services: ApiServices) {
       } else {
         const authenticated = await authenticate(req, db, sessions, workspaceRegistry);
         const scoped = authenticated.runtime
-          ? runtimeRouteServices(authenticated.runtime, accounts, workspaceAccess, github)
+          ? runtimeRouteServices(authenticated.runtime, accounts, workspaceAccess, github, validateOpenAiKey)
           : {
               db,
               service,
@@ -583,6 +591,8 @@ export function createApiHandler(services: ApiServices) {
               runnerRuntime,
               onUpdateAgent,
               onRevokeAgent,
+              onCreateAgent,
+              validateOpenAiKey,
               onRemoveMember,
               onAddMember,
               snapshot,
@@ -628,6 +638,8 @@ interface RouteServices {
   runnerRuntime: RunnerRuntime | null;
   onUpdateAgent: ((profile: AgentInvite) => void) | null;
   onRevokeAgent: ((actorId: string) => void) | null;
+  onCreateAgent: ((invite: AgentInvite, apiKey: string) => void) | null;
+  validateOpenAiKey: (apiKey: string) => Promise<boolean>;
   onRemoveMember: ((actorId: string) => void) | null;
   onAddMember: ((actorId: string) => void) | null;
   snapshot: WorkspaceSnapshotBuilder | null;
@@ -666,6 +678,8 @@ async function route(
     runnerRuntime,
     onUpdateAgent,
     onRevokeAgent,
+    onCreateAgent,
+    validateOpenAiKey,
     onRemoveMember,
     onAddMember,
     snapshot,
@@ -789,10 +803,26 @@ async function route(
   }
 
   // POST /api/agents — create a new user-created agent invite (humans only).
+  // An OpenAI agent with a pasted key skips pairing entirely: the server
+  // validates the key, stores it encrypted, and starts running the agent
+  // itself — there's nothing for a human to pair.
   if (parts[1] === "agents" && parts.length === 2 && method === "POST") {
     if (!agentInvites) throw new ApiError(501, "NOT_IMPLEMENTED", "agent invites are not available");
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can add agents");
     const body = createAgentBodySchema.parse(await readBody(req));
+    if (body.provider === "openai" && body.apiKey) {
+      const valid = await validateOpenAiKey(body.apiKey);
+      if (!valid) throw new ApiError(400, "INVALID_API_KEY", "this OpenAI API key was rejected");
+      const { invite, token } = await agentInvites.create(
+        body.name,
+        body.provider,
+        actor,
+        { instructions: body.instructions, requestedModel: body.model, access: body.access },
+        encrypt(body.apiKey),
+      );
+      onCreateAgent?.(invite, body.apiKey);
+      return json(res, 201, { ...invite, token });
+    }
     const { invite, token } = await agentInvites.create(body.name, body.provider, actor, {
       instructions: body.instructions,
       requestedModel: body.model,
@@ -998,7 +1028,7 @@ async function route(
 
   if (parts[1] === "context" && parts[2] === "notes" && parts.length === 3) {
     if (!notes) throw new ApiError(501, "NOT_IMPLEMENTED", "context notes are not available");
-    if (method === "GET") return json(res, 200, { notes: await notes.listFor(actor) });
+    if (method === "GET") return json(res, 200, { notes: await notes.listFor(actor, url.searchParams.get("channel_id")) });
     if (method === "POST") {
       const body = contextNoteBodySchema.parse(await readBody(req));
       return json(res, 201, { note: await notes.create(actor, body) });
@@ -1076,10 +1106,10 @@ async function route(
     return json(res, 200, body);
   }
 
-  // GET /api/workspace/prompt-envelope — typed policy + board context for a run.
+  // GET /api/workspace/prompt-envelope?channel_id= — typed policy + board context for a run.
   if (parts[1] === "workspace" && parts[2] === "prompt-envelope" && parts.length === 3 && method === "GET") {
     if (!envelope) throw new ApiError(501, "NOT_IMPLEMENTED", "prompt envelope is not available");
-    return json(res, 200, { envelope: await envelope.build(actor) });
+    return json(res, 200, { envelope: await envelope.build(actor, undefined, url.searchParams.get("channel_id")) });
   }
 
   // GET /api/thread/events?channel_id=&before_seq=&limit= — canonical
@@ -1600,6 +1630,7 @@ function runtimeRouteServices(
   accounts: AccountStore | null,
   workspaceAccess: WorkspaceAccess | null,
   github: GitHub | null,
+  validateOpenAiKey: (apiKey: string) => Promise<boolean>,
 ): RouteServices {
   return {
     db: runtime.db,
@@ -1611,7 +1642,12 @@ function runtimeRouteServices(
     agentInvites: runtime.agentInvites,
     runnerRuntime: runtime.runnerRuntime,
     onUpdateAgent: (profile) => runtime.updateAgent(profile),
-    onRevokeAgent: (actorId) => runtime.hub.closeAgentConnection(actorId),
+    onRevokeAgent: (actorId) => {
+      runtime.hub.closeAgentConnection(actorId);
+      runtime.stopApiKeyAgent(actorId);
+    },
+    onCreateAgent: (invite, apiKey) => void runtime.startApiKeyAgent(invite, apiKey),
+    validateOpenAiKey,
     onRemoveMember: (actorId) => {
       runtime.hub.closeAgentConnection(actorId);
       runtime.hub.closeHumanConnection(actorId);
@@ -1697,6 +1733,15 @@ function browserReturnOrigin(req: IncomingMessage): string {
     if (!(error instanceof TypeError)) throw error;
   }
   throw new ApiError(400, "BAD_ORIGIN", "browser origin is invalid");
+}
+
+async function defaultValidateOpenAiKey(apiKey: string): Promise<boolean> {
+  try {
+    await new OpenAI({ apiKey }).models.list();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function workspaceSocketUrl(origin: string, workspaceId: string): string {

@@ -63,6 +63,10 @@ describe("multi-workspace runtime", () => {
       fakeSupabase(users),
       new GitHub(db.sql, null),
       dataDir,
+      // Real port isn't known until server.listen() below; harmless here —
+      // this suite creates no openai+apiKey agents, so ApiKeyAgentSupervisor
+      // never actually opens a connection using it.
+      0,
       db.workspaceId,
       new Map(),
       "/tmp/convyio-no-demo",
