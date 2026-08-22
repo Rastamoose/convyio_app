@@ -8,6 +8,7 @@ import type { Brain } from "./brain";
 import { ClaudeBrain } from "./claudeBrain";
 import { ConversationSessions } from "./conversationSessions";
 import { GeminiBrain } from "./geminiBrain";
+import { OpenAIBrain } from "./openaiBrain";
 import type { StoredInstallation } from "./installation";
 import { Memory } from "./memory";
 import { Presence } from "./presence";
@@ -92,8 +93,8 @@ export async function runAgent(
     const revision = profile.configRevision;
     ready = false;
     socket.send({ type: "runner_status", configRevision: revision, health: "checking" });
-    if (configuration.mode === "installation" && profile.provider !== "claude") {
-      reportFailure(socket, revision, "incompatible", "CODEX_ADAPTER_UNAVAILABLE");
+    if (configuration.mode === "installation" && profile.provider !== configuration.installation.agent.provider) {
+      reportFailure(socket, revision, "incompatible", "PROVIDER_MISMATCH");
       return;
     }
     try {
@@ -240,6 +241,30 @@ async function localConfiguration(configuration: LegacyConfiguration | Installat
     const item = configuration.installation;
     const dataDir = stateDirectory(item.agent.id);
     await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
+    if (item.agent.provider === "openai") {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error("OPENAI_API_KEY environment variable is required for an OpenAI agent.");
+      const model = item.agent.requestedModel ?? "gpt-5";
+      return {
+        name: item.agent.name,
+        wsUrl: item.wsUrl,
+        token: item.installationToken,
+        dataDir,
+        brain: new OpenAIBrain(apiKey, model) as Brain,
+        acp: null,
+        systemPrompt: PLATFORM_POLICY,
+        harness: { id: "openai", version: "0.1.0" },
+        options: [{
+          id: "model",
+          label: "Model",
+          category: "model",
+          kind: "select",
+          value: model,
+          choices: [{ value: model, label: model }],
+        }] as RunnerConfigOption[],
+        effectiveModel: model as string | undefined,
+      };
+    }
     const acp = new AcpBrain(item.workspacePath);
     return {
       name: item.agent.name,

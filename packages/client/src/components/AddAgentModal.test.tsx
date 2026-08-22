@@ -82,6 +82,7 @@ describe("AddAgentModal", () => {
 
     render(<AddAgentModal open={true} onClose={() => {}} />);
 
+    await user.click(screen.getByText("Use an existing agent"));
     await user.type(screen.getByLabelText("Agent name"), "helper");
     await user.click(screen.getByText("Create agent"));
 

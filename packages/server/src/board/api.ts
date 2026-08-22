@@ -127,7 +127,7 @@ const agentAccessSchema = z.object({
 });
 const createAgentBodySchema = z.object({
   name: z.string().min(1).max(32),
-  provider: z.enum(["claude", "codex"] as const),
+  provider: z.enum(["claude", "codex", "openai"] as const),
   instructions: z.string().max(20000).default(""),
   model: z.string().trim().min(1).max(200).nullable().default(null),
   access: agentAccessSchema.default({ mode: "workspace", selectedActorIds: [] }),

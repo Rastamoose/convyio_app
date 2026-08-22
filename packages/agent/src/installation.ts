@@ -9,7 +9,7 @@ const agentSchema = z.object({
   workspaceId: z.string().min(1),
   actorId: z.string().min(1),
   name: z.string().min(1),
-  provider: z.enum(["claude", "codex"]),
+  provider: z.enum(["claude", "codex", "openai"]),
   instructions: z.string(),
   requestedModel: z.string().nullable(),
   access: z.object({ mode: z.enum(["workspace", "creator", "selected"]), selectedActorIds: z.array(z.string()) }),

@@ -1,6 +1,6 @@
 import type { AgentRuntimeSummary, WorkspaceInfo } from "./protocol";
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude" | "codex" | "openai";
 export type AgentAccessMode = "workspace" | "creator" | "selected";
 
 export interface AgentAccessPolicy {

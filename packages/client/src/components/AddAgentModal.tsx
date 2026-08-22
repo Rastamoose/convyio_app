@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentAccessMode,
   AgentAccessPolicy,
+  AgentProvider,
   AgentResourceAccessRequest,
   AgentResourceGrant,
   AgentResourceManifest,
@@ -23,6 +24,7 @@ const DEFAULT_INSTRUCTIONS =
  *  sentence instead of raw SCREAMING_SNAKE_CASE wire text. */
 const DIAGNOSTIC_MESSAGES: Record<string, string> = {
   CODEX_ADAPTER_UNAVAILABLE: "Codex support isn't available yet.",
+  PROVIDER_MISMATCH: "This agent's provider doesn't match the runner currently connected to it.",
   MODEL_UNAVAILABLE: "The requested model isn't available; running on the harness default instead.",
   HARNESS_MISMATCH: "This runner reports a different harness than the one this agent was created for.",
   PROTOCOL_UNSUPPORTED: "This runner speaks a protocol version the server doesn't support.",
@@ -37,7 +39,15 @@ function diagnosticMessage(code: string | undefined): string | null {
   return DIAGNOSTIC_MESSAGES[code] ?? code.toLowerCase().replace(/_/g, " ");
 }
 
-type Step = "create" | "pair" | "configure";
+function providerLabel(provider: AgentProvider): string {
+  return provider === "claude" ? "Claude" : provider === "openai" ? "OpenAI" : "Codex";
+}
+
+type Step = "method" | "create" | "pair" | "configure";
+/** Which top-level path the user picked in the method step: an already-running
+ *  local coding agent (Claude Code, Codex…) vs. a headless runner driven by an
+ *  API key you provide. Only decides the create step's provider choices. */
+type Method = "existing" | "apikey";
 
 /**
  * The agent pairing + profile surface: create an agent, pair a local runner
@@ -97,7 +107,8 @@ export function AddAgentModal({
     setAgentActive,
   } = useWorkspace();
 
-  const [step, setStep] = useState<Step>("create");
+  const [step, setStep] = useState<Step>("method");
+  const [method, setMethod] = useState<Method>("existing");
   // Only the id is kept; the entity is re-derived from agentInvites below so
   // a revoke, rename, or runtime update elsewhere is reflected automatically.
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
@@ -114,7 +125,8 @@ export function AddAgentModal({
   // open must start clean rather than showing whatever was left over.
   useEffect(() => {
     if (open) {
-      setStep("create");
+      setStep("method");
+      setMethod("existing");
       setActiveAgentId(null);
       setPairingCode(null);
       setName("");
@@ -157,7 +169,7 @@ export function AddAgentModal({
     setCreateError(null);
     const result = await createAgent({
       name: trimmedName,
-      provider: "claude",
+      provider: method === "apikey" ? "openai" : "claude",
       instructions,
       model: null,
       access: { mode: "workspace", selectedActorIds: [] },
@@ -192,7 +204,7 @@ export function AddAgentModal({
     if (await revokeAgent(activeAgent.id)) {
       setActiveAgentId(null);
       setPairingCode(null);
-      setStep("create");
+      setStep("method");
     }
   };
 
@@ -206,7 +218,7 @@ export function AddAgentModal({
       <div className="elevated flex max-h-[85vh] w-full max-w-md flex-col rounded-xl">
         <div className="flex items-center justify-between border-b border-divider px-4 py-3">
           <h2 className="text-lg font-semibold text-body">
-            {step === "create" && "Add an agent"}
+            {(step === "method" || step === "create") && "Add an agent"}
             {step === "pair" && "Connect locally"}
             {step === "configure" && (activeAgent?.name ?? "Agent")}
           </h2>
@@ -220,8 +232,19 @@ export function AddAgentModal({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
+          {step === "method" && (
+            <MethodStep
+              onChoose={(chosen) => {
+                setMethod(chosen);
+                setStep("create");
+              }}
+            />
+          )}
+
           {step === "create" && (
             <CreateStep
+              method={method}
+              onBack={() => setStep("method")}
               name={name}
               onNameChange={(value) => {
                 setName(value);
@@ -259,7 +282,7 @@ export function AddAgentModal({
             />
           )}
 
-          {step === "create" && agentInvites.length > 0 && (
+          {step === "method" && agentInvites.length > 0 && (
             <div className="mt-6">
               <h3 className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
                 Your agents
@@ -276,7 +299,7 @@ export function AddAgentModal({
                           {invite.name}
                         </div>
                         <div className="text-xs text-muted">
-                          {invite.provider === "claude" ? "Claude" : "Codex"}
+                          {providerLabel(invite.provider)}
                         </div>
                       </div>
                       <span className="ml-2 flex shrink-0 items-center gap-1.5 text-xs text-muted">
@@ -352,7 +375,36 @@ function HarnessOption({
   );
 }
 
+function MethodStep({ onChoose }: { onChoose: (method: Method) => void }) {
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={() => onChoose("existing")}
+        className="w-full cursor-pointer rounded-md border border-divider bg-input px-3 py-3 text-left hover:bg-subtle-hover"
+      >
+        <div className="text-sm font-medium text-body">Use an existing agent</div>
+        <div className="mt-0.5 text-xs text-muted">
+          Link a coding agent already running on your machine, like Claude Code. It keeps using
+          the login already signed in there — Convyio never sees it.
+        </div>
+      </button>
+      <button
+        onClick={() => onChoose("apikey")}
+        className="w-full cursor-pointer rounded-md border border-divider bg-input px-3 py-3 text-left hover:bg-subtle-hover"
+      >
+        <div className="text-sm font-medium text-body">Use an API key</div>
+        <div className="mt-0.5 text-xs text-muted">
+          Run a headless agent powered by a model API key you provide, set locally as an
+          environment variable on the machine running it. Convyio never sees the key either.
+        </div>
+      </button>
+    </div>
+  );
+}
+
 function CreateStep({
+  method,
+  onBack,
   name,
   onNameChange,
   nameValid,
@@ -362,6 +414,8 @@ function CreateStep({
   error,
   onSubmit,
 }: {
+  method: Method;
+  onBack: () => void;
   name: string;
   onNameChange: (value: string) => void;
   nameValid: boolean;
@@ -373,19 +427,38 @@ function CreateStep({
 }) {
   return (
     <>
+      <button
+        onClick={onBack}
+        className="mb-3 cursor-pointer text-xs font-medium text-accent hover:underline"
+      >
+        ← Back
+      </button>
+
       <div className="mb-4">
         <label className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase">
           Harness
         </label>
-        <div className="flex gap-2">
-          <HarnessOption label="Claude" selected />
-          <HarnessOption
-            label="Codex"
-            note="(coming soon)"
-            disabled
-            title="Not available yet — the runner rejects Codex agents with CODEX_ADAPTER_UNAVAILABLE."
-          />
-        </div>
+        {method === "existing" ? (
+          <div className="flex gap-2">
+            <HarnessOption label="Claude" selected />
+            <HarnessOption
+              label="Codex"
+              note="(coming soon)"
+              disabled
+              title="Not available yet — the runner rejects Codex agents with CODEX_ADAPTER_UNAVAILABLE."
+            />
+          </div>
+        ) : (
+          <>
+            <div className="flex gap-2">
+              <HarnessOption label="OpenAI" selected />
+            </div>
+            <p className="mt-1 text-xs text-faint">
+              Set <code>OPENAI_API_KEY</code> on the machine running <code>convyio-agent</code> before
+              pairing — the next step will walk you through it.
+            </p>
+          </>
+        )}
       </div>
 
       <div className="mb-4">
@@ -441,6 +514,7 @@ function PairStep({
 }) {
   const cliCommand = pairingCode ? pairCommand(apiUrl, pairingCode) : "";
   const prompt = pairingCode ? setupPrompt(apiUrl, pairingCode, agent.name) : "";
+  const apiKeyAgent = agent.provider === "openai";
 
   const diagnostic = diagnosticMessage(agent.runtime.diagnosticCode);
   let statusText: string;
@@ -467,18 +541,30 @@ function PairStep({
   return (
     <>
       <p className="mb-4 text-sm text-muted">
-        Paste this into Claude Code, Cursor, Codex, or any coding agent on this computer.
-        It pairs <span className="text-body">{agent.name}</span> locally. Your subscription stays
-        on this machine — Convyio never sees that login. Folders are attached later with Toolman.
+        {apiKeyAgent ? (
+          <>
+            Set <code>OPENAI_API_KEY</code> in the shell, then run the command below to pair{" "}
+            <span className="text-body">{agent.name}</span> and start it. The key stays on that
+            machine — Convyio never sees it.
+          </>
+        ) : (
+          <>
+            Paste this into Claude Code, Cursor, Codex, or any coding agent on this computer.
+            It pairs <span className="text-body">{agent.name}</span> locally. Your subscription stays
+            on this machine — Convyio never sees that login. Folders are attached later with Toolman.
+          </>
+        )}
       </p>
 
       {pairingCode && (
         <div className="mb-4 space-y-3">
-          <SetupPromptCard value={prompt} />
+          {!apiKeyAgent && <SetupPromptCard value={prompt} />}
           <div>
-            <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
-              Or run it yourself
-            </p>
+            {!apiKeyAgent && (
+              <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
+                Or run it yourself
+              </p>
+            )}
             <div className="space-y-2">
               <PairingCopyRow label="CLI" value={cliCommand} />
               <PairingCopyRow label="Pairing code" value={pairingCode} />
