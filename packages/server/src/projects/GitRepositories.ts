@@ -478,6 +478,16 @@ export class GitRepositories {
     input: { title: string; body: string; head: string; base: string },
   ): Promise<GitPullRequest> {
     await this.requireOwned(actor, projectId);
+    return this.createPullInternal(actor, projectId, input);
+  }
+
+  /** Shared by the human REST path (ownership-checked above) and the agent
+   *  execute() path (authorized upstream by the chat-grant + approval gate). */
+  private async createPullInternal(
+    actor: Actor,
+    projectId: string,
+    input: { title: string; body: string; head: string; base: string },
+  ): Promise<GitPullRequest> {
     const row = await this.requireRow(projectId);
     const created = await this.github.requestForConnection<GitHubPullResponse>(
       row.connection_id,
@@ -515,6 +525,10 @@ export class GitRepositories {
 
   async mergePull(actor: Actor, projectId: string, number: number): Promise<void> {
     await this.requireOwned(actor, projectId);
+    return this.mergePullInternal(actor, projectId, number);
+  }
+
+  private async mergePullInternal(actor: Actor, projectId: string, number: number): Promise<void> {
     const row = await this.requireRow(projectId);
     const pull = await this.github.requestForConnection<GitHubPullResponse>(
       row.connection_id,
@@ -643,16 +657,35 @@ export class GitRepositories {
         case "project_git_status":
           return { ok: true, output: JSON.stringify(await this.status(row), null, 2) };
         case "project_git_fetch":
+          await this.locked(action.projectId, () => this.syncOperation(actor.id, action.projectId, "fetch"));
+          return { ok: true, output: "reads are always live from GitHub; nothing to fetch" };
         case "project_git_pull":
-        case "project_git_push":
-          return {
-            ok: false,
-            code: "HUMAN_ONLY",
-            error: "pushing to the real branch requires a human — use project_git_commit to queue changes, then ask them to push",
-          };
+          throw new ApiError(409, "GIT_PULL_NOT_APPLICABLE", "reads are always live from GitHub; there is nothing to pull");
+        case "project_git_push": {
+          // Reaching this call means the human either approved this exact
+          // push in the interactive prompt or set the channel's mode to run
+          // without asking — the two-layer authz gate in Toolman/hub already
+          // ran before execute() was invoked. No separate ownership check here.
+          await this.locked(action.projectId, () => this.syncOperation(actor.id, action.projectId, "push"));
+          return { ok: true, output: `pushed to ${row.working_branch}` };
+        }
         case "project_git_branch":
           await this.locked(action.projectId, () => this.branch(actor, action.projectId, action.name, action.startPoint));
           return { ok: true, output: `created ${action.name}` };
+        case "project_git_open_pull": {
+          const pull = await this.createPullInternal(actor, action.projectId, {
+            title: action.title,
+            body: action.body,
+            head: action.head,
+            base: action.base ?? row.default_branch,
+          });
+          return { ok: true, output: `opened PR #${pull.number}: ${pull.htmlUrl}` };
+        }
+        case "project_git_merge_pull":
+          // Same authorization note as project_git_push above: this only
+          // runs once a human has approved this specific merge.
+          await this.mergePullInternal(actor, action.projectId, action.number);
+          return { ok: true, output: `merged PR #${action.number}` };
       }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };

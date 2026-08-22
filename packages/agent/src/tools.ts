@@ -286,20 +286,38 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
       required: ["project_id"],
     },
   },
-  ...["fetch", "pull", "push"].map((operation): ToolDeclaration => ({
-    name: `project_git_${operation}`,
-    description: `${operation} the assigned Git project. Mutating: a human will be asked to approve it.`,
+  {
+    name: "project_git_fetch",
+    description: "Recompute sync status for an assigned Git project. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
-      properties: {
-        project_id: { type: "string" },
-      },
+      properties: { project_id: { type: "string" } },
       required: ["project_id"],
     },
-  })),
+  },
+  {
+    name: "project_git_pull",
+    description: "Not applicable — reads are always live from GitHub, so there is nothing to pull.",
+    parameters: {
+      type: "object",
+      properties: { project_id: { type: "string" } },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "project_git_push",
+    description:
+      "Push queued commits straight to the real branch, bypassing review. Default workflow is project_git_open_pull instead — only push directly if the user explicitly asked you to push. Mutating: a human will be asked to approve it.",
+    parameters: {
+      type: "object",
+      properties: { project_id: { type: "string" } },
+      required: ["project_id"],
+    },
+  },
   {
     name: "project_git_branch",
-    description: "Create and publish a branch in an assigned Git project. Mutating: a human will be asked to approve it.",
+    description:
+      "Create and publish a branch in an assigned Git project. Default workflow: make your own branch here before committing, rather than committing straight to the default branch. Mutating: a human will be asked to approve it.",
     parameters: {
       type: "object",
       properties: {
@@ -320,6 +338,35 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
         message: { type: "string" },
       },
       required: ["project_id", "message"],
+    },
+  },
+  {
+    name: "project_git_open_pull",
+    description:
+      "Open a pull request from your branch into base (defaults to the project's default branch). This is the default way to land work — prefer it over project_git_push/project_git_merge_pull unless the user explicitly asked you to push or merge directly. Mutating: a human will be asked to approve it.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        title: { type: "string" },
+        body: { type: "string" },
+        head: { type: "string", description: "Your branch (created with project_git_branch)." },
+        base: { type: "string", description: "Defaults to the project's default branch." },
+      },
+      required: ["project_id", "title", "body", "head"],
+    },
+  },
+  {
+    name: "project_git_merge_pull",
+    description:
+      "Merge an existing pull request. Only do this if the user explicitly asked you to merge or resolve conflicts — normally a human merges after review. If GitHub reports a conflict, pull the target branch's current content, resolve it in your branch with project_edit_file, commit, and try again. Mutating: a human will be asked to approve it.",
+    parameters: {
+      type: "object",
+      properties: {
+        project_id: { type: "string" },
+        number: { type: "number" },
+      },
+      required: ["project_id", "number"],
     },
   },
 ];
@@ -461,6 +508,7 @@ async function ensureProjectAccess(
 export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolExecutor {
   return async (name, args) => {
     const str = (key: string): string => String(args[key] ?? "");
+    const num = (key: string): number => Number(args[key] ?? 0);
     try {
       switch (name) {
         case "board_list": {
@@ -700,6 +748,29 @@ export function createToolExecutor(board: BoardClient, hooks: ToolHooks): ToolEx
                 : name === "project_git_pull"
                   ? { kind: "project_git_pull" as const, projectId: str("project_id") }
                   : { kind: "project_git_push" as const, projectId: str("project_id") };
+          const result = await board.requestAction(action, ref || null, hooks.conversationId ?? null);
+          if (!result.ok && result.code) {
+            hooks.onActivity(`toolman denied ${name}: ${result.code}`);
+            return { denied: result.code, error: result.error, note: DENIAL_NOTES[result.code] };
+          }
+          return result.ok ? { done: result.output } : { error: result.error };
+        }
+        case "project_git_open_pull":
+        case "project_git_merge_pull": {
+          const ref = str("board_item_ref");
+          const item = board.resolve(ref);
+          if (item && (item.status === "approved" || item.status === "in_progress")) hooks.onTaskActive(item);
+          hooks.onActivity(`${name} ${str("project_id")} (${ref || "no ref"})`);
+          const action = name === "project_git_open_pull"
+            ? {
+                kind: "project_git_open_pull" as const,
+                projectId: str("project_id"),
+                title: str("title"),
+                body: str("body"),
+                head: str("head"),
+                ...(args.base ? { base: str("base") } : {}),
+              }
+            : { kind: "project_git_merge_pull" as const, projectId: str("project_id"), number: num("number") };
           const result = await board.requestAction(action, ref || null, hooks.conversationId ?? null);
           if (!result.ok && result.code) {
             hooks.onActivity(`toolman denied ${name}: ${result.code}`);

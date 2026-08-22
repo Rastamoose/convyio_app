@@ -67,6 +67,8 @@ export interface WorkspaceState {
   pendingProjectAccessRequests: ProjectAccessRequest[];
   resolveProjectAccessRequest: (requestId: string, decision: "approved" | "denied") => Promise<boolean>;
   setPermissionMode: (agentId: string, channel: string, mode: PermissionMode) => void;
+  /** Current mode per agent/channel, keyed `${agentId}:${channelId}`; see conversationModes for the caveat on unset entries. */
+  conversationModes: Map<string, PermissionMode>;
   board: BoardItem[];
   plans: BoardPlan[];
   context: ContextEntry[];
@@ -206,6 +208,11 @@ export function WorkspaceProvider({
   const interactions = useInteractions();
   const [resourceAccessRequests, setResourceAccessRequests] = useState<AgentResourceAccessRequest[]>([]);
   const [projectAccessRequests, setProjectAccessRequests] = useState<ProjectAccessRequest[]>([]);
+  // Keyed `${agentId}:${channelId}`. Only ever populated by conversation_updated
+  // broadcasts (there is no fetch-on-load for this yet), so a mode set before
+  // this client connected won't show until it next changes — acceptable since
+  // an unknown entry already reads as the correct default ("Ask").
+  const [conversationModes, setConversationModes] = useState<Map<string, PermissionMode>>(new Map());
   const api = useApiSession();
   const attachments = useAttachmentDrafts(pushToast, api);
   const board = useBoard(pushToast, api);
@@ -322,6 +329,13 @@ export function WorkspaceProvider({
         }
         console.warn("[server]", event.error);
         pushToast(event.error);
+        break;
+      case "conversation_updated":
+        setConversationModes((prev) => {
+          const next = new Map(prev);
+          next.set(`${event.conversation.agentId}:${event.conversation.channelId}`, event.conversation.permissionMode);
+          return next;
+        });
         break;
     }
   });
@@ -785,6 +799,7 @@ export function WorkspaceProvider({
     resolveProjectAccessRequest,
     setPermissionMode: (agentId, channel, mode) =>
       connection.send({ type: "conversation_mode_set", agentId, channel, mode }),
+    conversationModes,
     setStatus: (status) => connection.send({ type: "status_set", status }),
     signOut: onSignOut ?? null,
     clearMessages: () => connection.send({ type: "clear" }),

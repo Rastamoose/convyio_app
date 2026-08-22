@@ -832,6 +832,7 @@ function Workspace({
               onPrefill={prefillText}
               onAddAgent={() => setAddAgentOpen(true)}
               onOpenBoard={openBoard}
+              onSwitchChannel={setChannel}
             />
             <MessageInput
               channel={channel}

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AgentResourceAccessRequest, BoardItem, BoardPlan, ChatMessage, InteractionRequest, Participant } from "@workspace/shared";
+import type { AgentResourceAccessRequest, BoardItem, BoardPlan, ChatMessage, InteractionRequest, Participant, ProjectAccessRequest } from "@workspace/shared";
 import type { LocalMessage } from "../hooks/useChatMessages";
 import { MessageList } from "./MessageList";
 
@@ -16,6 +16,7 @@ let board: BoardItem[] = [];
 let plans: BoardPlan[] = [];
 let pendingInteractions: InteractionRequest[] = [];
 let pendingResourceAccessRequests: AgentResourceAccessRequest[] = [];
+let pendingProjectAccessRequests: ProjectAccessRequest[] = [];
 let channelInfos: { id: string; name: string; sectionId: string | null }[] = [
   { id: "ch-general", name: "general", sectionId: null },
 ];
@@ -41,6 +42,8 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     pendingInteractions,
     pendingResourceAccessRequests,
     resolveResourceAccessRequest: vi.fn(),
+    pendingProjectAccessRequests,
+    resolveProjectAccessRequest: vi.fn(),
     channelInfos,
     executions: [],
     acceptPlan: vi.fn(),
@@ -162,6 +165,7 @@ function Harness({
       onDiscuss={vi.fn()}
       onPrefill={vi.fn()}
       onOpenBoard={vi.fn()}
+      onSwitchChannel={vi.fn()}
     />
   );
 }
@@ -174,6 +178,7 @@ describe("MessageList", () => {
     plans = [];
     pendingInteractions = [];
     pendingResourceAccessRequests = [];
+    pendingProjectAccessRequests = [];
     channelInfos = [{ id: "ch-general", name: "general", sectionId: null }];
     participants = [human("self-1", "me")];
     self = participants[0];

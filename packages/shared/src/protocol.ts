@@ -442,6 +442,19 @@ export const actionRequestEventSchema = z.object({
       projectId: z.string().min(1).max(128),
       message: z.string().min(1).max(500),
     }),
+    z.object({
+      kind: z.literal("project_git_open_pull"),
+      projectId: z.string().min(1).max(128),
+      title: z.string().min(1).max(500),
+      body: z.string().max(1_048_576),
+      head: z.string().min(1).max(200),
+      base: z.string().min(1).max(200).optional(),
+    }),
+    z.object({
+      kind: z.literal("project_git_merge_pull"),
+      projectId: z.string().min(1).max(128),
+      number: z.number().int().positive(),
+    }),
   ]),
   /** Conversation the action belongs to; selects the permission mode. */
   conversationId: z.string().max(128).nullable().optional(),

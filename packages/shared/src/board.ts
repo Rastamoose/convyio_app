@@ -214,4 +214,6 @@ export const ACTION_CAPABILITY: Readonly<Record<string, WorkCapability>> = {
   project_git_push: "shell_repo",
   project_git_branch: "shell_repo",
   project_git_commit: "shell_repo",
+  project_git_open_pull: "shell_repo",
+  project_git_merge_pull: "shell_repo",
 };

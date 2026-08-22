@@ -32,7 +32,9 @@ export type ToolmanActionKind =
   | "project_git_pull"
   | "project_git_push"
   | "project_git_branch"
-  | "project_git_commit";
+  | "project_git_commit"
+  | "project_git_open_pull"
+  | "project_git_merge_pull";
 
 export const TOOLMAN_READ_ACTIONS: readonly ToolmanActionKind[] = [
   "project_read_file",
@@ -52,6 +54,8 @@ export const TOOLMAN_ACTION_CAPABILITY: Readonly<Partial<Record<ToolmanActionKin
   project_git_push: "shell_repo",
   project_git_branch: "shell_repo",
   project_git_commit: "shell_repo",
+  project_git_open_pull: "shell_repo",
+  project_git_merge_pull: "shell_repo",
 };
 
 export type ProjectAction =
@@ -68,7 +72,9 @@ export type ProjectAction =
   | { kind: "project_git_pull"; projectId: string }
   | { kind: "project_git_push"; projectId: string }
   | { kind: "project_git_branch"; projectId: string; name: string; startPoint?: string }
-  | { kind: "project_git_commit"; projectId: string; message: string };
+  | { kind: "project_git_commit"; projectId: string; message: string }
+  | { kind: "project_git_open_pull"; projectId: string; title: string; body: string; head: string; base?: string }
+  | { kind: "project_git_merge_pull"; projectId: string; number: number };
 
 export interface ToolmanNodeSummary {
   id: string;

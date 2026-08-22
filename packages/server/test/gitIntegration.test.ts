@@ -229,11 +229,31 @@ describe("GitHub repository integration", () => {
     })).output ?? "{}") as { aheadCount: number };
     assert.equal(status.aheadCount, 1);
 
+    // Reaching execute() means the two-layer authz gate upstream (Toolman +
+    // the interactive human approval prompt) already ran, so an agent-issued
+    // push now goes straight through rather than being hard-denied.
     const agentPush = await repositories.execute(agent, { kind: "project_git_push", projectId: linked.projectId });
-    assert.equal(agentPush.ok, false);
-    assert.equal(agentPush.code, "HUMAN_ONLY");
-    const stillAhead = await repositories.find(linked.projectId);
-    assert.equal(stillAhead?.sync?.aheadCount, 1);
+    assert.equal(agentPush.ok, true, agentPush.error);
+    const afterAgentPush = await repositories.find(linked.projectId);
+    assert.equal(afterAgentPush?.sync?.aheadCount, 0);
+    const eventsAfterAgentPush = await db.sql<{ kind: string; actor_id: string }[]>`
+      SELECT kind, actor_id FROM thread_events WHERE subject_id = ${linked.projectId} ORDER BY seq
+    `;
+    assert.ok(eventsAfterAgentPush.some((event) => event.kind === "git.push.completed" && event.actor_id === agent.id));
+
+    // A human can still push directly through sync() — exercised here with a
+    // second round of agent-staged changes.
+    assert.equal((await repositories.execute(agent, {
+      kind: "project_write_file",
+      projectId: linked.projectId,
+      path: "feature2.txt",
+      content: "more agent work\n",
+    })).ok, true);
+    assert.equal((await repositories.execute(agent, {
+      kind: "project_git_commit",
+      projectId: linked.projectId,
+      message: "Second agent change",
+    })).ok, true);
 
     const pushedRepository = await repositories.sync(owner, linked.projectId, "push");
     assert.equal(pushedRepository.sync?.aheadCount, 0);

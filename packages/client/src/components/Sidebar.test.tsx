@@ -60,6 +60,9 @@ vi.mock("../hooks/WorkspaceContext", () => ({
     pendingProjectAccessRequests: [],
     resolveProjectAccessRequest: vi.fn(),
     setPermissionMode: vi.fn(),
+    conversationModes: new Map(),
+    refreshAgents: vi.fn(),
+    setAgentActive: vi.fn(),
   }),
 }));
 

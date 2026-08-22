@@ -14,6 +14,7 @@ import type {
   ChatMessage,
   InteractionRequest,
   Participant,
+  ProjectAccessRequest,
 } from "@workspace/shared";
 import { joinNoticeMemberKind } from "@workspace/shared";
 import { useWorkspace } from "../hooks/WorkspaceContext";
@@ -31,6 +32,7 @@ import { MemberCard } from "./MemberCard";
 import { PermissionCard } from "./PermissionCard";
 import { PinIcon, PinnedMessages } from "./PinnedMessages";
 import { PlanCard } from "./PlanCard";
+import { ProjectAccessRequestCard } from "./ProjectAccessRequestCard";
 import { ProposalCard } from "./ProposalCard";
 import { ResourceAccessRequestCard } from "./ResourceAccessRequestCard";
 import { ResultCard } from "./ResultCard";
@@ -87,7 +89,8 @@ type TimelineEntry =
   | { kind: "proposal"; item: BoardItem }
   | { kind: "result"; item: BoardItem }
   | { kind: "interaction"; request: InteractionRequest }
-  | { kind: "resource_request"; request: AgentResourceAccessRequest };
+  | { kind: "resource_request"; request: AgentResourceAccessRequest }
+  | { kind: "project_request"; request: ProjectAccessRequest };
 
 function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "message") return entry.message.timestamp;
@@ -95,7 +98,7 @@ function timelineTs(entry: TimelineEntry): number {
   if (entry.kind === "proposal" || entry.kind === "result") return entry.item.createdAt;
   if (entry.kind === "plan") return entry.plan.createdAt;
   if (entry.kind === "interaction") return entry.request.createdAt;
-  if (entry.kind === "resource_request") return entry.request.createdAt;
+  if (entry.kind === "resource_request" || entry.kind === "project_request") return entry.request.createdAt;
   return entry.run.startedAt;
 }
 
@@ -549,6 +552,7 @@ export function MessageList({
   onPrefill,
   onAddAgent,
   onOpenBoard,
+  onSwitchChannel,
 }: {
   // TODO(channels): channel handling is bolted on (per-message string field,
   // client-side filtering). Needs a proper channel model: scoped
@@ -562,6 +566,8 @@ export function MessageList({
   onPrefill: (text: string) => void;
   onAddAgent?: () => void;
   onOpenBoard: (target: { kind: "plan" | "item"; id: string; channel?: string | null }) => void;
+  /** MemberCard's "Jump to trace" can target a message in a different channel. */
+  onSwitchChannel: (channel: string) => void;
 }) {
   const {
     messages: allMessages,
@@ -586,6 +592,8 @@ export function MessageList({
     resolveInteraction,
     pendingResourceAccessRequests,
     resolveResourceAccessRequest,
+    pendingProjectAccessRequests,
+    resolveProjectAccessRequest,
     channelInfos = [],
     executions,
   } = useWorkspace();
@@ -707,12 +715,16 @@ export function MessageList({
       ),
     [pendingResourceAccessRequests, channelId],
   );
+  // ProjectAccessRequest carries no channel at all (it's project-, not
+  // channel-, scoped), so it shows in every channel, same as a resource
+  // request whose originChannelId is null.
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [
       ...layout(messages).map((r) => ({ kind: "message" as const, ...r })),
       ...boardLines.map((line) => ({ kind: "board" as const, line })),
       ...channelRuns.map((run) => ({ kind: "trace" as const, run })),
+      ...pendingProjectAccessRequests.map((request) => ({ kind: "project_request" as const, request })),
       ...channelPlans.map((plan) => ({ kind: "plan" as const, plan })),
       ...proposedItems.map((item) => ({ kind: "proposal" as const, item })),
       ...completedItems.map((item) => ({ kind: "result" as const, item })),
@@ -744,7 +756,7 @@ export function MessageList({
       withRequests.splice(insertAt, 0, { kind: "resource_request", request });
     }
     return withRequests;
-  }, [messages, boardLines, channelRuns, channelPlans, proposedItems, completedItems, orphanInteractions, channelResourceRequests]);
+  }, [messages, boardLines, channelRuns, channelPlans, proposedItems, completedItems, orphanInteractions, channelResourceRequests, pendingProjectAccessRequests]);
 
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -1101,6 +1113,21 @@ export function MessageList({
               </div>
             );
           }
+          if (entry.kind === "project_request") {
+            return (
+              <div
+                key={entry.request.id}
+                id={`project-request-${entry.request.id}`}
+                className="px-4 py-2"
+              >
+                <ProjectAccessRequestCard
+                  request={entry.request}
+                  onResolve={resolveProjectAccessRequest}
+                  compact
+                />
+              </div>
+            );
+          }
           if (entry.kind === "trace") {
             return (
               <TraceMessageLive
@@ -1225,6 +1252,7 @@ export function MessageList({
           onDiscuss={onDiscuss}
           onPrefill={onPrefill}
           onClose={() => setSelectedMember(null)}
+          onSwitchChannel={onSwitchChannel}
         />
       )}
     </div>

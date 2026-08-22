@@ -29,6 +29,7 @@ export function MemberCard({
   onDiscuss,
   onPrefill,
   onClose,
+  onSwitchChannel,
 }: {
   participant: Participant;
   /** Channel the permission mode applies to; mode is per agent per channel. */
@@ -38,6 +39,8 @@ export function MemberCard({
   onDiscuss: (item: BoardItem) => void;
   onPrefill: (text: string) => void;
   onClose: () => void;
+  /** Jump-to-trace's target can be in a different channel than the one open now. */
+  onSwitchChannel: (channel: string) => void;
 }) {
   const {
     board,
@@ -55,6 +58,8 @@ export function MemberCard({
     resolveInteraction,
     resolveResourceAccessRequest,
     resolveProjectAccessRequest,
+    conversationModes,
+    channelInfos,
   } = useWorkspace();
   const ref = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(Date.now());
@@ -88,11 +93,20 @@ export function MemberCard({
   }, [onClose]);
 
   const isAgent = participant.kind === "agent";
+  const channelId = channelInfos.find((info) => info.name === channel)?.id ?? channel;
+  const currentMode = conversationModes.get(`${participant.id}:${channelId}`) ?? "default";
 
-  // Runner health is not pushed over the socket (see refreshAgents), so pull it
-  // once when the card opens rather than acting on whatever is stale in state.
+  // Runner health is not pushed over the socket, so poll while the card is
+  // open — otherwise clicking "Wake up"/"Put to sleep" looks broken: the
+  // click lands, but the button never reflects it until the card is closed
+  // and reopened. Same pattern as AddAgentModal's pair/configure polling.
+  const refresh = useRef(refreshAgents);
+  refresh.current = refreshAgents;
   useEffect(() => {
-    if (isAgent) void refreshAgents();
+    if (!isAgent) return;
+    void refresh.current();
+    const id = window.setInterval(() => void refresh.current(), 3000);
+    return () => window.clearInterval(id);
   }, [isAgent, participant.id]);
 
   // Only paired runners have a sleep/wake switch; managed agents like noodle
@@ -133,10 +147,14 @@ export function MemberCard({
   const lastRunMessage = [...messages]
     .reverse()
     .find((m) => m.authorId === participant.id && m.runId);
-  const jumpId = liveRun
-    ? `trace-${liveRun.runId}`
+  // The target can be in a different channel than the one open right now
+  // (this card shows the agent's single most recent run/message across all
+  // channels) — jumpTarget carries the channel name so the click handler can
+  // switch first; without it document.getElementById silently finds nothing.
+  const jumpTarget = liveRun
+    ? { id: `trace-${liveRun.runId}`, channel: channelInfos.find((c) => c.id === liveRun.channelId)?.name }
     : lastRunMessage
-      ? `msg-${lastRunMessage.id}`
+      ? { id: `msg-${lastRunMessage.id}`, channel: lastRunMessage.channel }
       : null;
 
   const mention = () => {
@@ -205,7 +223,11 @@ export function MemberCard({
                   key={mode}
                   title={hint}
                   onClick={() => setPermissionMode(participant.id, channel, mode)}
-                  className="flex-1 cursor-pointer rounded-md px-1.5 py-1 text-[11px] text-muted select-none hover:bg-subtle-hover hover:text-body"
+                  className={`flex-1 cursor-pointer rounded-md px-1.5 py-1 text-[11px] select-none ${
+                    mode === currentMode
+                      ? "bg-accent text-on-accent"
+                      : "text-muted hover:bg-subtle-hover hover:text-body"
+                  }`}
                 >
                   {label}
                 </button>
@@ -276,12 +298,18 @@ export function MemberCard({
           )}
           <div className="flex gap-1.5">
             <button
-              disabled={!jumpId}
+              disabled={!jumpTarget}
               onClick={() => {
-                if (!jumpId) return;
-                document
-                  .getElementById(jumpId)
-                  ?.scrollIntoView({ behavior: "smooth" });
+                if (!jumpTarget) return;
+                const scroll = () =>
+                  document.getElementById(jumpTarget.id)?.scrollIntoView({ behavior: "smooth" });
+                if (jumpTarget.channel && jumpTarget.channel !== channel) {
+                  onSwitchChannel(jumpTarget.channel);
+                  // Wait a paint for the target channel's messages to mount.
+                  requestAnimationFrame(() => requestAnimationFrame(scroll));
+                } else {
+                  scroll();
+                }
               }}
               className="flex-1 cursor-pointer rounded-md bg-subtle px-2 py-1.5 text-xs font-semibold text-body hover:bg-subtle-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-subtle"
             >
