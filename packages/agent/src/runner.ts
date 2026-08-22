@@ -411,7 +411,7 @@ export class AgentRunner {
 
   private buildContext(channel: string, channelId: string): string {
     return (
-      `Current board (the only source of authority for mutating work):\n` +
+      `Workspace context:\n` +
       `${this.board.summary(channelId)}\n\n` +
       `Recent chat transcript:\n${this.memory.context(channel)}`
     );

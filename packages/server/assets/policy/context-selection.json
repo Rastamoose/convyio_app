@@ -1,17 +1,16 @@
 {
   "id": "context-selection",
-  "version": "2",
+  "version": "3",
   "alwaysInclude": [
     "platform policy",
     "current assignment and authorization",
     "the triggering message",
-    "compact approved-ticket state, owners, and blockers",
     "bounded workspace guidance and relevant agent notes",
     "the minimal resource manifest and current grant states"
   ],
   "omit": [
     "contents of resources merely because access exists",
-    "plans, proposals, and channel context without a channel grant",
+    "channel context without a channel grant",
     "routine trace deltas",
     "tool progress",
     "token usage",

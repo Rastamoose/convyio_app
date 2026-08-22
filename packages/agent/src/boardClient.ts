@@ -368,28 +368,10 @@ export class BoardClient {
     this.socket.send({ type: "action_cancel", requestId: this.lastRequestId });
   }
 
-  /** Compact board summary for the model's context window. */
+  /** Compact workspace summary for the model's context window. */
   summary(channelId?: string): string {
     const envelope = channelId && this.envelope ? scopeEnvelope(this.envelope, channelId) : this.envelope;
-    const board = envelope
-      ? renderPromptEnvelope(envelope)
-      : this.list().length === 0
-        ? "(board is empty)"
-        : this.list()
-            .filter(
-              (item) =>
-                channelId === undefined ||
-                ["approved", "in_progress", "blocked", "done"].includes(item.status) ||
-                item.originChannelId === channelId,
-            )
-            .map((i) => {
-              const proposal =
-                i.origin === "agent" ? ` — why: ${i.proposalWhy} — effect: ${i.proposalEffect}` : "";
-              const scope = i.scopePaths ? ` — scope: ${i.scopePaths.join(", ")}` : "";
-              const owner = i.ownerName ? ` — owner: ${i.ownerName}` : "";
-              return `${i.ref} [${i.status}] ${i.title}${owner}${proposal}${scope}`;
-            })
-            .join("\n") || "(board is empty)";
+    const context = envelope ? renderPromptEnvelope(envelope) : "(workspace context unavailable)";
     const projects = this.projects.length === 0
       ? "(no shared projects)"
       : this.projects
@@ -405,28 +387,15 @@ export class BoardClient {
     const resources = this.manifest?.resources
       .map((resource) => `${resource.kind}:${resource.id} [${resource.access}] ${resource.name}`)
       .join("\n") ?? "(resource manifest unavailable)";
-    return `${board}\n\nResource manifest (discovery only; access does not load contents):\n${resources}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
+    return `${context}\n\nResource manifest (discovery only; access does not load contents):\n${resources}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
   }
 }
 
 function scopeEnvelope(envelope: PromptEnvelope, channelId: string): PromptEnvelope {
-  const plans = envelope.plans.filter((plan) => plan.originChannelId === channelId);
-  const planIds = new Set(plans.map((plan) => plan.id));
-  const tickets = envelope.tickets.filter(
-    (ticket) =>
-      ["approved", "in_progress", "blocked", "done"].includes(ticket.status) ||
-      ticket.originChannelId === channelId ||
-      (ticket.planId !== null && planIds.has(ticket.planId)),
-  );
-  const ticketIds = new Set(tickets.map((ticket) => ticket.id));
   const context = envelope.context.filter(
-    (entry) =>
-      entry.scope === "workspace" ||
-      (entry.scope === "channel" && entry.subjectId === channelId) ||
-      (entry.scope === "plan" && entry.subjectId !== null && planIds.has(entry.subjectId)) ||
-      (entry.scope === "ticket" && entry.subjectId !== null && ticketIds.has(entry.subjectId)),
+    (entry) => entry.scope === "workspace" || (entry.scope === "channel" && entry.subjectId === channelId),
   );
-  return { ...envelope, plans, tickets, context };
+  return { ...envelope, context };
 }
 
 /** Returns true when the event indicates the workspace resource manifest may have changed. */

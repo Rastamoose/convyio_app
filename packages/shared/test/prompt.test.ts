@@ -10,8 +10,6 @@ describe("prompt envelope", () => {
       policy: [{ id: "agent-workflow", version: "1", hash: "abc", text: "Do not invent authority." }],
       workspace: { id: "ws-1", name: "test_space" },
       actor: { id: "a-1", kind: "agent", displayName: "noodle", workspaceId: "ws-1" },
-      plans: [],
-      tickets: [],
       context: [],
       notes: [],
       members: [{ id: "a-1", kind: "agent", displayName: "noodle", workspaceId: "ws-1" }],
@@ -20,7 +18,7 @@ describe("prompt envelope", () => {
     const rendered = renderPromptEnvelope(envelope);
     assert.match(rendered, /<policy id="agent-workflow"/);
     assert.match(rendered, /Do not invent authority/);
-    assert.ok(rendered.indexOf("<policy") < rendered.indexOf("<tickets>"));
+    assert.ok(rendered.indexOf("<policy") < rendered.indexOf("<context>"));
   });
 
   test("renders without notes when the envelope predates the notes field", () => {
@@ -30,8 +28,6 @@ describe("prompt envelope", () => {
       policy: [{ id: "agent-workflow", version: "1", hash: "abc", text: "Do not invent authority." }],
       workspace: { id: "ws-1", name: "test_space" },
       actor: { id: "a-1", kind: "agent", displayName: "noodle", workspaceId: "ws-1" },
-      plans: [],
-      tickets: [],
       context: [],
       members: [{ id: "a-1", kind: "agent", displayName: "noodle", workspaceId: "ws-1" }],
       permissionMode: "default",

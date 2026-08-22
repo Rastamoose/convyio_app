@@ -376,17 +376,13 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
  * server-side; this only tells the model how to get unstuck.
  */
 const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
-  NO_BOARD_REF:
-    "No workable board item authorizes this. Use board_propose to request the scope, then wait for approval.",
-  ITEM_NOT_FOUND: "That ref does not exist. Check board_list, or board_propose a new item.",
-  ITEM_WRONG_SERVER: "That item belongs to another workspace. Propose the work here instead.",
-  ITEM_NOT_WORKABLE:
-    "That item is not approved or in_progress yet. Wait for a human to approve it before working.",
-  ITEM_DELETED: "That item was deleted. Stop this work and tell the team.",
-  SCOPE_VIOLATION:
-    "That path is outside the backing item's approved scope_paths. Stay within the approved scope, or board_propose a new item covering that path.",
-  OWNER_MISMATCH:
-    "That ticket is owned by someone else. Do not work it; propose a handoff if needed.",
+  NO_BOARD_REF: "This action is not authorized. Tell the human what you need and wait for their approval.",
+  ITEM_NOT_FOUND: "That reference does not exist.",
+  ITEM_WRONG_SERVER: "That reference belongs to another workspace.",
+  ITEM_NOT_WORKABLE: "That is not workable yet.",
+  ITEM_DELETED: "That was deleted. Stop this work and tell the team.",
+  SCOPE_VIOLATION: "That path is outside the workspace sandbox. Stay within the workspace root.",
+  OWNER_MISMATCH: "That is owned by someone else. Do not work it.",
   PROJECT_REQUIRED: "That action needs a project.",
   PROJECT_MISMATCH: "That action named the wrong project.",
   PROJECT_UNASSIGNED: "You are not assigned to that project.",
@@ -394,8 +390,7 @@ const DENIAL_NOTES: Record<AuthzDenyCode, string> = {
   OWNER_OFFLINE: "The folder owner is offline, so local files are unavailable. Wait until they return.",
   FOLDER_DENIED: "The folder owner has denied local access. Do not retry; ask them to change the folder policy.",
   UNKNOWN_ACTION: "That action is not classified and cannot be authorized.",
-  CAPABILITY_MISSING:
-    "That item does not grant this kind of action. Propose a new item requesting the capability you need (e.g. shell_repo) and explain why.",
+  CAPABILITY_MISSING: "That action is not authorized for you. Tell the human what you need and why.",
   PLAN_MODE:
     "The conversation is in plan mode: nothing may change yet. Finish the plan and tell the team what you would do.",
   APPROVAL_DENIED: "A human declined this action. Do not retry it; ask what they would prefer.",

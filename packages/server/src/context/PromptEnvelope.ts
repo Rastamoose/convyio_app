@@ -54,13 +54,6 @@ export class PromptEnvelopeBuilder {
       policy: this.policy,
       workspace: this.workspace,
       actor,
-      plans: snapshot.plans.filter((plan) => plan.status === "accepted" || plan.status === "proposed"),
-      tickets: snapshot.items.filter((item) =>
-        item.status === "proposed" ||
-        item.status === "approved" ||
-        item.status === "in_progress" ||
-        item.status === "blocked",
-      ),
       context: snapshot.context,
       notes,
       members: snapshot.members,

@@ -19,7 +19,7 @@ describe("conversation-native work loop", async () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  test("constraint changes the same plan, reaches the agent envelope, and returns evidence on the origin thread", async () => {
+  test("constraint changes the same plan, reaches the agent envelope only as context, and returns evidence on the origin thread", async () => {
     await fs.writeFile(path.join(root, "invoice.ts"), "export const total = 10.1;\n");
     await fs.writeFile(path.join(root, "ledger.ts"), "export const stripeCharge = 10.10;\n");
 
@@ -84,14 +84,13 @@ describe("conversation-native work loop", async () => {
       reason: "Continue the approved billing conversation",
     });
     await env.resourceAccess.resolve(human.actor, accessRequest.id, "approved");
+    // The agent's own envelope carries no plan/ticket workflow — only the
+    // context entry the constraint left behind reaches it.
     const envelope = await env.api("GET", "/api/workspace/prompt-envelope", agent.token);
     assert.equal(envelope.status, 200);
     const body = envelope.body.envelope;
-    assert.ok(body.plans.some((plan: { constraints: string[]; assumedOwnerName?: string }) =>
-      plan.constraints.includes("Ledger output must remain identical to existing Stripe charges") &&
-      plan.assumedOwnerName === "noodle",
-    ));
-    assert.ok(body.tickets.some((item: { ownerName?: string }) => item.ownerName === "noodle"));
+    assert.equal(body.plans, undefined);
+    assert.equal(body.tickets, undefined);
     assert.ok(body.context.some((entry: { body: string }) => entry.body.includes("Ledger output must remain identical")));
 
     const approved = await env.api("POST", `/api/board/items/${ticket.body.item.id}/approve`, human.token, {

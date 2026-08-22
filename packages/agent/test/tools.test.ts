@@ -110,9 +110,9 @@ describe("tool executor", () => {
 
     assert.equal(result.denied, "SCOPE_VIOLATION");
     assert.equal(result.error, "path outside approved scope");
-    // The note must steer the model back inside the approved scope.
-    assert.match(String(result.note), /scope_paths/);
-    assert.match(String(result.note), /board_propose/);
+    // The note must steer the model back inside the sandbox without inventing a board workflow.
+    assert.match(String(result.note), /workspace sandbox/);
+    assert.doesNotMatch(String(result.note), /board_propose/);
   });
 
   test("run_shell carries the command and the conversation's mode context", async () => {
@@ -140,7 +140,7 @@ describe("tool executor", () => {
     assert.equal(result.done, "3 tests passed");
   });
 
-  test("a capability denial tells the model to propose the capability", async () => {
+  test("a capability denial tells the model to ask the human, not propose a ticket", async () => {
     const board = {
       resolve: () => undefined,
       requestAction: async (): Promise<ActionResultEvent> => ({
@@ -156,7 +156,7 @@ describe("tool executor", () => {
     const result = await execute("run_shell", { command: "rm -rf /", board_item_ref: "task-1" });
 
     assert.equal(result.denied, "CAPABILITY_MISSING");
-    assert.match(String(result.note), /shell_repo/);
+    assert.doesNotMatch(String(result.note), /propose/);
   });
 
   test("search_files is read-only: no board ref is sent", async () => {
