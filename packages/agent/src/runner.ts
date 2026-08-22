@@ -340,7 +340,7 @@ export class AgentRunner {
       );
     }
 
-    const finalContent = outcome === "cancelled" ? "" : finalText.slice(0, 4_000);
+    const finalContent = outcome === "cancelled" ? "" : redactInternalMetadata(finalText).slice(0, 4_000);
     this.sendFinish({
       type: "agent_run_finish",
       runId,
@@ -593,6 +593,28 @@ function buildPrompt(items: WorkItem[], channel: string, attachmentNotes: string
       : `You are answering one person, who already knows you are replying to ` +
         `them — do not open sentences with their name.`)
   );
+}
+
+const POLICY_TAG_PATTERN = /<\/?policy(?:\s+id="[^"]*"\s+version="[^"]*"\s+hash="[^"]*")?>/gi;
+/** Matches a line carrying a boardClient.summary()-style manifest/grant
+ *  marker, e.g. "channel:a97a... general" or "proj-1 [assigned:ready] name
+ *  (git)" or "channel: a97a... [none] demo-bug" — however loosely the model
+ *  paraphrased it. */
+const MANIFEST_LINE_PATTERN =
+  /^.*(?:\b(?:board|workspace_guidance|agent_notebook|channel|git_project|local_project|workspace_file):\s*\S+|\[(?:granted|none|pending|default|assigned:[^\]]+|access-request:[^\]]+)\]).*$/gim;
+
+/**
+ * Last-resort, code-level defense against the model reciting internal
+ * plumbing (policy tags, manifest/grant lines) into a human-visible chat
+ * reply — independent of whatever the model decided to say. Regardless of
+ * how much we trim from context, this keeps a leak from reaching the user.
+ */
+function redactInternalMetadata(text: string): string {
+  return text
+    .replace(POLICY_TAG_PATTERN, "")
+    .replace(MANIFEST_LINE_PATTERN, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function boundInitialContext(context: string): string {

@@ -71,4 +71,29 @@ describe("durable agent resource access", () => {
     const granted = await manifest.build(agent);
     assert.equal(granted.resources.find((resource) => resource.id === channel.id)?.access, "granted");
   });
+
+  test("autoGrant skips the approval round-trip and grants immediately, once", async () => {
+    const agent = await env.db.upsertActor("agent", "mentioned-agent");
+    const human = await env.db.upsertActor("human", "mentioning-human");
+    const channel = await channels.create(human, "auto-grant-room");
+
+    const grant = await access.autoGrant(agent.id, human.id, {
+      resourceKind: "channel",
+      resourceId: channel.id,
+      reason: `Mentioned in #${channel.name}`,
+    });
+
+    assert.ok(grant);
+    assert.equal(await access.has(agent.id, "channel", channel.id), true);
+    assert.equal((await access.requestsForAgent(agent.id)).length, 0, "no pending request should ever be created");
+
+    // Calling it again once already granted is a harmless no-op.
+    const again = await access.autoGrant(agent.id, human.id, {
+      resourceKind: "channel",
+      resourceId: channel.id,
+      reason: "second mention",
+    });
+    assert.equal(again, null);
+    assert.equal((await access.grantsForAgent(agent.id)).length, 1);
+  });
 });

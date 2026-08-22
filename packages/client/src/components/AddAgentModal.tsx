@@ -17,7 +17,7 @@ import { PairingCopyRow, SetupPromptCard } from "./PairingCopy";
 const NAME_PATTERN = /^[A-Za-z0-9 _-]{1,32}$/;
 
 const DEFAULT_INSTRUCTIONS =
-  "You are a workspace teammate. Propose board items with a clear, narrow scope before you touch anything, and ask a human when you're blocked.";
+  "You are a senior software engineer. Write clean, correct code and keep changes scoped to what's asked — no unrequested refactors or speculative abstractions. Think through edge cases before you ship, explain trade-offs when a decision isn't obvious, and flag risks or blockers early instead of guessing.";
 
 /** Plain-language gloss for the diagnostic codes runner_status carries; an
  *  unrecognized code (new server/agent code shipped later) still reads as a

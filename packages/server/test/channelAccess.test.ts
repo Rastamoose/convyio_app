@@ -8,7 +8,7 @@ before(async () => { env = await createWsEnv(); });
 after(async () => { await env.close(); });
 
 describe("agent channel confidentiality", () => {
-  test("an ungranted agent receives only its invocation trigger until durable access is approved", async () => {
+  test("a human @mention auto-grants channel access — no approval round-trip, work starts immediately", async () => {
     const human = await env.connect("channel-human", "human");
     const channel = await env.channels.create(
       { id: human.welcome.self.id, workspaceId: env.db.workspaceId, kind: "human", displayName: human.welcome.self.name },
@@ -20,62 +20,32 @@ describe("agent channel confidentiality", () => {
     const agent = await env.connect("channel-agent", "agent");
     assert.equal(agent.welcome.history.some((message: { content: string }) => message.content === "private history"), false);
 
-    human.ws.send(JSON.stringify({
-      type: "message",
-      channel: channel.name,
-      content: "@channel-agent confirm you can help",
-    }));
-    const occupancy = await human.next(
-      (event) =>
-        event.type === "message" &&
-        event.message.authorKind === "agent" &&
-        event.message.content.includes("waiting for a decision"),
-      2000,
-    );
-    assert.match(occupancy.message.content, /#private-agent-room/);
-    await assert.rejects(agent.next((event) => event.type === "work_available", 200), /timeout/);
-    await assert.rejects(
-      agent.next((event) => event.type === "message" && event.message.content.includes("confirm you can help"), 100),
-      /timeout/,
-    );
+    // Before any mention, the agent has no access to this channel's content.
     const deniedHistory = await fetch(`${env.baseUrl}/api/agent-context/channels/${channel.id}/messages`, {
       headers: { Authorization: `Bearer ${agent.token}` },
     });
     assert.equal(deniedHistory.status, 403);
 
-    const agentActor: Actor = {
-      id: agent.welcome.self.id,
-      workspaceId: env.db.workspaceId,
-      kind: "agent",
-      displayName: agent.welcome.self.name,
-    };
-    const humanActor: Actor = {
-      id: human.welcome.self.id,
-      workspaceId: env.db.workspaceId,
-      kind: "human",
-      displayName: human.welcome.self.name,
-    };
-    const pending = (await env.resourceAccess.requestsForAgent(agentActor.id)).find(
-      (request) => request.status === "pending" && request.resourceId === channel.id,
-    );
-    assert.ok(pending);
-    await env.resourceAccess.resolve(humanActor, pending.id, "approved");
+    human.ws.send(JSON.stringify({
+      type: "message",
+      channel: channel.name,
+      content: "@channel-agent confirm you can help",
+    }));
+
+    // Being @mentioned by a human is itself the authorization to be in this
+    // channel, so there's no "waiting for a decision" reply and no separate
+    // approval step — work is available right away.
+    const available = await agent.next((event) => event.type === "work_available", 2000);
+    agent.ws.send(JSON.stringify({ type: "work_claim", requestIds: available.requestIds }));
+    const assigned = await agent.next((event) => event.type === "work_assigned", 1000);
+    assert.match(assigned.assignments[0].trigger.content, /confirm you can help/);
+
     const grantedHistory = await fetch(`${env.baseUrl}/api/agent-context/channels/${channel.id}/messages`, {
       headers: { Authorization: `Bearer ${agent.token}` },
     });
     assert.equal(grantedHistory.status, 200);
     const historyBody = await grantedHistory.json();
     assert.equal(historyBody.messages.some((message: { content: string }) => message.content === "private history"), true);
-
-    human.ws.send(JSON.stringify({
-      type: "message",
-      channel: channel.name,
-      content: "@channel-agent confirm you can help",
-    }));
-    const available = await agent.next((event) => event.type === "work_available", 2000);
-    agent.ws.send(JSON.stringify({ type: "work_claim", requestIds: available.requestIds }));
-    const assigned = await agent.next((event) => event.type === "work_assigned", 1000);
-    assert.match(assigned.assignments[0].trigger.content, /confirm you can help/);
 
     human.ws.send(JSON.stringify({ type: "message", channel: channel.name, content: "visible after grant" }));
     const visible = await agent.next(
@@ -85,7 +55,7 @@ describe("agent channel confidentiality", () => {
     assert.equal(visible.message.channelId, channel.id);
   });
 
-  test("first mention requests durable access and does not start a run", async () => {
+  test("first mention in #general auto-grants access and starts a run immediately", async () => {
     const human = await env.connect("mention-human", "human");
     const agent = await env.connect("mention-agent", "agent");
     const general = await env.channels.get("general");
@@ -96,26 +66,16 @@ describe("agent channel confidentiality", () => {
       channel: "general",
       content: "@mention-agent hello",
     }));
-    const occupancy = await human.next(
-      (event) =>
-        event.type === "message" &&
-        event.message.authorKind === "agent" &&
-        event.message.content.includes("waiting for a decision"),
-      2000,
-    );
-    assert.match(occupancy.message.content, /#general/);
-    // The pending request is for #general itself — the same channel the
-    // mention came from — so the reply must not name it twice as if it were
-    // a different place ("waiting in this channel to access #general").
-    assert.doesNotMatch(occupancy.message.content, /in this channel to access #general/);
-    await assert.rejects(agent.next((event) => event.type === "work_available", 200), /timeout/);
 
-    const requests = (await env.resourceAccess.requestsForAgent(agent.welcome.self.id))
-      .filter((request) => request.status === "pending");
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0].resourceKind, "channel");
-    assert.equal(requests[0].resourceId, general.id);
-    assert.equal(requests[0].originChannelId, general.id);
+    const available = await agent.next((event) => event.type === "work_available", 2000);
+    assert.ok(available.requestIds.length > 0);
+
+    const grants = await env.resourceAccess.grantsForAgent(agent.welcome.self.id);
+    assert.ok(grants.some((grant) => grant.resourceKind === "channel" && grant.resourceId === general.id));
+    const pending = (await env.resourceAccess.requestsForAgent(agent.welcome.self.id)).filter(
+      (request) => request.status === "pending",
+    );
+    assert.equal(pending.length, 0);
   });
 
   test("a pending access request occupies the agent in other channels with origin and target", async () => {
