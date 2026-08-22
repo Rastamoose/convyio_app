@@ -1739,8 +1739,12 @@ async function defaultValidateOpenAiKey(apiKey: string): Promise<boolean> {
   try {
     await new OpenAI({ apiKey }).models.list();
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Restricted/project-scoped keys can lack the "models" read permission
+    // and 403 here while still working fine for chat completions — only a
+    // 401 means the key itself is invalid.
+    const status = error instanceof OpenAI.APIError ? error.status : undefined;
+    return status !== undefined && status !== 401;
   }
 }
 
