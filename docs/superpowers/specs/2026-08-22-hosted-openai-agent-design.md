@@ -246,6 +246,36 @@ present, stop the existing connection, re-encrypt/store, re-`start()`.
     checking/degraded agents.
   - `setupPrompt`/"existing agent" branch is untouched.
 
+### 9. Model switching (OpenAI)
+
+`ConfigureStep` (`AddAgentModal.tsx:764-796`) already has a model `<select>`
+wired to the existing `PATCH /api/agents/:id` → `agentInvites.update()` →
+`configRevision` bump → `profileUpdates.enqueue()` pipeline
+(`runtime.ts:92-128`). This is the "profile tab" model-switch control — no
+new tab or UI surface needed. But for OpenAI agents it doesn't currently do
+anything real:
+
+- `OpenAIBrain` (`openaiBrain.ts:22-30`) takes `model` once in its
+  constructor and never re-reads it — `run()` always uses `this.model`.
+  Add `setModel(model: string): void { this.model = model; }`.
+- `Brain` (`brain.ts`) gains an optional `setModel?(model: string): void`
+  on the interface — implemented by `OpenAIBrain`, left unimplemented by
+  `GeminiBrain`/`ClaudeBrain` (the ACP path already reconfigures via
+  `local.acp.configure()` at `runtime.ts:104`, a separate mechanism that's
+  untouched).
+- `runtime.ts`'s `profileUpdates` handler, non-ACP branch
+  (`runtime.ts:118-121`): before `reportLegacyReady`, call
+  `local.brain.setModel?.(model)` where `model = profile.requestedModel ??
+  DEFAULT_OPENAI_MODEL`, and report that resolved model (a small mutable
+  variable tracked outside `local`, since `local.effectiveModel` is
+  currently fixed at startup) instead of the stale startup-time value.
+- The `RunnerConfigOption` choices list built in `localConfiguration()`'s
+  OpenAI branch (`runtime.ts:257-264`) changes from a single-entry list
+  (just the current model) to a real fixed set of selectable OpenAI chat
+  models, e.g. `gpt-5`, `gpt-5-mini`, `gpt-5-nano` (module-level const
+  array — no API call to list models, matching the "no unrequested
+  abstraction" bar; add to the array later if OpenAI ships new ones).
+
 ## Error handling
 
 - Bad API key at creation time → `400 INVALID_API_KEY` from the
