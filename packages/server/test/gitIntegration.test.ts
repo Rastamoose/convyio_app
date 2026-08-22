@@ -54,11 +54,11 @@ describe("GitHub repository integration", () => {
       "http://localhost:3001",
       "http://localhost:5173",
     ));
-    assert.equal(installationUrl.pathname, "/apps/convyio/installations/new");
+    assert.equal(installationUrl.pathname, "/login/oauth/authorize");
     completedState = installationUrl.searchParams.get("state")!;
     github = new GitHub(db.sql, config, fetcher);
     const completed = await github.complete("user-code", "99", completedState);
-    assert.deepEqual(completed, { workspaceId: db.workspaceId, returnOrigin: "http://localhost:5173" });
+    assert.deepEqual(completed, { kind: "connected", workspaceId: db.workspaceId, returnOrigin: "http://localhost:5173" });
     const events = new ThreadEventStore(db);
     projects = new ProjectStore(db, events);
     const localProvider = {

@@ -170,7 +170,9 @@ Create a GitHub App with these production settings:
 - **Expire user authorization tokens**: on
 - **Request user authorization (OAuth) during installation**: on
 - **Device Flow**: off
-- **Setup URL / Redirect on update**: unused/off
+- **Setup URL**: `https://app.convyio.com/api/git/github/callback` (same as the
+  Redirect URI — it is the fallback if OAuth-during-installation is ever off)
+- **Redirect on update**: off
 - **Webhook Active**: off; no webhook URL or secret
 - **Repository permissions**: Contents read/write, Pull requests read/write,
   Issues read/write, Checks read-only, Commit statuses read-only, Workflows
@@ -179,12 +181,19 @@ Create a GitHub App with these production settings:
 - **Subscribe to events**: none
 - **Where can this GitHub App be installed?**: Any account
 
-The installation URL lets each user or organization select the repositories
-Convyio may access. Requesting user authorization during installation is
-required: the callback exchanges its one-use code only to verify that the
-returned installation belongs to that GitHub user, then discards the user
-token. Runtime API and Git calls use one-hour installation tokens minted from
-the App private key; no GitHub token is stored in Postgres.
+Connecting starts at `https://github.com/login/oauth/authorize`, not at the
+App's installation URL. GitHub only fires a callback for
+`/apps/<slug>/installations/new` when the visit creates a *new* installation —
+when the App is already installed on the account it shows "configure
+permissions" and, by design, never redirects back, which used to leave the user
+staring at an unchanged page. The authorize endpoint always redirects back, and
+the callback sends the user on to the installation URL only when they genuinely
+have no installation yet.
+
+The callback exchanges its one-use code only to list the authorizing user's own
+installations of this App — proving the installation belongs to them — then
+discards the user token. Runtime API and Git calls use one-hour installation
+tokens minted from the App private key; no GitHub token is stored in Postgres.
 
 After creating the App, copy its numeric App ID, public slug, client id and
 client secret, then generate/download one private key. Configure the shell:

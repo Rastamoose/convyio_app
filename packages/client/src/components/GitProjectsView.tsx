@@ -76,9 +76,17 @@ export function GitProjectsView({ onOpenChannel }: { onOpenChannel?: (channel: s
     const params = new URLSearchParams(window.location.search);
     const result = params.get("git");
     if (result !== "connected" && result !== "error") return;
+    const reason = params.get("gitReason");
     params.delete("git");
+    params.delete("gitReason");
     window.history.replaceState({}, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
-    notify(result === "connected" ? "GitHub connected" : "GitHub connection was not completed");
+    if (result === "connected") {
+      notify("GitHub connected");
+      return;
+    }
+    // The server's reason is the only clue the user gets — a bare "not
+    // completed" reads identically to nothing having happened.
+    notify(reason ? `GitHub: ${reason}` : "GitHub connection was not completed");
   }, [notify]);
 
   const loadRemoteRepositories = useCallback(async () => {

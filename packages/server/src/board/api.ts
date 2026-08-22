@@ -365,25 +365,41 @@ export function createApiHandler(services: ApiServices) {
         if (!state) throw new ApiError(400, "GITHUB_AUTH_FAILED", "GitHub did not return installation state");
         const pending = await github.pending(state);
         if (!pending) throw new ApiError(400, "OAUTH_STATE_INVALID", "GitHub connection expired or was already used; start again");
-        if (!code || !installationId) {
+        // Carry the real reason back to the UI. A bare `?git=error` renders as
+        // "connection was not completed", which is indistinguishable from
+        // nothing happening — it hid a permanent 409 for days.
+        const errorRedirect = (reason: string) => {
+          const target = new URL(`/w/${encodeURIComponent(pending.workspaceId)}`, pending.returnOrigin);
+          target.searchParams.set("git", "error");
+          target.searchParams.set("gitReason", reason);
+          return target.toString();
+        };
+        // installation_id only arrives when the visit created a new
+        // installation; on every reconnect GitHub sends code + state alone and
+        // complete() resolves the installation from the user's own token.
+        if (!code && installationId) {
+          // Setup-URL style callback (OAuth-during-installation off): the
+          // installation exists but is unverified, so go get a code.
+          res.writeHead(302, { Location: await github.reauthorize(state), "Cache-Control": "no-store" }).end();
+        } else if (!code) {
           await github.cancel(state);
           res.writeHead(302, {
-            Location: new URL(`/w/${encodeURIComponent(pending.workspaceId)}?git=error`, pending.returnOrigin).toString(),
+            Location: errorRedirect(url.searchParams.get("error_description") ?? "GitHub did not authorize the connection"),
             "Cache-Control": "no-store",
           }).end();
         } else {
           try {
             const completed = await github.complete(code, installationId, state);
             res.writeHead(302, {
-              Location: new URL(`/w/${encodeURIComponent(completed.workspaceId)}?git=connected`, completed.returnOrigin).toString(),
+              Location: completed.kind === "install"
+                ? completed.url
+                : new URL(`/w/${encodeURIComponent(completed.workspaceId)}?git=connected`, completed.returnOrigin).toString(),
               "Cache-Control": "no-store",
             }).end();
           } catch (error) {
             if (!(error instanceof ApiError)) throw error;
-            res.writeHead(302, {
-              Location: new URL(`/w/${encodeURIComponent(pending.workspaceId)}?git=error`, pending.returnOrigin).toString(),
-              "Cache-Control": "no-store",
-            }).end();
+            console.error(`[api] GitHub connect failed (${error.code}):`, error.message);
+            res.writeHead(302, { Location: errorRedirect(error.message), "Cache-Control": "no-store" }).end();
           }
         }
       } else if (

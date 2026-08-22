@@ -36,6 +36,12 @@ interface ConnectionRow {
   created_at: number;
 }
 
+/** Where the browser goes next after the callback: into the workspace, or on
+ *  to GitHub to actually install the App. */
+export type ConnectOutcome =
+  | { kind: "connected"; workspaceId: string; returnOrigin: string }
+  | { kind: "install"; url: string };
+
 interface GitHubInstallation {
   id: number;
   app_id: number;
@@ -102,11 +108,49 @@ export class GitHub {
     return row ? toAccount(row) : null;
   }
 
+  /**
+   * Starts at GitHub's OAuth authorize endpoint rather than
+   * `/apps/<slug>/installations/new`. GitHub only fires the callback for the
+   * installation URL when the visit creates a *new* installation — if the App
+   * is already installed on the account it shows "configure permissions" and
+   * deliberately never redirects back, which strands the connection forever.
+   * `/login/oauth/authorize` always comes back with a code, and the callback
+   * bounces to the install page only when the user really has no installation.
+   */
   async authorize(actor: Actor, workspaceId: string, origin: string, returnOrigin = origin): Promise<string> {
     const config = this.requireConfig();
     if (actor.kind !== "human") throw new ApiError(403, "HUMAN_ONLY", "only humans can connect GitHub");
     const callbackUri = config.callbackUri ?? new URL("/api/git/github/callback", validatedOrigin(origin)).toString();
-    const browserOrigin = validatedOrigin(returnOrigin);
+    return this.authorizeUrl({
+      actor_id: actor.id,
+      workspace_id: workspaceId,
+      callback_uri: callbackUri,
+      return_origin: validatedOrigin(returnOrigin),
+    });
+  }
+
+  /**
+   * Recovers a callback that arrived with an installation but no `code` — what
+   * GitHub sends to the Setup URL when "Request user authorization (OAuth)
+   * during installation" is off. Sending the user through authorize once
+   * yields the code needed to verify they own the installation. Cannot
+   * ping-pong: the authorize endpoint never redirects back with an
+   * installation id.
+   */
+  async reauthorize(stateToken: string): Promise<string> {
+    return this.authorizeUrl(await this.consumeState(stateToken));
+  }
+
+  private async authorizeUrl(state: Omit<ConnectionStateRow, "expires_at">): Promise<string> {
+    const config = this.requireConfig();
+    const url = new URL("https://github.com/login/oauth/authorize");
+    url.searchParams.set("client_id", config.clientId);
+    url.searchParams.set("redirect_uri", state.callback_uri);
+    url.searchParams.set("state", await this.issueState(state));
+    return url.toString();
+  }
+
+  private async issueState(row: Omit<ConnectionStateRow, "expires_at">): Promise<string> {
     const state = randomBytes(32).toString("base64url");
     const now = Date.now();
     await this.sql`
@@ -118,13 +162,11 @@ export class GitHub {
         token_hash, actor_id, workspace_id, callback_uri, return_origin,
         created_at, expires_at, consumed_at
       ) VALUES (
-        ${hashState(state)}, ${actor.id}, ${workspaceId}, ${callbackUri},
-        ${browserOrigin}, ${now}, ${now + CONNECTION_STATE_TTL_MS}, NULL
+        ${hashState(state)}, ${row.actor_id}, ${row.workspace_id}, ${row.callback_uri},
+        ${row.return_origin}, ${now}, ${now + CONNECTION_STATE_TTL_MS}, NULL
       )
     `;
-    const url = new URL(`https://github.com/apps/${config.slug}/installations/new`);
-    url.searchParams.set("state", state);
-    return url.toString();
+    return state;
   }
 
   async pending(stateToken: string): Promise<{ workspaceId: string; returnOrigin: string } | null> {
@@ -147,12 +189,11 @@ export class GitHub {
 
   async complete(
     code: string,
-    installationId: string,
+    installationId: string | null,
     stateToken: string,
-  ): Promise<{ workspaceId: string; returnOrigin: string }> {
+  ): Promise<ConnectOutcome> {
     const config = this.requireConfig();
     const state = await this.consumeState(stateToken);
-    const normalizedInstallationId = installationIdValue(installationId);
     const userTokenResponse = await this.fetcher("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -167,8 +208,33 @@ export class GitHub {
     if (!userTokenResponse.ok || !userTokenBody.access_token) {
       throw new ApiError(502, "GITHUB_AUTH_FAILED", userTokenBody.error_description ?? "GitHub refused user authorization");
     }
-    if (!(await this.userCanAccessInstallation(userTokenBody.access_token, normalizedInstallationId))) {
-      throw new ApiError(403, "GITHUB_INSTALLATION_FORBIDDEN", "that GitHub App installation does not belong to the authorizing user");
+    // The user token is only ever used to prove the installation belongs to
+    // the person who just authorized, then discarded.
+    const owned = await this.userInstallations(userTokenBody.access_token, config.appId);
+    let normalizedInstallationId: string;
+    if (installationId === null) {
+      // GitHub omits installation_id whenever the visit did not create a new
+      // installation — which is every reconnect. Resolve it from the user's
+      // own list instead of failing the connection. Someone with both a
+      // personal and an org installation keeps whichever one this actor was
+      // already on, so reconnecting never silently swaps accounts.
+      const [existing] = await this.sql<{ installation_id: string | null }[]>`
+        SELECT installation_id FROM git_connections
+        WHERE actor_id = ${state.actor_id} AND provider = 'github'
+      `;
+      const chosen = owned.find((id) => id === existing?.installation_id) ?? owned[0];
+      if (chosen === undefined) {
+        return {
+          kind: "install",
+          url: await this.installUrl(config.slug, state),
+        };
+      }
+      normalizedInstallationId = chosen;
+    } else {
+      normalizedInstallationId = installationIdValue(installationId);
+      if (!owned.includes(normalizedInstallationId)) {
+        throw new ApiError(403, "GITHUB_INSTALLATION_FORBIDDEN", "that GitHub App installation does not belong to the authorizing user");
+      }
     }
     const installation = await this.appRequest<GitHubInstallation>(`/app/installations/${normalizedInstallationId}`);
     if (String(installation.app_id) !== config.appId) {
@@ -203,18 +269,20 @@ export class GitHub {
           scopes = EXCLUDED.scopes,
           updated_at = EXCLUDED.updated_at,
           revoked_at = NULL
-        WHERE git_connections.installation_id = EXCLUDED.installation_id
-           OR (
-             git_connections.revoked_at IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM git_repositories
-               WHERE connection_id = git_connections.id AND unlinked_at IS NULL
-             )
+        -- Guard the thing that actually matters: silently repointing linked
+        -- repositories at a *different* GitHub account. Keyed on the account,
+        -- not the installation id — removing and re-adding the App mints a new
+        -- installation id every time, and keying on that made every reinstall
+        -- fail permanently once a single repository was linked.
+        WHERE git_connections.provider_user_id = EXCLUDED.provider_user_id
+           OR NOT EXISTS (
+             SELECT 1 FROM git_repositories
+             WHERE connection_id = git_connections.id AND unlinked_at IS NULL
            )
         RETURNING id
       `;
       if (connected.length === 0) {
-        throw new ApiError(409, "GITHUB_INSTALLATION_CONFLICT", "disconnect the current installation and unlink its repositories before connecting a different account");
+        throw new ApiError(409, "GITHUB_INSTALLATION_CONFLICT", "unlink this workspace's repositories before connecting a different GitHub account");
       }
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -222,7 +290,16 @@ export class GitHub {
       }
       throw error;
     }
-    return { workspaceId: state.workspace_id, returnOrigin: state.return_origin };
+    return { kind: "connected", workspaceId: state.workspace_id, returnOrigin: state.return_origin };
+  }
+
+  /** Second leg for a user who has not installed the App yet: the consumed
+   *  state is replaced with a fresh one so the install redirect comes back
+   *  through the same callback. */
+  private async installUrl(slug: string, state: ConnectionStateRow): Promise<string> {
+    const url = new URL(`https://github.com/apps/${slug}/installations/new`);
+    url.searchParams.set("state", await this.issueState(state));
+    return url.toString();
   }
 
   async disconnect(actor: Actor): Promise<void> {
@@ -295,19 +372,25 @@ export class GitHub {
     return row;
   }
 
-  private async userCanAccessInstallation(userToken: string, installationId: string): Promise<boolean> {
+  /** Installation ids of *this* App that the authorizing user can administer. */
+  private async userInstallations(userToken: string, appId: string): Promise<string[]> {
+    const ids: string[] = [];
     for (let page = 1; page <= 10; page += 1) {
       const response = await this.githubFetch(
         userToken,
         `/user/installations?per_page=100&page=${page}`,
       );
       if (!response.ok) throw new ApiError(502, "GITHUB_AUTH_FAILED", "GitHub could not verify the installation owner");
-      const body = (await response.json()) as { installations?: { id: number }[] };
+      const body = (await response.json()) as { installations?: { id: number; app_id?: number }[] };
       const installations = body.installations ?? [];
-      if (installations.some((installation) => String(installation.id) === installationId)) return true;
-      if (installations.length < 100) return false;
+      for (const installation of installations) {
+        if (installation.app_id === undefined || String(installation.app_id) === appId) {
+          ids.push(String(installation.id));
+        }
+      }
+      if (installations.length < 100) break;
     }
-    return false;
+    return ids;
   }
 
   private async request<T>(connection: ConnectionRow, path: string, init: RequestInit = {}): Promise<T> {
