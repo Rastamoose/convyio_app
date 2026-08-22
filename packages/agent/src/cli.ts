@@ -74,7 +74,8 @@ async function connect(args: string[], out: (message: string) => void): Promise<
 
   const { installService, serviceStatusCommand } = await import("./service");
   try {
-    const location = await installService({ name, runRef: installation.agent.id, script: cliEntrypoint(), node: process.execPath });
+    const env = serviceEnvFor(installation.agent.provider);
+    const location = await installService({ name, runRef: installation.agent.id, script: cliEntrypoint(), node: process.execPath, env });
     out(`Installed a login service for ${name} (${location}).`);
     out(`It now starts on login and restarts on crash. Logs: ${serviceStatusCommand(name)}`);
   } catch (error) {
@@ -98,6 +99,7 @@ async function service(args: string[], out: (message: string) => void): Promise<
       runRef: installation.agent.id,
       script: cliEntrypoint(),
       node: process.execPath,
+      env: serviceEnvFor(installation.agent.provider),
     });
     out(`Installed a login service for ${installation.agent.name} (${location}).`);
     out(`Logs: ${serviceStatusCommand(installation.agent.name)}`);
@@ -111,6 +113,22 @@ async function service(args: string[], out: (message: string) => void): Promise<
     return;
   }
   throw new Error("Usage: convyio-agent service install|uninstall [name]");
+}
+
+/** A login service starts with a clean environment, not the shell `connect`/
+ *  `service install` ran in — a provider whose credential is only a shell env
+ *  var (no on-disk login like Claude's `claude login`) needs it captured into
+ *  the service definition now, or the installed process crash-loops forever
+ *  unable to see a key that only ever existed in the terminal it was set in. */
+function serviceEnvFor(provider: string): Record<string, string> {
+  if (provider !== "openai") return {};
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY is not set in this shell. Set it (e.g. `export OPENAI_API_KEY=sk-...`) and run this command again.",
+    );
+  }
+  return { OPENAI_API_KEY: apiKey };
 }
 
 /** Resolve the real bundle path: a global install puts a symlink on PATH, and

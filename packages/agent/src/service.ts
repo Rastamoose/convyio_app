@@ -30,6 +30,12 @@ export interface ServiceTarget {
   script: string;
   /** Node binary to run it with. */
   node: string;
+  /** Baked into the service definition at install time: a systemd/launchd
+   *  user service starts with a clean environment, not the shell that ran
+   *  `connect` — a provider whose credential is only a shell env var (no
+   *  on-disk login like Claude's) would otherwise crash-loop forever unable
+   *  to see it. */
+  env?: Record<string, string>;
 }
 
 export type ServicePlatform = "linux" | "darwin" | "win32";
@@ -57,6 +63,7 @@ export function systemdUnit(target: ServiceTarget): string {
     "StartLimitIntervalSec=0",
     "",
     "[Service]",
+    ...Object.entries(target.env ?? {}).map(([key, value]) => systemdEnvironmentLine(key, value)),
     `ExecStart=${shellQuote(target.node)} ${shellQuote(target.script)} run ${shellQuote(target.runRef)}`,
     "Restart=always",
     "RestartSec=2",
@@ -71,6 +78,16 @@ export function launchAgentPlist(label: string, target: ServiceTarget): string {
   const args = [target.node, target.script, "run", target.runRef]
     .map((arg) => `      <string>${xmlEscape(arg)}</string>`)
     .join("\n");
+  const envEntries = Object.entries(target.env ?? {});
+  const environmentBlock = envEntries.length === 0 ? [] : [
+    "    <key>EnvironmentVariables</key>",
+    "    <dict>",
+    ...envEntries.flatMap(([key, value]) => [
+      `      <key>${xmlEscape(key)}</key>`,
+      `      <string>${xmlEscape(value)}</string>`,
+    ]),
+    "    </dict>",
+  ];
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -82,6 +99,7 @@ export function launchAgentPlist(label: string, target: ServiceTarget): string {
     "    <array>",
     args,
     "    </array>",
+    ...environmentBlock,
     "    <key>RunAtLoad</key>",
     "    <true/>",
     "    <key>KeepAlive</key>",
@@ -95,6 +113,13 @@ export function launchAgentPlist(label: string, target: ServiceTarget): string {
 /** systemd needs literal quotes around arguments that contain whitespace. */
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `"${value.replace(/(["\\])/g, "\\$1")}"`;
+}
+
+/** systemd's unit-file quoting is shell-like: wrap the assignment in quotes
+ *  and escape the characters that would otherwise end the quoted string. */
+function systemdEnvironmentLine(key: string, value: string): string {
+  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `Environment="${key}=${escaped}"`;
 }
 
 function xmlEscape(value: string): string {
@@ -113,6 +138,24 @@ function systemdUnitPath(slug: string): string {
 
 function launchAgentPath(label: string): string {
   return path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function windowsWrapperPath(slug: string): string {
+  return path.join(os.homedir(), ".convyio", "agents", `${slug}.cmd`);
+}
+
+/** `set "KEY=VALUE"` (quotes around the whole assignment) survives `&`, `|`,
+ *  spaces, and the other cmd.exe metacharacters an inline command line
+ *  wouldn't — a literal `"` in the value is the one thing this can't carry,
+ *  which real API keys don't contain. */
+export function windowsWrapperScript(target: ServiceTarget): string {
+  const envLines = Object.entries(target.env ?? {}).map(([key, value]) => `set "${key}=${value}"`);
+  return [
+    "@echo off",
+    ...envLines,
+    `"${target.node}" "${target.script}" run "${target.runRef}"`,
+    "",
+  ].join("\r\n");
 }
 
 export async function installService(
@@ -145,13 +188,27 @@ export async function installService(
     return plistPath;
   }
   const taskName = `Convyio Agent ${slug}`;
+  const envEntries = Object.entries(target.env ?? {});
+  let command = `"${target.node}" "${target.script}" run "${target.runRef}"`;
+  if (envEntries.length > 0) {
+    // schtasks's /tr is parsed by schtasks itself, not a shell — inlining
+    // `set X=Y&& ...` into one quoted string nests double-quotes (already
+    // wrapping the node/script paths above) in a way cmd's quoting can't be
+    // trusted to survive. A wrapper .cmd file sidesteps quoting entirely:
+    // schtasks just launches one already-quoted path, and the file itself
+    // sets the environment before exec'ing the real command.
+    const wrapperPath = windowsWrapperPath(slug);
+    await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
+    await fs.writeFile(wrapperPath, windowsWrapperScript(target), "utf8");
+    command = `"${wrapperPath}"`;
+  }
   // No /rl highest: that would require an administrator, and this deliberately
   // runs as the logged-in user with no elevation.
   await execFileAsync("schtasks", [
     "/create", "/f",
     "/tn", taskName,
     "/sc", "onlogon",
-    "/tr", `"${target.node}" "${target.script}" run "${target.runRef}"`,
+    "/tr", command,
   ]);
   return taskName;
 }
