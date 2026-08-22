@@ -118,6 +118,7 @@ export function AddAgentModal({
 
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState(DEFAULT_INSTRUCTIONS);
+  const [apiKey, setApiKey] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -131,6 +132,7 @@ export function AddAgentModal({
       setPairingCode(null);
       setName("");
       setInstructions(DEFAULT_INSTRUCTIONS);
+      setApiKey("");
       setCreating(false);
       setCreateError(null);
     }
@@ -165,6 +167,7 @@ export function AddAgentModal({
 
   const submitCreate = async () => {
     if (!nameValid || creating) return;
+    if (method === "apikey" && apiKey.trim() === "") return;
     setCreating(true);
     setCreateError(null);
     const result = await createAgent({
@@ -173,13 +176,20 @@ export function AddAgentModal({
       instructions,
       model: null,
       access: { mode: "workspace", selectedActorIds: [] },
+      ...(method === "apikey" ? { apiKey: apiKey.trim() } : {}),
     });
     setCreating(false);
     if (!result) {
-      setCreateError("Could not create the agent. The name may be taken or invalid.");
+      setCreateError("Could not create the agent. The name may be taken, invalid, or the key was rejected.");
       return;
     }
     setActiveAgentId(result.id);
+    if (method === "apikey") {
+      // The server already minted itself an installation and started the
+      // agent — there's nothing for a human to pair.
+      setStep("configure");
+      return;
+    }
     setPairingCode(result.pairingCode);
     setStep("pair");
   };
@@ -253,6 +263,11 @@ export function AddAgentModal({
               nameValid={nameValid}
               instructions={instructions}
               onInstructionsChange={setInstructions}
+              apiKey={apiKey}
+              onApiKeyChange={(value) => {
+                setApiKey(value);
+                setCreateError(null);
+              }}
               creating={creating}
               error={createError}
               onSubmit={() => void submitCreate()}
@@ -394,8 +409,7 @@ function MethodStep({ onChoose }: { onChoose: (method: Method) => void }) {
       >
         <div className="text-sm font-medium text-body">Use an API key</div>
         <div className="mt-0.5 text-xs text-muted">
-          Run a headless agent powered by a model API key you provide, set locally as an
-          environment variable on the machine running it. Convyio never sees the key either.
+          Paste an OpenAI API key and Convyio runs the agent for you — no installs, no terminal.
         </div>
       </button>
     </div>
@@ -410,6 +424,8 @@ function CreateStep({
   nameValid,
   instructions,
   onInstructionsChange,
+  apiKey,
+  onApiKeyChange,
   creating,
   error,
   onSubmit,
@@ -421,6 +437,8 @@ function CreateStep({
   nameValid: boolean;
   instructions: string;
   onInstructionsChange: (value: string) => void;
+  apiKey: string;
+  onApiKeyChange: (value: string) => void;
   creating: boolean;
   error: string | null;
   onSubmit: () => void;
@@ -453,10 +471,35 @@ function CreateStep({
             <div className="flex gap-2">
               <HarnessOption label="OpenAI" selected />
             </div>
-            <p className="mt-1 text-xs text-faint">
-              Set <code>OPENAI_API_KEY</code> on the machine running <code>convyio-agent</code> before
-              pairing — the next step will walk you through it.
-            </p>
+            <div className="mt-2">
+              <label
+                htmlFor="agent-api-key"
+                className="mb-1 block text-[10px] font-bold tracking-wider text-muted uppercase"
+              >
+                API key
+              </label>
+              <input
+                id="agent-api-key"
+                type="password"
+                value={apiKey}
+                onChange={(e) => onApiKeyChange(e.target.value)}
+                placeholder="sk-…"
+                autoComplete="off"
+                className="w-full rounded-md border border-divider bg-input px-3 py-2.5 text-body outline-none focus:ring-2 focus:ring-accent"
+              />
+              <p className="mt-1 text-xs text-faint">
+                Get a key at{" "}
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent hover:underline"
+                >
+                  platform.openai.com/api-keys
+                </a>
+                . Convyio stores it encrypted and runs the agent for you.
+              </p>
+            </div>
           </>
         )}
       </div>
@@ -492,7 +535,7 @@ function CreateStep({
 
       <button
         onClick={onSubmit}
-        disabled={!nameValid || creating}
+        disabled={!nameValid || creating || (method === "apikey" && apiKey.trim() === "")}
         className="w-full rounded-md bg-accent py-2.5 font-medium text-on-accent transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         {creating ? "Creating…" : "Create agent"}
@@ -514,7 +557,6 @@ function PairStep({
 }) {
   const cliCommand = pairingCode ? pairCommand(apiUrl, pairingCode) : "";
   const prompt = pairingCode ? setupPrompt(apiUrl, pairingCode, agent.name) : "";
-  const apiKeyAgent = agent.provider === "openai";
 
   const diagnostic = diagnosticMessage(agent.runtime.diagnosticCode);
   let statusText: string;
@@ -541,53 +583,20 @@ function PairStep({
   return (
     <>
       <p className="mb-4 text-sm text-muted">
-        {apiKeyAgent ? (
-          <>
-            Get a key at{" "}
-            <a
-              href="https://platform.openai.com/api-keys"
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent hover:underline"
-            >
-              platform.openai.com/api-keys
-            </a>
-            , set it below in the same terminal you'll pair from, then run the pairing command to
-            start <span className="text-body">{agent.name}</span>. The key stays on that
-            machine — Convyio never sees it.
-          </>
-        ) : (
-          <>
-            Paste this into Claude Code, Cursor, Codex, or any coding agent on this computer.
-            It pairs <span className="text-body">{agent.name}</span> locally. Your subscription stays
-            on this machine — Convyio never sees that login. Folders are attached later with Toolman.
-          </>
-        )}
+        Paste this into Claude Code, Cursor, Codex, or any coding agent on this computer.
+        It pairs <span className="text-body">{agent.name}</span> locally. Your subscription stays
+        on this machine — Convyio never sees that login. Folders are attached later with Toolman.
       </p>
 
       {pairingCode && (
         <div className="mb-4 space-y-3">
-          {!apiKeyAgent && <SetupPromptCard value={prompt} />}
+          <SetupPromptCard value={prompt} />
           <div>
-            {!apiKeyAgent && (
-              <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
-                Or run it yourself
-              </p>
-            )}
+            <p className="mb-2 text-[10px] font-bold tracking-wider text-muted uppercase">
+              Or run it yourself
+            </p>
             <div className="space-y-2">
-              {apiKeyAgent && (
-                <>
-                  <PairingCopyRow
-                    label="1. Set the key (macOS / Linux)"
-                    value={'export OPENAI_API_KEY="sk-your-key-here"'}
-                  />
-                  <p className="pl-1 text-xs text-faint">
-                    Windows PowerShell: <code>setx OPENAI_API_KEY "sk-your-key-here"</code> — then
-                    open a new PowerShell window before continuing.
-                  </p>
-                </>
-              )}
-              <PairingCopyRow label={apiKeyAgent ? "2. Run this to pair" : "CLI"} value={cliCommand} />
+              <PairingCopyRow label="CLI" value={cliCommand} />
               <PairingCopyRow label="Pairing code" value={pairingCode} />
             </div>
           </div>
@@ -742,12 +751,14 @@ function ConfigureStep({
               {asleep ? "Activate" : "Put to sleep"}
             </button>
           )}
-          <button
-            onClick={onRepair}
-            className="cursor-pointer text-xs font-medium text-accent hover:underline"
-          >
-            Re-pair
-          </button>
+          {agent.provider !== "openai" && (
+            <button
+              onClick={onRepair}
+              className="cursor-pointer text-xs font-medium text-accent hover:underline"
+            >
+              Re-pair
+            </button>
+          )}
         </div>
       </div>
 

@@ -144,14 +144,16 @@ export interface WorkspaceState {
   /** Absolute origin of the connected server (the same one `welcome.apiUrl` carried), for building agent setup commands. */
   apiUrl: string;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response> | null;
-  /** Create a user-added agent and return its id plus the one-time pairing code; the invite token never reaches the UI. */
+  /** Create a user-added agent and return its id plus the one-time pairing code; the invite token never reaches the UI.
+   *  An openai agent created with apiKey skips pairing entirely — the server starts it itself, so pairingCode is null. */
   createAgent: (fields: {
     name: string;
     provider: AgentProvider;
     instructions?: string;
     model?: string | null;
     access?: AgentAccessPolicy;
-  }) => Promise<{ id: string; pairingCode: string } | null>;
+    apiKey?: string;
+  }) => Promise<{ id: string; pairingCode: string | null } | null>;
   /** Update an agent's profile: instructions, model, and/or access policy. */
   updateAgent: (
     id: string,
@@ -579,7 +581,8 @@ export function WorkspaceProvider({
     instructions?: string;
     model?: string | null;
     access?: AgentAccessPolicy;
-  }): Promise<{ id: string; pairingCode: string } | null> => {
+    apiKey?: string;
+  }): Promise<{ id: string; pairingCode: string | null } | null> => {
     const request = api.fetch("/api/agents", {
       method: "POST",
       body: JSON.stringify(fields),
@@ -591,10 +594,11 @@ export function WorkspaceProvider({
         pushToast(`Could not add the agent: ${await api.errorMessage(res)}`);
         return null;
       }
-      // The response also carries `token` (the agent's own join secret) and
-      // `pairing`; neither is surfaced to the UI — only the pairing code is,
-      // and only until it's consumed by `convyio-agent pair`.
-      const data = (await res.json()) as AgentInvite & { token: string; pairingCode: string };
+      // The response also carries `token` (the agent's own join secret) and,
+      // for agents that pair locally, `pairing`; neither is surfaced to the
+      // UI. `pairingCode` is absent entirely for hosted API-key agents —
+      // the server already started them, so there's nothing to pair.
+      const data = (await res.json()) as AgentInvite & { token: string; pairingCode?: string };
       setAgentInvites((prev) => [
         {
           ...data,
@@ -602,7 +606,7 @@ export function WorkspaceProvider({
         },
         ...prev,
       ]);
-      return { id: data.id, pairingCode: data.pairingCode };
+      return { id: data.id, pairingCode: data.pairingCode ?? null };
     } catch (err) {
       pushToast(`Could not add the agent: ${String(err)}`);
       return null;
