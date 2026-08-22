@@ -5,13 +5,24 @@ import { renderMessageContent } from "../lib/markdown";
 import { Avatar } from "./Avatar";
 import { AgentBadge } from "./AgentBadge";
 import { PermissionCard } from "./PermissionCard";
-import { ToolCard } from "./ToolCard";
+import { ToolCard, ToolCardGroup } from "./ToolCard";
 
 /** Toolman lines are tagged in the trace; everything else is prose. */
 const TOOL_LINE = /^\[toolman\] /;
 
 function countActions(chunks: TraceChunk[]): number {
   return chunks.filter((c) => TOOL_LINE.test(c.content)).length;
+}
+
+/** Consecutive same-action calls collapse into one row instead of spamming the trace. */
+function groupExecutions(executions: ToolExecution[]): ToolExecution[][] {
+  const groups: ToolExecution[][] = [];
+  for (const execution of executions) {
+    const last = groups[groups.length - 1];
+    if (last && last[0].action === execution.action) last.push(execution);
+    else groups.push([execution]);
+  }
+  return groups;
 }
 
 function Chevron({ expanded }: { expanded: boolean }) {
@@ -107,9 +118,13 @@ export function TraceMessageLive({
         )}
         {executions.length > 0 ? (
           <div className="mt-2 space-y-1">
-            {executions.map((execution) => (
-              <ToolCard key={execution.id} execution={execution} />
-            ))}
+            {groupExecutions(executions).map((group) =>
+              group.length === 1 ? (
+                <ToolCard key={group[0].id} execution={group[0]} />
+              ) : (
+                <ToolCardGroup key={group[0].id} executions={group} />
+              ),
+            )}
           </div>
         ) : (
           <TraceBody chunks={chunks} />

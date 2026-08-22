@@ -141,7 +141,6 @@ export function AppBar({
         className="absolute left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg bg-subtle p-0.5"
       >
         {tab("chat", "Chat")}
-        {tab("board", "Board")}
         {tab("projects", "Projects")}
         {tab("resources", "Resources")}
       </div>

@@ -38,7 +38,7 @@ describe("AppBar", () => {
     const user = userEvent.setup();
     const { onSetView } = renderAppBar();
 
-    await user.click(screen.getByRole("tab", { name: "Board" }));
-    expect(onSetView).toHaveBeenCalledWith("board");
+    await user.click(screen.getByRole("tab", { name: "Projects" }));
+    expect(onSetView).toHaveBeenCalledWith("projects");
   });
 });
