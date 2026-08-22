@@ -74,7 +74,7 @@ async function connect(args: string[], out: (message: string) => void): Promise<
 
   const { installService, serviceStatusCommand } = await import("./service");
   try {
-    const location = await installService({ name, script: cliEntrypoint(), node: process.execPath });
+    const location = await installService({ name, runRef: installation.agent.id, script: cliEntrypoint(), node: process.execPath });
     out(`Installed a login service for ${name} (${location}).`);
     out(`It now starts on login and restarts on crash. Logs: ${serviceStatusCommand(name)}`);
   } catch (error) {
@@ -95,6 +95,7 @@ async function service(args: string[], out: (message: string) => void): Promise<
     const { installService, serviceStatusCommand } = await import("./service");
     const location = await installService({
       name: installation.agent.name,
+      runRef: installation.agent.id,
       script: cliEntrypoint(),
       node: process.execPath,
     });

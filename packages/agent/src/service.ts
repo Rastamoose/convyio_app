@@ -19,8 +19,13 @@ const execFileAsync = promisify(execFile);
  */
 
 export interface ServiceTarget {
-  /** Agent name as `convyio-agent run <name>` expects it. */
+  /** Agent name, used only for the service slug/label — cosmetic. */
   name: string;
+  /** Agent id, what the service actually runs with. Two agents paired on the
+   *  same machine can share a display name; ids never collide, so the
+   *  unattended service can't deadlock on "more than one paired agent
+   *  named X" the way a name-based target would. */
+  runRef: string;
   /** Absolute path to the CLI entry this process was launched from. */
   script: string;
   /** Node binary to run it with. */
@@ -52,7 +57,7 @@ export function systemdUnit(target: ServiceTarget): string {
     "StartLimitIntervalSec=0",
     "",
     "[Service]",
-    `ExecStart=${shellQuote(target.node)} ${shellQuote(target.script)} run ${shellQuote(target.name)}`,
+    `ExecStart=${shellQuote(target.node)} ${shellQuote(target.script)} run ${shellQuote(target.runRef)}`,
     "Restart=always",
     "RestartSec=2",
     "",
@@ -63,7 +68,7 @@ export function systemdUnit(target: ServiceTarget): string {
 }
 
 export function launchAgentPlist(label: string, target: ServiceTarget): string {
-  const args = [target.node, target.script, "run", target.name]
+  const args = [target.node, target.script, "run", target.runRef]
     .map((arg) => `      <string>${xmlEscape(arg)}</string>`)
     .join("\n");
   return [
@@ -141,7 +146,7 @@ export async function installService(
     "/create", "/f",
     "/tn", taskName,
     "/sc", "onlogon",
-    "/tr", `"${target.node}" "${target.script}" run "${target.name}"`,
+    "/tr", `"${target.node}" "${target.script}" run "${target.runRef}"`,
   ]);
   return taskName;
 }

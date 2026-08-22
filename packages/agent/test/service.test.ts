@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { launchAgentPlist, serviceSlug, systemdUnit } from "../src/service";
 
-const target = { name: "cc", script: "/home/u/.local/bin/cli.js", node: "/usr/bin/node" };
+const target = { name: "cc", runRef: "agent-id-123", script: "/home/u/.local/bin/cli.js", node: "/usr/bin/node" };
 
 describe("login service definitions", () => {
   test("the systemd unit never gives up restarting", () => {
@@ -12,16 +12,21 @@ describe("login service definitions", () => {
     // which is the exact failure the service exists to prevent.
     assert.match(unit, /StartLimitIntervalSec=0/);
     assert.match(unit, /WantedBy=default\.target/);
-    assert.match(unit, /ExecStart=\/usr\/bin\/node \/home\/u\/\.local\/bin\/cli\.js run cc/);
+    assert.match(unit, /ExecStart=\/usr\/bin\/node \/home\/u\/\.local\/bin\/cli\.js run agent-id-123/);
   });
 
-  test("agent names with spaces stay one argument", () => {
-    const unit = systemdUnit({ ...target, name: "my agent" });
-    assert.match(unit, /run "my agent"$/m);
+  // The unit runs by id, not name: two agents paired on one machine can share
+  // a display name, and a name-based target would deadlock on "more than one
+  // paired agent named X" every time the supervisor restarts it.
+  test("the unit targets the agent id, not its display name, even when they'd collide", () => {
+    const unit = systemdUnit({ ...target, name: "claude", runRef: "claude" });
+    assert.match(unit, /run claude$/m);
+    const unit2 = systemdUnit({ ...target, runRef: "id with spaces" });
+    assert.match(unit2, /run "id with spaces"$/m);
   });
 
   test("plist escapes XML rather than emitting broken markup", () => {
-    const plist = launchAgentPlist("com.convyio.agent.x", { ...target, name: 'a&b<c"' });
+    const plist = launchAgentPlist("com.convyio.agent.x", { ...target, runRef: 'a&b<c"' });
     assert.match(plist, /<string>a&amp;b&lt;c&quot;<\/string>/);
     assert.doesNotMatch(plist, /<string>a&b/);
     assert.match(plist, /<key>KeepAlive<\/key>\s*<true\/>/);
