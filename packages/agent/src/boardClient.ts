@@ -317,26 +317,34 @@ export class BoardClient {
     this.socket.send({ type: "action_cancel", requestId: this.lastRequestId });
   }
 
-  /** Compact workspace summary for the model's context window. */
+  /**
+   * Compact workspace summary for the model's context window. Only lists what
+   * the agent can already use — everything else (other channels, ungranted
+   * resources, unassigned projects) is discoverable on demand via the
+   * context_manifest / project_list tools, not dumped into every run. This
+   * both shrinks routine context and avoids disclosing the existence of
+   * resources the asker has no grant to.
+   */
   summary(channelId?: string): string {
     const envelope = channelId && this.envelope ? scopeEnvelope(this.envelope, channelId) : this.envelope;
     const context = envelope ? renderPromptEnvelope(envelope) : "(workspace context unavailable)";
-    const projects = this.projects.length === 0
-      ? "(no shared projects)"
-      : this.projects
-          .map(({ project, assignment, request }) => {
-            const access = assignment
-              ? `assigned:${assignment.status}`
-              : request
-                ? "access-request:pending"
-                : "not-assigned";
-            return `${project.id} [${access}] ${project.name} (${project.kind}) — owner: ${project.createdByName ?? project.createdBy} — folder-policy: ${project.accessMode}`;
-          })
-          .join("\n");
-    const resources = this.manifest?.resources
-      .map((resource) => `${resource.kind}:${resource.id} [${resource.access}] ${resource.name}`)
-      .join("\n") ?? "(resource manifest unavailable)";
-    return `${context}\n\nResource manifest (discovery only; access does not load contents):\n${resources}\n\nShared projects (use project_* tools, not native filesystem tools):\n${projects}`;
+    const usable = this.manifest?.resources.filter((r) => r.access === "granted" || r.access === "default") ?? [];
+    const totalCount = this.manifest?.resources.length ?? 0;
+    const resources = usable.length
+      ? usable.map((resource) => `${resource.kind}:${resource.id} ${resource.name}`).join("\n")
+      : "(none yet — call context_manifest to discover what exists)";
+    const assigned = this.projects.filter((p) => p.assignment);
+    const projects = assigned.length
+      ? assigned
+          .map(({ project, assignment }) => `${project.id} [${assignment!.status}] ${project.name} (${project.kind})`)
+          .join("\n")
+      : "(none assigned — call project_list to see shared projects)";
+    return (
+      `${context}\n\n` +
+      `Resources you have access to now (${usable.length} of ${totalCount} discoverable; ` +
+      `call context_manifest for the rest before requesting access):\n${resources}\n\n` +
+      `Projects assigned to you (use project_* tools, not native filesystem tools):\n${projects}`
+    );
   }
 }
 

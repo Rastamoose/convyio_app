@@ -6,11 +6,12 @@
     "current assignment and authorization",
     "the triggering message",
     "bounded workspace guidance and relevant agent notes",
-    "the minimal resource manifest and current grant states"
+    "resources and projects already granted or assigned to this agent"
   ],
   "omit": [
     "contents of resources merely because access exists",
     "channel context without a channel grant",
+    "the full resource manifest, or the existence of resources not yet granted — discover those on demand with context_manifest / project_list instead",
     "routine trace deltas",
     "tool progress",
     "token usage",

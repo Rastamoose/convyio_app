@@ -375,7 +375,20 @@ export class Hub {
       }
       if (this.options.resourceAccess) {
         const hasAccess = await this.options.resourceAccess.has(agent.id, "channel", channelInfo.id);
-        if (!hasAccess) {
+        if (!hasAccess && author.kind === "human") {
+          // Being @mentioned by a human in this channel is itself the
+          // authorization to be here — auto-grant rather than block on a
+          // second, redundant approval for the very channel the human is
+          // already looking at (a self-service context_request_access into
+          // some *other* channel still goes through real approval). Agent-to-
+          // agent mentions are not this direct a signal, so they keep going
+          // through the normal request-and-wait path below.
+          await this.options.resourceAccess.autoGrant(agent.id, author.id, {
+            resourceKind: "channel",
+            resourceId: channelInfo.id,
+            reason: `Mentioned in #${channelInfo.name}`,
+          });
+        } else if (!hasAccess) {
           await this.options.resourceAccess.requestIfNeeded(this.toActor(agent), {
             resourceKind: "channel",
             resourceId: channelInfo.id,
@@ -384,10 +397,6 @@ export class Hub {
           });
           occupiedAgents.push({
             agent,
-            // No `target`: the request is for this very channel (a first
-            // mention always requests access to the channel it happened in),
-            // so naming it separately would read as if two channels were
-            // involved when there's only one.
             occupancy: {
               kind: "waiting",
               location: "this channel",
@@ -1233,7 +1242,7 @@ export class Hub {
 
   /**
    * Local-folder consent. Conversation permission modes never widen this:
-   * deny refuses, always is durable consent, and ask requires the owner online.
+   * deny refuses, always is durable consent, and ask prompts the owner.
    */
   private async gateFolderAccess(
     actor: { id: string; workspaceId: string },
@@ -1266,7 +1275,7 @@ export class Hub {
         ownerPromptApproved: false,
       };
     }
-    const decision = folderConsent(project, this.isHumanOnline(project.createdBy));
+    const decision = folderConsent(project);
     if ("allow" in decision) {
       return {
         result: decision.allow ? null : { ok: false, code: decision.code, error: decision.message },
@@ -1282,10 +1291,6 @@ export class Hub {
     if (gate) return { result: gate, ownerPromptApproved: false };
     this.folderLeases.set(leaseKey, project.createdBy);
     return { result: null, ownerPromptApproved: true };
-  }
-
-  private isHumanOnline(actorId: string): boolean {
-    return this.roster.list().some((participant) => participant.id === actorId && participant.kind === "human" && participant.online);
   }
 
   private revokeFolderLeasesFor(ownerId: string): void {

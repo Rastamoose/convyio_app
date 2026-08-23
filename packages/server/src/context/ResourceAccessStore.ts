@@ -120,6 +120,53 @@ export class ResourceAccessStore {
     }
   }
 
+  /**
+   * Grant channel access immediately, with no approval round-trip: a human
+   * directly mentioning an agent in a channel is itself the authorization to
+   * be there, so gating that behind a second explicit approval step is pure
+   * friction. Distinct from `request` (via `requestIfNeeded`), which is for
+   * an agent's own proactive discovery into channels nobody invited it to —
+   * that still goes through human approval.
+   */
+  async autoGrant(
+    agentId: string,
+    grantedBy: string,
+    input: { resourceKind: ProtectedResourceKind; resourceId: string; reason: string },
+  ): Promise<AgentResourceGrant | null> {
+    if (await this.has(agentId, input.resourceKind, input.resourceId)) return null;
+    await this.requireResource(this.store.sql, input.resourceKind, input.resourceId);
+    const now = Date.now();
+    const result = await this.store.transaction(async (sql) => {
+      const [row] = await sql<GrantRow[]>`
+        INSERT INTO agent_resource_grants (
+          id, workspace_id, agent_id, resource_kind, resource_id, capability,
+          granted_by, reason, created_at, revoked_by, revoked_at
+        ) VALUES (
+          ${randomUUID()}, ${this.store.workspaceId}, ${agentId}, ${input.resourceKind},
+          ${input.resourceId}, 'content_read', ${grantedBy}, ${input.reason}, ${now}, NULL, NULL
+        )
+        RETURNING *
+      `;
+      const event = await this.events.append(sql, {
+        workspaceId: this.store.workspaceId,
+        channelId: input.resourceKind === "channel" ? input.resourceId : null,
+        actorId: grantedBy,
+        kind: "resource.access.granted",
+        subjectId: row.id,
+        payload: {
+          grantId: row.id,
+          agentId,
+          resourceKind: input.resourceKind,
+          resourceId: input.resourceId,
+        },
+        createdAt: now,
+      });
+      return { grant: toGrant(row), event };
+    });
+    this.onEvent?.(result.event);
+    return result.grant;
+  }
+
   async resolve(
     actor: Actor,
     requestId: string,

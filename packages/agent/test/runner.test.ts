@@ -305,6 +305,41 @@ describe("AgentRunner attachments", () => {
   });
 });
 
+describe("AgentRunner output redaction", () => {
+  test("strips policy tags and manifest/grant lines the model recited into its reply", async () => {
+    const leaked =
+      `<policy id="agent-workflow" version="6" hash="abc123">some policy text</policy>\n\n` +
+      `Here's my answer.\n` +
+      `channel: a97a8ea1-7c87-44db-bb45-ccb62db99d9e [granted] general\n` +
+      `channel: 96a7f89f-af06-4881-8a7a-695a95b0868a [none] demo-bug\n` +
+      `proj-1 [assigned:ready] convyio_site (git)\n` +
+      `That's the summary.`;
+    const brain = { run: async () => ({ text: leaked, providerSessionId: null }) } as unknown as Brain;
+    const { socket, sent } = fakeSocket();
+    const board = fakeBoard();
+    const dir = await tempDir();
+    const runner = new AgentRunner(
+      socket,
+      brain,
+      await Memory.load(dir),
+      board,
+      await ConversationSessions.load(dir),
+      new Presence(socket, board),
+      "system prompt",
+    );
+
+    runner.enqueue({ authorName: "dana", content: "hi", channel: "general" });
+    const finish = await waitFor(
+      () => sent.find((e): e is Extract<ClientEvent, { type: "agent_run_finish" }> => e.type === "agent_run_finish"),
+      "run finish",
+    );
+
+    assert.doesNotMatch(finish.finalContent, /<policy|<\/policy>|demo-bug|a97a8ea1|96a7f89f|proj-1/);
+    assert.match(finish.finalContent, /Here's my answer\./);
+    assert.match(finish.finalContent, /That's the summary\./);
+  });
+});
+
 function assignment(id: string): AgentWorkAssignment {
   return {
     request: {

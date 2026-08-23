@@ -114,7 +114,11 @@ export async function runAgent(
         const readiness = await local.acp.preflight(profile.requestedModel);
         if (!isCurrent()) return;
         local.acp.configure(profile.requestedModel);
-        runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions));
+        const acpIdentity = identityFact(
+          configuration.mode === "installation" ? configuration.installation.agent.provider : "claude",
+          readiness.effectiveModel ?? profile.requestedModel ?? undefined,
+        );
+        runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions, acpIdentity));
         socket.send({ type: "runner_hello", protocolVersion: RUNNER_PROTOCOL_VERSION, harness: readiness.harness, options: readiness.options });
         // The harness fell back to its default model, so the agent still works
         // but not as configured — degraded (which stays workable) rather than
@@ -128,11 +132,12 @@ export async function runAgent(
           ...(modelDenied ? { diagnosticCode: "MODEL_UNAVAILABLE" } : {}),
         });
       } else {
-        runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions));
         if (configuration.mode === "installation" && configuration.installation.agent.provider === "openai") {
           currentModel = resolveOpenAiModel(profile.requestedModel);
           local.brain.setModel?.(currentModel);
         }
+        const identity = identityFact("openai", currentModel);
+        runner.updateSystemPrompt(composePrompt(local.systemPrompt, profile.instructions, identity));
         reportLegacyReady(socket, revision, local.harness, local.options, currentModel);
       }
       ready = true;
@@ -314,15 +319,29 @@ async function localConfiguration(configuration: LegacyConfiguration | Installat
     dataDir: configuration.dataDir,
     brain,
     acp: null,
-    systemPrompt: configuration.charter,
+    systemPrompt: `${configuration.charter.trim()}\n\n${identityFact(configuration.provider, configuration.model)}`,
     harness: { id: configuration.provider, version: "0.1.0" },
     options,
     effectiveModel: configuration.model,
   };
 }
 
-function composePrompt(platformPolicy: string, profileInstructions: string): string {
-  return `${platformPolicy.trim()}\n\n<agent-profile-instructions>\n${profileInstructions.trim()}\n</agent-profile-instructions>`;
+function composePrompt(platformPolicy: string, profileInstructions: string, identity: string): string {
+  return `${platformPolicy.trim()}\n\n${identity}\n\n<agent-profile-instructions>\n${profileInstructions.trim()}\n</agent-profile-instructions>`;
+}
+
+/**
+ * The model has no way to know its own provider/version — asked directly, a
+ * hosted API model will confabulate one from training priors. This is the
+ * only source of truth for that fact, so it must reach every system prompt.
+ */
+function identityFact(provider: string, model?: string): string {
+  return (
+    `Ground truth about you: you are running as provider "${provider}"` +
+    `${model ? ` on model "${model}"` : ""}. If asked what model, provider, or ` +
+    `version you are, answer with exactly this — never guess, and never claim a ` +
+    `different vendor's model.`
+  );
 }
 
 function reportLegacyReady(socket: AgentSocket, revision: number, harness: { id: string; version: string }, options: RunnerConfigOption[], effectiveModel?: string): void {
