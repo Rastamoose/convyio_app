@@ -9,9 +9,8 @@ const mockWorkspace = {
   demoProgress: null as {
     channel: string;
     stage: string;
-    message: string;
+    message?: string;
     paused: boolean;
-    label?: string;
   } | null,
   demoChannels: ["demo"],
   workspaceId: "ws-1",
@@ -37,14 +36,14 @@ beforeEach(() => {
 });
 
 describe("OnboardingShell", () => {
-  it("shows the intro modal and can start the demo", async () => {
-    const user = userEvent.setup();
+  it("shows the intro modal with no button to start the demo", () => {
     render(<OnboardingShell channel="general" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 
     expect(screen.getByText(/See Convyio in one shared conversation/i)).toBeInTheDocument();
     expect(screen.queryByText(/Before:/i)).toBeNull();
-    await user.click(screen.getByRole("button", { name: /Play the demo/i }));
-    expect(mockWorkspace.startDemo).toHaveBeenCalledWith("demo", "walkthrough");
+    // The demo now starts from a chat trigger phrase (handled server-side),
+    // not a client control.
+    expect(screen.queryByRole("button", { name: /Play the demo/i })).toBeNull();
   });
 
   it("offers a 'Bring one piece of work' CTA that prefills the composer", async () => {
@@ -58,38 +57,35 @@ describe("OnboardingShell", () => {
     expect(onPrefill.mock.calls[0][0]).toContain("@noodle");
   });
 
-  it("waits for an explicit Continue between demo chapters", async () => {
+  it("waits for an explicit Continue between demo chapters, with no commentary text shown", async () => {
     const user = userEvent.setup();
     mockWorkspace.demoProgress = {
       channel: "demo",
       stage: "waiting_continue",
-      message: "Shared evidence is visible to both founders.",
       paused: false,
-      label: "Shared evidence",
     };
     render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 
-    expect(screen.getByText("Shared evidence")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const continueButton = screen.getByRole("button", { name: "Continue" });
+    await user.click(continueButton);
     expect(mockWorkspace.demoControl).toHaveBeenCalledWith("demo", "continue");
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 
-  it("shows demo progress controls when a demo is running", async () => {
+  it("shows demo progress controls when a demo is running, with no commentary text shown", async () => {
     const user = userEvent.setup();
     mockWorkspace.demoProgress = {
       channel: "demo",
-      stage: "executing",
-      message: "Running the authorized changes.",
+      stage: "step_3",
       paused: false,
     };
     const { rerender } = render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
 
-    expect(await screen.findByText("Running the authorized changes.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Pause/i }));
+    const pauseButton = await screen.findByRole("button", { name: /Pause/i });
+    await user.click(pauseButton);
     expect(mockWorkspace.demoControl).toHaveBeenCalledWith("demo", "pause");
 
-    mockWorkspace.demoProgress = { channel: "demo", stage: "completed", message: "Demo complete.", paused: false };
+    mockWorkspace.demoProgress = { channel: "demo", stage: "completed", paused: false };
     rerender(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
     expect(await screen.findByText(/Bring one piece of work/i)).toBeInTheDocument();
   });

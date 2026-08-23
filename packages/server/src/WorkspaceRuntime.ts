@@ -223,7 +223,7 @@ export class WorkspaceRuntime {
         db,
         board,
         plans,
-        toolman,
+        attachments,
         workspaceDir,
         options.demoSeedRoot,
         demoScripts,

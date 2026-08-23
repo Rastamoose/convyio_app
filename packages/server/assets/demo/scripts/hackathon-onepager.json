@@ -1,0 +1,103 @@
+{
+  "channel": "demo",
+  "mode": "walkthrough",
+  "personas": ["maya", "tom"],
+  "agents": ["noodle", "hermes"],
+  "steps": [
+    {
+      "kind": "message",
+      "author": "noodle",
+      "say": "we've brainstormed the product direction. a clear MVP now needs to be scoped",
+      "holdMs": 4000
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "@noodle we need to lock the idea before the demo slot. turn 'merge scattered hackathon docs into one page' into a real one-pager. keep it super simple, not a full PRD. just: what it is, who it's for, and MVP scope.",
+      "holdMs": 4500
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "did it actually spit out something usable or more buzzwords lol",
+      "holdMs": 3500
+    },
+    {
+      "kind": "action",
+      "action": "generate_document",
+      "actor": "noodle",
+      "documentName": "one-pager-context.txt",
+      "caption": "wrote it up as one doc, 'living brief', everything's in there",
+      "holdMs": 5000
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "wait, that's it, we've been overcomplicating this for an hour",
+      "holdMs": 2500
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "and noodle just nailed the concise framing we've been missing",
+      "holdMs": 4000
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "@tom check out this new MVP scoping",
+      "holdMs": 4000
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "@noodle nice, but don't you think we should handle markdown-formatted pastes too? that's how most of our docs actually export",
+      "holdMs": 5000
+    },
+    {
+      "kind": "message",
+      "author": "noodle",
+      "say": "good point, plain text alone would miss most of what people paste. updated: MVP now also handles markdown-formatted pastes, everything else stays the same",
+      "holdMs": 4500
+    },
+    {
+      "kind": "message",
+      "author": "maya",
+      "say": "let's ship the ingestion piece first, that's the whole demo",
+      "holdMs": 3500
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "on it, I'll get Hermes started on that",
+      "holdMs": 4000
+    },
+    {
+      "kind": "message",
+      "author": "tom",
+      "say": "@hermes build the doc-ingestion MVP: take a pasted blob, markdown or plain text, and split it into problem, users, and MVP scope. pull the details from Noodle's doc above, no need for me to repaste it here.",
+      "holdMs": 4500
+    },
+    {
+      "kind": "message",
+      "author": "hermes",
+      "say": "got it, pulled the scope from Noodle's doc, including the markdown update. problem, users, and MVP scope from a pasted blob, markdown or plain, no auth. I'll need permission to write the parser file before I start.",
+      "holdMs": 4500
+    },
+    {
+      "kind": "action",
+      "action": "request_permission",
+      "actor": "hermes",
+      "capability": "file_write",
+      "permissionSummary": "write ingest/parseBrief.ts",
+      "grantedBy": "tom",
+      "holdMs": 3500
+    },
+    {
+      "kind": "message",
+      "author": "hermes",
+      "say": "approved. starting now: parsing a sample doc dump into problem, users, and MVP scope.",
+      "holdMs": 4000
+    }
+  ]
+}

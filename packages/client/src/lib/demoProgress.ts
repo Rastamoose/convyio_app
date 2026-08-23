@@ -6,8 +6,8 @@ export function projectDemoProgress(event: DemoProgressEvent): DemoProgressState
   return {
     channel: event.channel,
     stage: event.stage,
-    message: event.message,
     paused: event.paused,
-    ...(event.label ? { label: event.label } : {}),
+    ...(event.message ? { message: event.message } : {}),
+    ...(event.focus ? { focus: event.focus } : {}),
   };
 }

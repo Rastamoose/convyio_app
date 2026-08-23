@@ -63,14 +63,6 @@ export function OnboardingShell({
   if (dismissed && !demoRunning) return null;
   if (!hasDemos && !demoRunning) return null;
 
-  const playDemo = () => {
-    const target = demoChannel ?? workspace.demoChannels[0];
-    if (!target) return;
-    setDismissed(false);
-    setChannel(target);
-    workspace.startDemo(target, "walkthrough");
-  };
-
   const skip = () => {
     if (demoChannel) workspace.demoControl(demoChannel, "skip");
     persistDismissed(true);
@@ -92,60 +84,57 @@ export function OnboardingShell({
   // Active demo progress bar.
   if (demoRunning && active) {
     const done = active.stage === "completed";
-    const waitingToContinue = active.stage === "waiting_continue";
+    const waitingToContinue =
+      active.stage === "waiting_continue" ||
+      active.stage === "waiting_accept_plan" ||
+      active.stage === "waiting_approve_ticket";
+    const continueLabel =
+      active.focus?.kind === "plan_accept" ? "Accept" : active.focus?.kind === "ticket_approve" ? "Approve" : "Continue";
     return (
       <div className="fixed bottom-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4">
         <div className="elevated rounded-xl px-4 py-3" role="status" aria-live="polite">
-          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="text-[10px] font-bold tracking-wider text-muted uppercase">
-                {active.label ?? "Walkthrough"}
-              </div>
-              <div className="text-sm text-body">{active.message}</div>
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-1.5">
-              {waitingToContinue && (
-                <button
-                  onClick={() => workspace.demoControl(active.channel, "continue")}
-                  className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
-                >
-                  Continue
-                </button>
-              )}
-              {!done && !waitingToContinue && (
-                <button
-                  onClick={() => workspace.demoControl(active.channel, active.paused ? "resume" : "pause")}
-                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                >
-                  {active.paused ? "Resume" : "Pause"}
-                </button>
-              )}
+          <div className="flex items-center justify-end gap-1.5">
+            {waitingToContinue && (
               <button
-                onClick={() => workspace.demoControl(active.channel, "replay")}
+                onClick={() => workspace.demoControl(active.channel, "continue")}
+                className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+              >
+                {continueLabel}
+              </button>
+            )}
+            {!done && !waitingToContinue && (
+              <button
+                onClick={() => workspace.demoControl(active.channel, active.paused ? "resume" : "pause")}
                 className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
               >
-                Replay
+                {active.paused ? "Resume" : "Pause"}
               </button>
-              {!done && (
-                <button
-                  onClick={skip}
-                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                >
-                  Skip
-                </button>
-              )}
-              {done && (
-                <button
-                  onClick={() => {
-                    persistDismissed(true);
-                    setDismissed(true);
-                  }}
-                  className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-                >
-                  Close
-                </button>
-              )}
-            </div>
+            )}
+            <button
+              onClick={() => workspace.demoControl(active.channel, "replay")}
+              className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+            >
+              Replay
+            </button>
+            {!done && (
+              <button
+                onClick={skip}
+                className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+              >
+                Skip
+              </button>
+            )}
+            {done && (
+              <button
+                onClick={() => {
+                  persistDismissed(true);
+                  setDismissed(true);
+                }}
+                className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
+              >
+                Close
+              </button>
+            )}
           </div>
           {done && (
             <div className="mt-3 border-t border-divider pt-3">
@@ -183,7 +172,7 @@ export function OnboardingShell({
           See Convyio in one shared conversation.
         </h1>
         <p className="mb-6 text-sm text-muted">
-          Watch two founders and two agents agree a Plan and ship one reviewed fix.
+          Watch two hackathon teammates and their own agents turn an idea into shared context, then hand off implementation without copy-pasting a single doc.
         </p>
 
         {showStarters ? (
@@ -206,14 +195,8 @@ export function OnboardingShell({
         ) : (
           <>
             <button
-              onClick={playDemo}
-              className="mb-2 w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-on-accent transition hover:bg-accent-hover"
-            >
-              Play the demo
-            </button>
-            <button
               onClick={() => setShowStarters(true)}
-              className="mb-2 w-full rounded-md bg-subtle px-3 py-2 text-sm font-medium text-body transition hover:bg-subtle-hover"
+              className="mb-2 w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-on-accent transition hover:bg-accent-hover"
             >
               Bring one piece of work
             </button>

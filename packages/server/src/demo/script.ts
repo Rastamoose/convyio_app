@@ -16,13 +16,21 @@ const stepSchema = z
     say: z.string().min(1).optional(),
     await: z.enum(["agent_reply", "approve_proposal", "accept_plan"]).optional(),
     gate: z.enum(["continue", "accept_plan", "approve_ticket"]).optional(),
+    /** Which artifact the bottom guide should call out; defaults from `gate` when omitted. */
+    focus: z.enum(["guide", "plan_accept", "ticket_approve", "result"]).optional(),
     prompt: z.string().min(1).max(240).optional(),
-    label: z.string().min(1).max(48).optional(),
-    note: z.string().min(1).max(240).optional(),
     holdMs: z.number().int().min(0).max(10_000).optional(),
-    action: z.enum(["propose_plan", "add_constraint", "correct_plan", "propose_ticket", "execute"]).optional(),
+    action: z.enum(["request_permission", "generate_document"]).optional(),
     actor: z.string().min(1).optional(),
-    constraint: z.string().min(1).optional(),
+    /** request_permission: the capability being asked for and a one-line summary of it. */
+    capability: z.enum(["file_write", "shell_repo", "network", "folder_read"]).optional(),
+    permissionSummary: z.string().min(1).max(200).optional(),
+    /** request_permission: which persona grants it. */
+    grantedBy: z.string().min(1).optional(),
+    /** generate_document: the short chat line posted alongside the attached file. */
+    caption: z.string().min(1).max(300).optional(),
+    /** generate_document: the attached file's name. */
+    documentName: z.string().min(1).optional(),
   })
   .refine(
     (step) => {

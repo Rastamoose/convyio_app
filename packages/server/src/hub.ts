@@ -24,6 +24,7 @@ import {
   type ConversationSessionSetEvent,
   type DemoControlEvent,
   type DemoProgressEvent,
+  type InteractionRequest,
   type InteractionResolveEvent,
   type JoinEvent,
   type MessageDeleteEvent,
@@ -153,6 +154,13 @@ export class Hub {
   onMessagePosted: ((message: ChatMessage) => void) | null = null;
   /** Optional hook fired when a client requests the scripted demo. */
   onDemoStart: ((channel: string, mode: "walkthrough" | "live" | undefined, actorId: string) => void) | null = null;
+  /**
+   * Optional predicate: does this message content start the scripted demo?
+   * A real user typed this, so it still gets stored and shown like any other
+   * message, it just skips the live @mention pipeline (no access request, no
+   * dispatch to a real agent) so the scripted reply is the only reply.
+   */
+  onDemoTrigger: ((content: string) => boolean) | null = null;
   /** Optional hook fired for demo playback controls. */
   onDemoControl: ((channel: string, action: string, actorId: string) => void) | null = null;
   /** Optional hook fired for every board event fanned out to clients. */
@@ -322,12 +330,24 @@ export class Hub {
       replyToId?: string;
       /** Echoed top-level on the resulting broadcast; never part of the message. */
       nonce?: string;
+      /**
+       * The scripted onboarding demo plays every side of the conversation
+       * itself, including agent replies. Without this, "@noodle"/"@hermes"
+       * in scripted dialogue would hit the same live @mention pipeline a
+       * real user message does — queuing real agent work and, since the
+       * demo's actors never hold a channel access grant, injecting a
+       * synthetic "is waiting for a decision" reply ahead of every scripted
+       * line.
+       */
+      skipMentionDispatch?: boolean;
     } = {},
   ): Promise<void> {
-    const { id = randomUUID(), nonce, ...rest } = extras;
+    const { id = randomUUID(), nonce, skipMentionDispatch, ...rest } = extras;
     const channelInfo = await this.channels.get(channel);
     if (!channelInfo) throw new Error(`unknown channel: ${channel}`);
-    const mentionCandidates = deriveMentionedAgents(author, content, this.roster.list());
+    const isDemoTrigger = !skipMentionDispatch && (this.onDemoTrigger?.(content) ?? false);
+    const mentionCandidates =
+      skipMentionDispatch || isDemoTrigger ? [] : deriveMentionedAgents(author, content, this.roster.list());
     const mentionedAgents = this.options.authorizeAgentWork
       ? (
           await Promise.all(
@@ -579,6 +599,39 @@ export class Hub {
 
   broadcastPresence(): void {
     this.broadcast({ type: "presence_sync", participants: this.roster.list() });
+  }
+
+  /**
+   * Scripted permission-checkpoint moment for the onboarding demo: a real
+   * durable interaction row and the same broadcast a live tool call would
+   * produce, without going through awaitApproval's toolman gate (the demo
+   * has no real tool call pending on the other end).
+   */
+  async raiseDemoInteraction(input: {
+    channel: string;
+    agentId: string;
+    capability: string;
+    summary: string;
+  }): Promise<InteractionRequest> {
+    const channelInfo = await this.channels.get(input.channel);
+    if (!channelInfo) throw new Error(`unknown channel: ${input.channel}`);
+    const request = await this.interactions.open({
+      workspaceId: this.options.workspace.id,
+      channelId: channelInfo.id,
+      agentId: input.agentId,
+      conversationId: null,
+      summary: input.summary,
+      capability: input.capability,
+      boardItemRef: null,
+    });
+    this.broadcast({ type: "interaction_request", request });
+    return request;
+  }
+
+  async resolveDemoInteraction(requestId: string, decision: "approved" | "denied", resolvedBy: string): Promise<void> {
+    const request = await this.interactions.resolve(this.options.workspace.id, requestId, decision, resolvedBy);
+    if (!request) return;
+    this.broadcast({ type: "interaction_resolved", request: { ...request, status: decision } });
   }
 
   private onConnection(socket: WebSocket, request: IncomingMessage): void {

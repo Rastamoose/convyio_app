@@ -830,13 +830,19 @@ export interface RunEndBroadcast {
   reason: "completed" | "aborted";
 }
 
+/** What the onboarding guide should call out for the current demo step. */
+export interface DemoFocusTarget {
+  kind: "guide" | "plan_accept" | "ticket_approve" | "result";
+  id?: string;
+}
+
 export interface DemoProgressEvent {
   type: "demo_progress";
   channel: string;
   stage: string;
-  message: string;
+  message?: string;
   paused: boolean;
-  label?: string;
+  focus?: DemoFocusTarget;
 }
 
 export type ServerEvent =

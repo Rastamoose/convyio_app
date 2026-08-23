@@ -269,6 +269,7 @@ export interface WsEnv {
   service: BoardService;
   sessions: Sessions;
   messages: MessageStore;
+  interactions: InteractionStore;
   agentWork: AgentWorkStore;
   threadEvents: ThreadEventStore;
   channels: Channels;
@@ -419,6 +420,7 @@ export async function createWsEnv(
     service,
     sessions,
     messages,
+    interactions,
     agentWork,
     threadEvents,
     channels,

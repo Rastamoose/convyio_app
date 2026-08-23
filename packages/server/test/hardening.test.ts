@@ -361,7 +361,7 @@ describe("demo scripts", () => {
     const scriptsDir = path.resolve(import.meta.dirname, "../assets/demo/scripts");
     const scripts = await loadDemoScripts(scriptsDir);
     assert.ok(scripts.has("demo"));
-    assert.equal(scripts.get("demo")!.seedDir, "api-contract");
+    assert.equal(scripts.get("demo")!.seedDir, undefined);
     assert.equal(scripts.has("demo-bug"), false);
   });
 

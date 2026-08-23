@@ -5,23 +5,70 @@ import type {
   Actor,
   BoardEventEnvelope,
   ChatMessage,
+  DemoFocusTarget,
   Participant,
   PlanEventEnvelope,
-  WorkCapability,
 } from "@workspace/shared";
-import { emptyImpactMap } from "@workspace/shared";
-import type { EcosystemImpact, ImpactSurface } from "@workspace/shared";
 import type { WorkspaceDb } from "../db";
 import type { Hub } from "../hub";
 import type { Roster } from "../roster";
+import type { Attachments } from "../chat/Attachments";
 import type { BoardService } from "../board/BoardService";
 import type { PlanService } from "../board/PlanService";
-import type { Toolman } from "../board/Toolman";
-import type { DemoScript } from "./script";
+import type { DemoScript, DemoStep } from "./script";
 
 const DEFAULT_STEP_DELAY_MS = 3_000;
 const AGENT_TIMEOUT_MS = 90_000;
 const WORK_TIMEOUT_MS = 180_000;
+
+// ponytail: content doesn't matter here, only that it's long enough to land
+// as a real text-file attachment instead of a wall of inline chat text.
+const ONE_PAGER_CONTEXT_DOC = `# Living Brief — one-pager context
+
+## Problem
+Hackathon teams generate context faster than they can organize it: Slack
+threads, shared docs, whiteboard photos, half-written notes. By the time a
+second person needs that context, it is scattered across four tools and one
+person's memory. Nobody has time during a hackathon to write a real spec, but
+someone still has to hold the whole picture.
+
+## Core user
+A 2-4 person hackathon team, mid-build, trying to keep everyone pointed at
+the same target without a standup every hour.
+
+## MVP scope
+- Accept a pasted blob of text: chat logs, doc exports, raw notes, anything.
+- Split it into three labeled sections: Problem, Users, MVP scope.
+- Render the result as one page anyone on the team can open.
+- No accounts, no login, no setup. Paste in, get a page out.
+
+## Out of scope for this build
+- Authentication or multi-tenant accounts.
+- Billing or any payment flow.
+- Live sync between multiple editors.
+- Rich formatting beyond plain sections and lists.
+
+## Notes from the whiteboard session
+- The team agreed the biggest failure mode is not lack of ideas, it's that
+  the ideas live in five places and nobody reads all five.
+- Whoever writes the first draft should not have to become the team's
+  full-time forwarder of context. That's the whole point of this build.
+- Judges care more about a working paste-to-page loop than a polished UI.
+  Skip styling until the ingestion works end to end.
+- Stretch goal, not MVP: let a second paste update the same page instead of
+  creating a new one. Only build this if the core loop works with time to
+  spare.
+
+## Acceptance check
+Paste a sample doc dump in, get back a page with problem, users, and MVP
+scope filled in, and nothing crashes on a blob with weird line breaks or
+stray HTML from a copy-paste.
+`;
+
+/** Typed exactly, case-insensitively: a real message that starts the scripted demo in whatever channel it was sent. */
+const DEMO_TRIGGER_PHRASE = "@noodle what's the update";
+/** Which registered script supplies the content a trigger phrase plays, regardless of which channel it fires in. */
+const DEMO_TRIGGER_SCRIPT_KEY = "demo";
 
 export interface DemoRun {
   channel: string;
@@ -30,22 +77,24 @@ export interface DemoRun {
   generation: number;
   startedBy: string;
   stage: string;
-  progressMessage: string;
-  progressLabel?: string;
+  progressMessage?: string;
   paused: boolean;
   cancelled: boolean;
   stepIndex: number;
   planRef?: string;
   ticketRef?: string;
+  focus?: DemoFocusTarget;
+  /** False for a chat-triggered run: it plays inside whatever channel asked for it, so it must never touch that channel's real history. */
+  wipe: boolean;
 }
 
 export interface DemoProgress {
   channel: string;
   stage: string;
-  message: string;
+  message?: string;
   paused: boolean;
   running: boolean;
-  label?: string;
+  focus?: DemoFocusTarget;
 }
 
 export class DemoOrchestrator {
@@ -67,7 +116,7 @@ export class DemoOrchestrator {
     private db: WorkspaceDb,
     private service: BoardService,
     private plans: PlanService,
-    private toolman: Toolman,
+    private attachments: Attachments,
     private workspaceDir: string,
     private seedRoot: string,
     private scripts: Map<string, DemoScript>,
@@ -75,6 +124,7 @@ export class DemoOrchestrator {
   ) {
     hub.onDemoStart = (channel, mode, actorId) => void this.start(channel, mode, actorId);
     hub.onDemoControl = (channel, action, actorId) => void this.control(channel, action, actorId);
+    hub.onDemoTrigger = (content) => this.isTriggerPhrase(content);
     hub.onMessagePosted = (message) => this.onMessagePosted(message);
     hub.onBoardEvent = (envelope) => this.onBoardEvent(envelope);
     hub.onPlanEvent = (envelope) => this.onPlanEvent(envelope);
@@ -86,21 +136,27 @@ export class DemoOrchestrator {
       return {
         channel: run.channel,
         stage: run.stage,
-        message: run.progressMessage,
         paused: run.paused,
         running: !run.cancelled,
-        ...(run.progressLabel ? { label: run.progressLabel } : {}),
+        ...(run.progressMessage ? { message: run.progressMessage } : {}),
+        ...(run.focus ? { focus: run.focus } : {}),
       };
     }
-    return { channel, stage: "idle", message: "No demo running.", paused: false, running: false };
+    return { channel, stage: "idle", paused: false, running: false };
   }
 
-  private async start(channel: string, mode: "live" | "walkthrough" | undefined, startedBy: string): Promise<void> {
-    const script = this.scripts.get(channel);
+  private async start(
+    channel: string,
+    mode: "live" | "walkthrough" | undefined,
+    startedBy: string,
+    options: { script?: DemoScript; wipe?: boolean } = {},
+  ): Promise<void> {
+    const script = options.script ?? this.scripts.get(channel);
     if (!script) {
       console.warn(`[demo] no script for ${channel}`);
       return;
     }
+    const wipe = options.wipe ?? true;
     if (this.run) {
       await this.abortRun();
     }
@@ -113,16 +169,15 @@ export class DemoOrchestrator {
       generation: gen,
       startedBy,
       stage: "intro",
-      progressMessage: "The work starts in the shared conversation.",
-      progressLabel: "Shared request",
       paused: false,
       cancelled: false,
       stepIndex: 0,
+      wipe,
     };
-    this.broadcastProgress(this.run.progressMessage);
+    this.broadcastProgress();
 
     try {
-      await this.prepare(channel, script, startedBy);
+      await this.prepare(channel, script, startedBy, wipe);
       if (resolvedMode === "walkthrough") {
         await this.runWalkthrough(channel, script, startedBy, gen);
       } else {
@@ -154,25 +209,29 @@ export class DemoOrchestrator {
     switch (action) {
       case "pause":
         this.run.paused = true;
-        this.broadcastProgress("Paused.");
+        this.broadcastProgress();
         break;
       case "resume":
         this.resume();
         break;
       case "continue":
         if (this.gateType === "continue") {
-          this.setStage("continuing", "Continuing the shared workflow.");
+          this.setStage("continuing");
           this.resolveGate();
+        } else if (this.gateType === "accept_plan") {
+          await this.autoAcceptPlan();
+        } else if (this.gateType === "approve_ticket") {
+          await this.autoApproveTicket();
         }
         break;
       case "skip":
         this.run.cancelled = true;
-        this.setStage("idle", "Skipped.");
+        this.setStage("idle");
         this.resolveGate();
         await this.cleanupParticipants();
         break;
       case "replay":
-        await this.start(channel, this.run.mode, this.run.startedBy);
+        await this.start(channel, this.run.mode, this.run.startedBy, { script: this.run.script, wipe: this.run.wipe });
         break;
     }
   }
@@ -180,17 +239,21 @@ export class DemoOrchestrator {
   private resume(): void {
     if (!this.run) return;
     this.run.paused = false;
-    this.broadcastProgress("Resumed.");
+    this.broadcastProgress();
   }
 
-  private async prepare(channel: string, script: DemoScript, startedBy: string): Promise<void> {
+  private async prepare(channel: string, script: DemoScript, startedBy: string, wipe: boolean): Promise<void> {
     this.actors.clear();
     this.participants.clear();
     await this.cleanupOldDemoWork();
     for (const name of script.personas) await this.requireActor(name, "human");
     for (const name of script.agents) await this.requireActor(name, "agent");
-    await this.hub.clearChannel(startedBy, channel, true);
-    await this.purgeDemoChannelWork(channel);
+    // A chat-triggered run plays inside a channel someone else owns; it must
+    // never wipe real history the way the dedicated demo channel does.
+    if (wipe) {
+      await this.hub.clearChannel(startedBy, channel, true);
+      await this.purgeDemoChannelWork(channel);
+    }
     if (script.seedDir) {
       await this.seedWorkspace(script.seedDir);
     }
@@ -321,15 +384,13 @@ export class DemoOrchestrator {
         if (step.kind === "message") {
           const text = this.replaceAgent(step.say!, script);
           await this.postAs(step.author!, text, channel);
-          if (step.note) this.setStage(`step_${i}`, step.note, step.label);
           if (step.await === "agent_reply") {
             await this.waitForAgentReply(channel, AGENT_TIMEOUT_MS);
           }
         } else if (step.kind === "gate") {
-          await this.pauseAtGate(step.gate!, step.prompt, step.label);
+          await this.pauseAtGate(step.gate!, step.prompt, step.focus);
         } else if (step.kind === "action") {
-          await this.runAction(step.action!, step.actor, step.constraint, channel, script);
-          if (step.note) this.setStage(`step_${i}`, step.note, step.label);
+          await this.runAction(step, channel);
         }
       } catch (err) {
         throw err;
@@ -337,174 +398,57 @@ export class DemoOrchestrator {
       if (step.kind !== "gate") await this.delay(this.stepDelayMs === 0 ? 0 : step.holdMs ?? this.stepDelayMs);
     }
     if (this.isCurrent(gen)) {
-      this.setStage("completed", "Everything stayed in one thread.", "Reviewable result");
+      this.setStage("completed");
       await this.cleanupParticipants();
     }
   }
 
-  private async runAction(
-    action: string,
-    actorName: string | undefined,
-    constraint: string | undefined,
-    channel: string,
-    _script: DemoScript,
-  ): Promise<void> {
-    switch (action) {
-      case "propose_plan":
-        await this.proposePlan(channel);
+  private async runAction(step: DemoStep, channel: string): Promise<void> {
+    switch (step.action) {
+      case "request_permission":
+        await this.requestPermission(step, channel);
         break;
-      case "add_constraint":
-        await this.addConstraint(actorName ?? "tom", constraint ?? "Keep owner_name working for one release; do not change the mobile client");
-        break;
-      case "correct_plan":
-        await this.correctPlan(actorName ?? "noodle");
-        break;
-      case "propose_ticket":
-        await this.proposeTicket(channel);
-        break;
-      case "execute":
-        await this.executeTicket(this.run!.ticketRef!);
+      case "generate_document":
+        await this.generateDocument(step, channel);
         break;
       default:
-        console.warn(`[demo] unknown walkthrough action ${action}`);
+        console.warn(`[demo] unknown walkthrough action ${step.action}`);
     }
   }
 
-  private async proposePlan(channel: string): Promise<void> {
-    const noodle = await this.requireActor("noodle", "agent");
-    const plan = await this.plans.create(noodle, {
-      title: "Ship the owner field without breaking clients",
-      objective: "Add owner to the project API while existing clients using owner_name continue working.",
-      outline: [
-        "Add owner while preserving owner_name for one release",
-        "Update the web client to read owner",
-        "Leave the mobile client unchanged",
-        "Run the API contract check for old and new clients",
-      ],
-      constraints: ["New API clients can read owner"],
-      clarifications: [
-        "Noodle reviewed the backend response; Hermes checked the web and mobile consumers",
-      ],
-      acceptanceCriteria: [
-        "API returns owner and owner_name",
-        "web reads owner and mobile still reads owner_name",
-        "api-contract/check.ts passes",
-      ],
-      impactMap: completeImpactMap({ tests: "api-contract/check.ts verifies old and new clients" }),
-      channel,
-      assumedOwnerId: noodle.id,
-    });
-    this.run!.planRef = plan.ref;
-    this.demoPlanRefs.add(plan.ref);
-    this.setStage("plan_proposed", "Backend and client findings are now one shared Plan.");
+  /**
+   * A scripted permission checkpoint: the agent asks, the named human grants
+   * it moments later. Uses the same durable interaction-request record and
+   * broadcast a live tool call would produce, so the PermissionCard in the
+   * transcript is real — it just isn't gating a real pending tool call.
+   */
+  private async requestPermission(step: DemoStep, channel: string): Promise<void> {
+    const agentName = step.actor ?? "hermes";
+    const agent = await this.requireActor(agentName, "agent");
+    const capability = step.capability ?? "file_write";
+    const summary = step.permissionSummary ?? "proceed with the approved work";
+    const request = await this.hub.raiseDemoInteraction({ channel, agentId: agent.id, capability, summary });
+    await this.delay(this.stepDelayMs === 0 ? 0 : 2_500);
+    const human = await this.requireActor(step.grantedBy ?? "maya", "human");
+    await this.hub.resolveDemoInteraction(request.id, "approved", human.id);
   }
 
-  private async addConstraint(actorName: string, text: string): Promise<void> {
-    const actor = await this.requireActor(actorName);
-    if (!this.run?.planRef) throw new Error("no plan to add constraint to");
-    await this.plans.appendConstraint(actor, this.run.planRef, text);
-    this.setStage("constraint_added", "Plan updated with a new constraint before execution.");
-  }
-
-  private async correctPlan(actorName: string): Promise<void> {
-    const actor = await this.requireActor(actorName);
-    if (!this.run?.planRef) throw new Error("no plan to correct");
-    await this.plans.appendDecision(
-      actor,
-      this.run.planRef,
-      "Rollout corrected: add owner, preserve owner_name for one release, update web, and leave mobile unchanged.",
-    );
-    this.setStage("plan_corrected", "Plan corrected before execution.");
-  }
-
-  private async proposeTicket(channel: string): Promise<void> {
-    const noodle = await this.requireActor("noodle", "agent");
-    if (!this.run?.planRef) throw new Error("no plan for ticket");
-    const ticket = await this.service.create(noodle, {
-      title: "Add the compatible owner API field",
-      why: "The backend wants owner, but existing web and mobile consumers still depend on owner_name.",
-      effect: "New clients can read owner while existing clients keep working through owner_name.",
-      planId: this.run.planRef,
-      owner: noodle.id,
-      scopePaths: [
-        "api-contract/server/project-response.ts",
-        "api-contract/web/project-card.ts",
-      ],
-      capabilities: ["file_write", "shell_repo"] as WorkCapability[],
-      acceptanceCriteria: [
-        "API returns owner and owner_name",
-        "web reads owner",
-        "mobile remains unchanged",
-        "api-contract/check.ts passes",
-      ],
-      impactMap: completeImpactMap({ tests: "api-contract/check.ts verifies old and new clients" }),
-      channel,
-    });
-    this.run.ticketRef = ticket.ref;
-    this.demoRefs.add(ticket.ref);
-    this.setStage("ticket_proposed", "Ticket proposed. Approve it to authorize the changes.");
-  }
-
-  private async executeTicket(ticketRef: string): Promise<void> {
-    this.setStage("executing", "Running the authorized changes.");
-    const noodle = await this.requireActor("noodle", "agent");
-    const fixtureDir = path.join(this.workspaceDir, "api-contract");
-    const mobileBefore = await fs.readFile(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
-
-    await this.service.start(noodle, ticketRef);
-
-    const serverContent = `export interface Project {
-  id: string;
-  ownerName: string;
-}
-
-export function projectResponse(project: Project) {
-  return {
-    id: project.id,
-    owner: project.ownerName,
-    owner_name: project.ownerName,
-  };
-}
-`;
-
-    const webContent = `export function projectOwner(project: { owner: string; owner_name?: string }): string {
-  return project.owner;
-}
-`;
-
-    await this.toolFileWrite(noodle, ticketRef, "api-contract/server/project-response.ts", serverContent);
-    await this.toolFileWrite(noodle, ticketRef, "api-contract/web/project-card.ts", webContent);
-
-    const mobileAfter = await fs.readFile(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
-    const mobileUnchanged = mobileBefore === mobileAfter;
-
-    let checkOutput = "";
-    try {
-      const result = await this.toolman.execute(
-        noodle,
-        { kind: "run_shell", command: "tsx api-contract/check.ts" },
-        ticketRef,
-      );
-      checkOutput = result.ok ? result.output ?? "" : result.error ?? "check failed";
-    } catch (err) {
-      checkOutput = `verification check error: ${err instanceof Error ? err.message : String(err)}`;
-    }
-
-    const evidence = [
-      "Changed: API response and web client",
-      `Mobile preserved: ${mobileUnchanged ? "yes — mobile client is byte-identical" : "no — mobile client changed"}`,
-      "",
-      "Verification:",
-      checkOutput,
-    ].join("\n");
-
-    await this.service.complete(noodle, ticketRef, evidence);
-  }
-
-  private async toolFileWrite(actor: Actor, ticketRef: string, filePath: string, content: string): Promise<string> {
-    const result = await this.toolman.execute(actor, { kind: "write_file", path: filePath, content }, ticketRef);
-    if (!result.ok) throw new Error(`write ${filePath} failed: ${result.error}`);
-    return result.output ?? `wrote ${filePath}`;
+  /**
+   * The forwarding pain the demo is built to show: instead of a chat wall or
+   * a doc someone has to paste around, the agent writes the shared context
+   * once as a real attachment. The chat line stays short; the file carries
+   * the detail, so later steps can point at it without resending it.
+   */
+  private async generateDocument(step: DemoStep, channel: string): Promise<void> {
+    const authorName = step.actor ?? "noodle";
+    const author = await this.requireActor(authorName, "agent");
+    const participant = await this.joinParticipant(author);
+    const name = step.documentName ?? "one-pager-context.txt";
+    const saved = await this.attachments.save(author, { name, mime: "text/plain" }, Buffer.from(ONE_PAGER_CONTEXT_DOC, "utf8"));
+    const messageId = randomUUID();
+    const bound = await this.attachments.bind(messageId, [saved.id], author.id);
+    const caption = step.caption ?? "wrote it up as one doc, everything's in there";
+    await this.hub.postMessage(participant, caption, channel, { id: messageId, attachments: bound, skipMentionDispatch: true });
   }
 
   // -------------------------------------------------------------------------
@@ -546,24 +490,10 @@ export function projectResponse(project: Project) {
     if (resolvedKind === "agent" && name === "noodle") {
       const managed = await this.db.findManagedAgent("noodle");
       actor = managed ?? (await this.db.upsertActor("agent", "noodle"));
-    } else if (resolvedKind === "agent") {
-      const rows = await this.db.sql<{ id: string; display_name: string }[]>`
-        SELECT id, display_name FROM actors WHERE kind = 'agent' AND lower(display_name) = lower(${name})
-      `;
-      if (rows[0]) {
-        actor = {
-          id: rows[0].id,
-          kind: "agent",
-          displayName: rows[0].display_name,
-          workspaceId: this.db.workspaceId,
-        };
-      } else {
-        const id = randomUUID();
-        await this.db.sql`INSERT INTO actors (id, kind, display_name) VALUES (${id}, 'agent', ${name})`;
-        actor = { id, kind: "agent", displayName: name, workspaceId: this.db.workspaceId };
-      }
     } else {
-      actor = await this.db.upsertActor("human", name);
+      // upsertActor also registers agents as workspace members, which
+      // ticket ownership requires (BoardService.requireMember).
+      actor = await this.db.upsertActor(resolvedKind, name);
     }
     this.actors.set(name, actor);
     await this.joinParticipant(actor);
@@ -581,7 +511,7 @@ export function projectResponse(project: Project) {
   private async postAs(name: string, content: string, channel: string): Promise<void> {
     const actor = await this.requireActor(name);
     const participant = await this.joinParticipant(actor);
-    await this.hub.postMessage(participant, content, channel);
+    await this.hub.postMessage(participant, content, channel, { skipMentionDispatch: true });
   }
 
   private async seedWorkspace(seedDir: string): Promise<void> {
@@ -622,12 +552,50 @@ export function projectResponse(project: Project) {
     throw new Error(`timed out waiting for ${label}`);
   }
 
+  /**
+   * The walkthrough's human decision points normally wait for a real click on
+   * the spotlighted Plan/Ticket card. That round trip depends on wiring that
+   * isn't reliable during onboarding, so Continue performs the same real
+   * accept/approve call directly instead of waiting for it to arrive via a
+   * separate UI control.
+   */
+  private async autoAcceptPlan(): Promise<void> {
+    if (!this.run?.planRef) {
+      this.resolveGate();
+      return;
+    }
+    const human = await this.requireActor("maya", "human");
+    try {
+      await this.plans.accept(human, this.run.planRef);
+    } catch (err) {
+      console.error("[demo] auto-accept failed:", err instanceof Error ? err.message : err);
+    }
+    this.setStage("planning", "Plan accepted. Proposing the bounded ticket.");
+    this.resolveGate();
+  }
+
+  private async autoApproveTicket(): Promise<void> {
+    if (!this.run?.ticketRef) {
+      this.resolveGate();
+      return;
+    }
+    const human = await this.requireActor("maya", "human");
+    const hermes = await this.requireActor("hermes", "agent");
+    try {
+      await this.service.approve(human, this.run.ticketRef, hermes.id);
+    } catch (err) {
+      console.error("[demo] auto-approve failed:", err instanceof Error ? err.message : err);
+    }
+    this.setStage("assigned", "Ticket approved. Starting execution.");
+    this.resolveGate();
+  }
+
   private async approveLatestProposal(channel: string): Promise<void> {
     const ref = this.latestProposalRef;
     if (!ref) return;
     const human = await this.requireActor("maya", "human");
     await this.service.approve(human, ref);
-    await this.hub.postMessage(await this.participantFor("maya"), `approved ${ref}`, channel);
+    await this.hub.postMessage(await this.participantFor("maya"), `approved ${ref}`, channel, { skipMentionDispatch: true });
   }
 
   private async acceptLatestPlan(channel: string): Promise<void> {
@@ -635,7 +603,7 @@ export function projectResponse(project: Project) {
     if (!ref) return;
     const human = await this.requireActor("maya", "human");
     await this.plans.accept(human, ref);
-    await this.hub.postMessage(await this.participantFor("maya"), `accepted ${ref}`, channel);
+    await this.hub.postMessage(await this.participantFor("maya"), `accepted ${ref}`, channel, { skipMentionDispatch: true });
   }
 
   private async participantFor(name: string): Promise<Participant> {
@@ -644,11 +612,22 @@ export function projectResponse(project: Project) {
   }
 
   private onMessagePosted(message: ChatMessage): void {
+    if (message.authorKind === "human" && message.channel && this.isTriggerPhrase(message.content)) {
+      void this.start(message.channel, "walkthrough", message.authorId, {
+        script: this.scripts.get(DEMO_TRIGGER_SCRIPT_KEY),
+        wipe: false,
+      });
+      return;
+    }
     if (!this.run || message.channel !== this.run.channel) return;
     if (message.authorKind === "agent" && this.resolveAgentReply) {
       this.resolveAgentReply();
       this.resolveAgentReply = null;
     }
+  }
+
+  private isTriggerPhrase(content: string): boolean {
+    return content.trim().toLowerCase() === DEMO_TRIGGER_PHRASE;
   }
 
   private onBoardEvent(envelope: BoardEventEnvelope): Promise<void> {
@@ -698,7 +677,7 @@ export function projectResponse(project: Project) {
   private async pauseAtGate(
     gateFor: "continue" | "accept_plan" | "approve_ticket",
     prompt?: string,
-    label?: string,
+    focusKind?: DemoFocusTarget["kind"],
   ): Promise<void> {
     this.gateType = gateFor;
     const message = prompt ?? (gateFor === "continue"
@@ -706,9 +685,12 @@ export function projectResponse(project: Project) {
       : gateFor === "accept_plan"
         ? "Waiting for you to accept the plan."
         : "Waiting for you to approve the ticket.");
+    const kind = focusKind ?? (gateFor === "accept_plan" ? "plan_accept" : gateFor === "approve_ticket" ? "ticket_approve" : "guide");
+    const id = kind === "plan_accept" ? this.run?.planRef : kind === "ticket_approve" || kind === "result" ? this.run?.ticketRef : undefined;
+    const focus: DemoFocusTarget = { kind, ...(id ? { id } : {}) };
     await new Promise<void>((resolve) => {
       this.gateResolve = resolve;
-      this.setStage(`waiting_${gateFor}`, message, label);
+      this.setStage(`waiting_${gateFor}`, message, focus);
     });
   }
 
@@ -737,34 +719,23 @@ export function projectResponse(project: Project) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private setStage(stage: string, message: string, label?: string): void {
+  private setStage(stage: string, message?: string, focus?: DemoFocusTarget): void {
     if (!this.run) return;
     this.run.stage = stage;
     this.run.progressMessage = message;
-    this.run.progressLabel = label;
-    this.broadcastProgress(message);
+    this.run.focus = focus ?? { kind: "guide" };
+    this.broadcastProgress();
   }
 
-  private broadcastProgress(message: string): void {
+  private broadcastProgress(): void {
     if (!this.run) return;
     this.hub.broadcastDemoProgress({
       type: "demo_progress",
       channel: this.run.channel,
       stage: this.run.stage,
-      message,
       paused: this.run.paused,
-      ...(this.run.progressLabel ? { label: this.run.progressLabel } : {}),
+      ...(this.run.progressMessage ? { message: this.run.progressMessage } : {}),
+      ...(this.run.focus ? { focus: this.run.focus } : {}),
     });
   }
-}
-
-function completeImpactMap(notes: Partial<Record<ImpactSurface, string>>): EcosystemImpact {
-  const map = emptyImpactMap();
-  for (const [surface, note] of Object.entries(notes)) {
-    if (note) {
-      map[surface as ImpactSurface] = "affected";
-      map.notes[surface as ImpactSurface] = note;
-    }
-  }
-  return map;
 }

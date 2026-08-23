@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { emptyImpactMap } from "@workspace/shared";
+import type { ChatMessage } from "@workspace/shared";
 import { loadDemoScripts } from "../src/demo/script";
 import { DemoOrchestrator } from "../src/demo/DemoOrchestrator";
 import { createWsEnv } from "./helpers";
@@ -19,7 +19,7 @@ describe("walkthrough demo", async () => {
     env.db,
     env.service,
     env.plans,
-    env.toolman,
+    env.attachments,
     env.workspaceDir,
     seedRoot,
     new Map([["demo", scripts.get("demo")!]]),
@@ -28,123 +28,161 @@ describe("walkthrough demo", async () => {
 
   await env.channels.seed([{ name: "demo", isDemo: true }]);
 
-  test("shared two-agent incident demo runs to completion with plan constraint and ticket evidence", async () => {
+  test("hackathon one-pager demo runs to completion with no gates and a real permission checkpoint", async () => {
     const human = await env.db.upsertActor("human", "maya");
-    const staleAgent = await env.db.upsertActor("agent", "stale-demo-agent");
-    const stalePlan = await env.plans.create(staleAgent, {
-      title: "Stale demo plan",
-      objective: "Remove this before replay",
-      outline: ["Old work"],
-      clarifications: ["Old clarification"],
-      acceptanceCriteria: ["Old work is gone"],
-      impactMap: emptyImpactMap(),
-      channel: "demo",
-      assumedOwnerId: staleAgent.id,
-    });
-    await env.plans.accept(human, stalePlan.ref);
-    const staleTicket = await env.service.create(staleAgent, {
-      title: "Stale demo ticket",
-      why: "Old demo run",
-      effect: "Old output",
-      planId: stalePlan.ref,
-      owner: staleAgent.id,
-      scopePaths: ["api-contract/"],
-      acceptanceCriteria: ["Old work is gone"],
-      impactMap: emptyImpactMap(),
-      channel: "general",
-    });
 
-    const progress = (stage: string, message?: string) =>
+    const progress = (stage: string) =>
       new Promise<void>((resolve, reject) => {
         const deadline = Date.now() + 10_000;
         const check = () => {
           const p = orchestrator.progress("demo");
-          if (p.stage === stage && (!message || p.message.includes(message))) return resolve();
+          if (p.stage === stage) return resolve();
           if (Date.now() > deadline) return reject(new Error(`timed out waiting for ${stage}: ${p.stage} (${p.message})`));
           setTimeout(check, 20);
         };
         check();
       });
 
-    let planRef: string | undefined;
-    let ticketRef: string | undefined;
-
-    const planEventHandler = env.plans.onEvent;
-    env.plans.onEvent = (event) => {
-      if (event.type === "plan.created" || event.type === "plan.proposed") {
-        planRef = event.plan.ref;
-      }
-      // Forward to hub so orchestrator sees accepted events too.
-      env.hub.broadcastPlanEvent(event);
-      if (planEventHandler) planEventHandler(event);
-    };
-
-    const boardEventHandler = env.service.onEvent;
-    env.service.onEvent = (event) => {
-      if (event.type === "item.proposed") {
-        ticketRef = event.item.ref;
-      }
-      env.hub.broadcastBoardEvent(event);
-      if (boardEventHandler) boardEventHandler(event);
-    };
-
+    // The whole point of this script: it plays start to finish with zero
+    // demoControl calls. No gates, no Board, no Plan.
     env.hub.onDemoStart?.("demo", "walkthrough", human.id);
-
-    await progress("waiting_continue", "backend view");
-    assert.equal(await env.plans.find(env.db.workspaceId, stalePlan.ref), null);
-    assert.equal(await env.service.find(env.db.workspaceId, staleTicket.ref), null);
-    const firstChapter = (await env.messages.list()).filter((message) => message.channel === "demo");
-    const noodleMessage = firstChapter.find((message) => message.authorName === "noodle" && message.content.includes("checked the backend"));
-    assert.ok(noodleMessage);
-    assert.ok(firstChapter.some((message) => message.authorName === "maya" && message.content.includes("@noodle")));
-    env.hub.onDemoControl?.("demo", "continue", human.id);
-
-    await progress("waiting_continue", "Two owners");
-    assert.ok(planRef, "plan was proposed after both agents contributed");
-    const sharedAnalysis = (await env.messages.list()).filter((message) => message.channel === "demo");
-    const hermesMessage = sharedAnalysis.find((message) => message.authorName === "hermes" && message.content.includes("@noodle"));
-    assert.ok(hermesMessage);
-    assert.ok(sharedAnalysis.some((message) => message.authorName === "tom" && message.content.includes("@hermes")));
-    assert.ok(sharedAnalysis.some((message) => message.authorName === "noodle" && message.content.includes("@hermes")));
-    env.hub.onDemoControl?.("demo", "continue", human.id);
-
-    await progress("waiting_accept_plan");
-    assert.equal(orchestrator.progress("demo").focus?.kind, "plan_accept");
-    const planBeforeAccept = await env.plans.find(env.db.workspaceId, planRef);
-    assert.ok(planBeforeAccept?.constraints.some((c) => c.includes("owner_name")), "client compatibility constraint was added");
-    await env.plans.accept(human, planRef);
-
-    await progress("waiting_continue", "Ticket authorizes");
-    assert.equal(orchestrator.progress("demo").focus?.kind, "guide");
-    assert.ok(ticketRef, "ticket was proposed");
-    env.hub.onDemoControl?.("demo", "continue", human.id);
-
-    await progress("waiting_approve_ticket");
-    assert.equal(orchestrator.progress("demo").focus?.kind, "ticket_approve");
-    const ticketBeforeApprove = await env.service.find(env.db.workspaceId, ticketRef);
-    assert.equal(ticketBeforeApprove?.status, "proposed");
-    assert.deepEqual(ticketBeforeApprove?.scopePaths, [
-      "api-contract/server/project-response.ts",
-      "api-contract/web/project-card.ts",
-    ]);
-    await env.service.approve(human, ticketRef);
-
-    await progress("waiting_continue", "API changed");
-    assert.equal(orchestrator.progress("demo").focus?.kind, "result");
-    env.hub.onDemoControl?.("demo", "continue", human.id);
     await progress("completed");
 
-    const ticket = await env.service.find(env.db.workspaceId, ticketRef);
-    assert.equal(ticket?.status, "done");
-    assert.ok(ticket?.verificationEvidence, "result has verification evidence");
-    assert.match(ticket?.verificationEvidence ?? "", /PASS/);
+    const messages = (await env.messages.list()).filter((message) => message.channel === "demo");
+    const byAuthor = (name: string) => messages.filter((message) => message.authorName === name);
 
-    // Files were written into the workspace sandbox and the mobile client was left untouched.
-    const fixtureDir = path.join(env.workspaceDir, "api-contract");
-    const server = fs.readFileSync(path.join(fixtureDir, "server/project-response.ts"), "utf8");
-    assert.ok(server.includes("owner_name: project.ownerName"), "legacy API field was preserved");
-    const mobile = fs.readFileSync(path.join(fixtureDir, "mobile/project-client.ts"), "utf8");
-    assert.ok(mobile.includes("mobileProjectOwner"), "mobile client was preserved");
+    assert.ok(
+      byAuthor("maya").some((message) => message.content.includes("@noodle") && message.content.includes("one-pager")),
+      "maya asks her own agent to draft the spec",
+    );
+    assert.ok(
+      byAuthor("tom").some((message) => message.content.includes("buzzwords")),
+      "teammates banter with each other, not just with agents",
+    );
+    // The big-document beat: Noodle writes the shared context into one real
+    // attachment instead of a wall of chat text.
+    const draftMessage = byAuthor("noodle").find((message) => (message.attachments?.length ?? 0) > 0);
+    assert.ok(draftMessage, "noodle posts the draft with a real attachment, not a chat wall");
+    assert.ok(draftMessage!.content.includes("living brief"), "the short caption still carries the eureka line");
+    const doc = draftMessage!.attachments![0];
+    assert.ok(doc.mime.startsWith("text/"), "the context doc is a text file");
+    assert.ok(doc.size > 1000, "the context doc is big enough to render as a file, not inline text");
+    const downloaded = await env.attachments.get(doc.id);
+    assert.ok(downloaded, "the attached document is actually stored and fetchable");
+    const docText = await downloaded!.blob.text();
+    assert.ok(docText.includes("MVP scope"), "the document carries the detail the short caption leaves out");
+
+    // The headline beat: Maya points Tom at the doc instead of pasting it,
+    // Tom asks Maya's agent for a real change, and Noodle sends back the
+    // revised scope in the same thread.
+    const pointer = byAuthor("maya").find((message) => message.content.includes("@tom") && message.content.includes("MVP scoping"));
+    assert.ok(pointer, "maya points tom at the doc instead of forwarding it");
+    const changeRequest = byAuthor("tom").find(
+      (message) => message.timestamp > pointer!.timestamp && message.content.includes("@noodle") && message.content.includes("markdown"),
+    );
+    assert.ok(changeRequest, "tom asks noodle, someone else's agent, for a real change");
+    assert.ok(
+      byAuthor("noodle").some(
+        (message) => message.timestamp > changeRequest!.timestamp && message.content.includes("updated") && message.content.includes("markdown"),
+      ),
+      "noodle sends back the revised scope in the same thread",
+    );
+
+    // Tom then hands the build to his own agent, not Maya's.
+    assert.ok(
+      byAuthor("tom").some((message) => message.content.includes("@hermes") && message.content.includes("doc-ingestion")),
+      "tom assigns his own agent to implement",
+    );
+    assert.ok(
+      byAuthor("hermes").some((message) => message.content.includes("permission")),
+      "hermes confirms the task and asks for permission before touching anything",
+    );
+    assert.ok(
+      byAuthor("hermes").some((message) => message.content.includes("approved") && message.content.includes("starting now")),
+      "hermes starts implementing once permission is granted",
+    );
+
+    // No Board or Plan involvement at all.
+    assert.equal((await env.plans.list(env.db.workspaceId)).length, 0, "no Plan is created");
+    assert.equal((await env.service.list(env.db.workspaceId, {})).length, 0, "no Ticket is created");
+
+    // The permission checkpoint is a real, resolved interaction request.
+    const hermesActor = await env.db.upsertActor("agent", "hermes");
+    const stillPending = await env.interactions.pendingForAgent(env.db.workspaceId, hermesActor.id);
+    assert.equal(stillPending.length, 0, "hermes's permission request was resolved, not left pending");
+
+    // Agents never address each other directly — only humans cross-mention.
+    const agentMessages = messages.filter((message) => message.authorName === "noodle" || message.authorName === "hermes");
+    assert.ok(
+      agentMessages.every((message) => !/@(noodle|hermes)/i.test(message.content)),
+      "agents never address each other directly",
+    );
+
+    // Scripted "@noodle"/"@hermes" lines must not hit the live @mention
+    // pipeline: that pipeline requests channel access on the agent's behalf
+    // and injects a synthetic "is waiting for a decision" reply ahead of the
+    // next scripted line, wrecking both the pacing and the transcript.
+    assert.equal(
+      messages.filter((message) => /waiting for a decision|waiting for access/.test(message.content)).length,
+      0,
+      "scripted dialogue does not trigger the live agent-mention pipeline",
+    );
+  });
+
+  test("the trigger phrase starts the demo in whatever channel it's typed, without touching existing history", async () => {
+    await env.channels.seed([{ name: "random", isDemo: false }]);
+    const randomChannel = (await env.channels.get("random"))!;
+    const seedActor = await env.db.upsertActor("human", "seed-user");
+    const priorMessage: ChatMessage = {
+      id: randomUUID(),
+      authorId: seedActor.id,
+      authorName: seedActor.displayName,
+      authorKind: "human",
+      content: "anyone free for lunch",
+      timestamp: Date.now() - 60_000,
+      channelId: randomChannel.id,
+      channel: "random",
+    };
+    await env.messages.append(priorMessage);
+
+    const progress = (stage: string) =>
+      new Promise<void>((resolve, reject) => {
+        const deadline = Date.now() + 10_000;
+        const check = () => {
+          const p = orchestrator.progress("random");
+          if (p.stage === stage) return resolve();
+          if (Date.now() > deadline) return reject(new Error(`timed out waiting for ${stage}: ${p.stage} (${p.message})`));
+          setTimeout(check, 20);
+        };
+        check();
+      });
+
+    const harris = await env.connect("harris", "human");
+    harris.ws.send(JSON.stringify({ type: "message", content: "@noodle what's the update", channel: "random" }));
+    await progress("completed");
+
+    const messages = (await env.messages.list()).filter((message) => message.channel === "random");
+    assert.ok(
+      messages.some((message) => message.id === priorMessage.id),
+      "the channel's real history is untouched, not wiped",
+    );
+    const trigger = messages.find((message) => message.authorName === "harris");
+    assert.ok(trigger, "the real trigger message itself is stored and visible like any other message");
+    const afterTrigger = messages.filter((message) => message.timestamp > trigger!.timestamp);
+    assert.ok(
+      !afterTrigger.some((message) => /waiting for a decision|waiting for access/.test(message.content)),
+      "the trigger's own @noodle mention does not hit the live agent-mention pipeline",
+    );
+    assert.ok(
+      afterTrigger.some((message) => message.authorName === "noodle" && message.content.includes("brainstormed")),
+      "noodle replies to the update request first",
+    );
+    assert.ok(
+      afterTrigger.some((message) => message.authorName === "hermes" && message.content.includes("starting now")),
+      "the rest of the scripted demo plays out after the reply",
+    );
+
+    env.closeClients();
   });
 
   test("demo can be skipped", async () => {
