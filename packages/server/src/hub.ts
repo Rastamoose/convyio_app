@@ -643,6 +643,16 @@ export class Hub {
     this.broadcast({ type: "interaction_resolved", request: { ...request, status: decision } });
   }
 
+  /** Block until a human resolves the given interaction via a real Approve/Deny click. */
+  awaitInteractionResolution(requestId: string): Promise<"approved" | "denied" | "expired"> {
+    return new Promise((resolve) => {
+      this.pendingApprovals.set(requestId, (verdict) => {
+        this.pendingApprovals.delete(requestId);
+        resolve(verdict);
+      });
+    });
+  }
+
   private onConnection(socket: WebSocket, request: IncomingMessage): void {
     const conn: Connection = {
       socket,

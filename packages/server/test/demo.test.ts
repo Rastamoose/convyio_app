@@ -30,6 +30,7 @@ describe("walkthrough demo", async () => {
 
   test("hackathon one-pager demo runs to completion with no gates and a real permission checkpoint", async () => {
     const human = await env.db.upsertActor("human", "maya");
+    const approver = await env.connect("maya-ui", "human");
 
     const progress = (stage: string) =>
       new Promise<void>((resolve, reject) => {
@@ -44,8 +45,13 @@ describe("walkthrough demo", async () => {
       });
 
     // The whole point of this script: it plays start to finish with zero
-    // demoControl calls. No gates, no Board, no Plan.
+    // demoControl calls. No Board, no Plan. The one real gate is noodle's
+    // opening permission checkpoint, which blocks on an actual Approve click.
     env.hub.onDemoStart?.("demo", "walkthrough", human.id);
+    const noodleRequest = await approver.next(
+      (e) => e.type === "interaction_request" && e.request.capability === "folder_read",
+    );
+    approver.ws.send(JSON.stringify({ type: "interaction_resolve", requestId: noodleRequest.request.id, decision: "approve" }));
     await progress("completed");
 
     const messages = (await env.messages.list()).filter((message) => message.channel === "demo");
@@ -127,6 +133,8 @@ describe("walkthrough demo", async () => {
       0,
       "scripted dialogue does not trigger the live agent-mention pipeline",
     );
+
+    env.closeClients();
   });
 
   test("the trigger phrase starts the demo in whatever channel it's typed, without touching existing history", async () => {
@@ -159,6 +167,10 @@ describe("walkthrough demo", async () => {
 
     const harris = await env.connect("harris", "human");
     harris.ws.send(JSON.stringify({ type: "message", content: "@noodle what's the update", channel: "random" }));
+    const noodleRequest = await harris.next(
+      (e) => e.type === "interaction_request" && e.request.capability === "folder_read",
+    );
+    harris.ws.send(JSON.stringify({ type: "interaction_resolve", requestId: noodleRequest.request.id, decision: "approve" }));
     await progress("completed");
 
     const messages = (await env.messages.list()).filter((message) => message.channel === "random");

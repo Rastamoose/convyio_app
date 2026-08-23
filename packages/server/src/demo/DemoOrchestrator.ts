@@ -428,6 +428,11 @@ export class DemoOrchestrator {
     const capability = step.capability ?? "file_write";
     const summary = step.permissionSummary ?? "proceed with the approved work";
     const request = await this.hub.raiseDemoInteraction({ channel, agentId: agent.id, capability, summary });
+    if (step.awaitApproval) {
+      // ponytail: denial just continues the script same as approval — nothing actually reads any docs either way.
+      await this.hub.awaitInteractionResolution(request.id);
+      return;
+    }
     await this.delay(this.stepDelayMs === 0 ? 0 : 2_500);
     const human = await this.requireActor(step.grantedBy ?? "maya", "human");
     await this.hub.resolveDemoInteraction(request.id, "approved", human.id);

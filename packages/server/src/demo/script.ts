@@ -27,6 +27,8 @@ const stepSchema = z
     permissionSummary: z.string().min(1).max(200).optional(),
     /** request_permission: which persona grants it. */
     grantedBy: z.string().min(1).optional(),
+    /** request_permission: block on a real Approve/Deny click instead of auto-granting after a delay. */
+    awaitApproval: z.boolean().optional(),
     /** generate_document: the short chat line posted alongside the attached file. */
     caption: z.string().min(1).max(300).optional(),
     /** generate_document: the attached file's name. */

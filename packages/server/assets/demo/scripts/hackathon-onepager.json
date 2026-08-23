@@ -7,6 +7,21 @@
     {
       "kind": "message",
       "author": "noodle",
+      "say": "let me check the project docs before I give you the update",
+      "holdMs": 1800
+    },
+    {
+      "kind": "action",
+      "action": "request_permission",
+      "actor": "noodle",
+      "capability": "folder_read",
+      "permissionSummary": "read the project docs",
+      "awaitApproval": true,
+      "holdMs": 800
+    },
+    {
+      "kind": "message",
+      "author": "noodle",
       "say": "we've brainstormed the product direction. a clear MVP now needs to be scoped",
       "holdMs": 4000
     },

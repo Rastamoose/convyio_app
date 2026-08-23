@@ -49,25 +49,9 @@ export function OnboardingShell({
   const active = workspace.demoProgress;
   const demoRunning = active !== null && active.stage !== "idle";
   const hasDemos = workspace.demoChannels.length > 0;
-  const demoChannel = active?.channel ?? (hasDemos ? workspace.demoChannels[0] : null) ?? null;
-
-  useEffect(() => {
-    if (!demoRunning || active?.paused) return;
-    const pauseOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") workspace.demoControl(active.channel, "pause");
-    };
-    document.addEventListener("keydown", pauseOnEscape);
-    return () => document.removeEventListener("keydown", pauseOnEscape);
-  }, [active?.channel, active?.paused, demoRunning]);
 
   if (dismissed && !demoRunning) return null;
   if (!hasDemos && !demoRunning) return null;
-
-  const skip = () => {
-    if (demoChannel) workspace.demoControl(demoChannel, "skip");
-    persistDismissed(true);
-    setDismissed(true);
-  };
 
   const explore = () => {
     persistDismissed(true);
@@ -90,6 +74,9 @@ export function OnboardingShell({
       active.stage === "waiting_approve_ticket";
     const continueLabel =
       active.focus?.kind === "plan_accept" ? "Accept" : active.focus?.kind === "ticket_approve" ? "Approve" : "Continue";
+
+    if (!waitingToContinue && !done) return null;
+
     return (
       <div className="fixed bottom-4 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 px-4">
         <div className="elevated rounded-xl px-4 py-3" role="status" aria-live="polite">
@@ -100,28 +87,6 @@ export function OnboardingShell({
                 className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
               >
                 {continueLabel}
-              </button>
-            )}
-            {!done && !waitingToContinue && (
-              <button
-                onClick={() => workspace.demoControl(active.channel, active.paused ? "resume" : "pause")}
-                className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-              >
-                {active.paused ? "Resume" : "Pause"}
-              </button>
-            )}
-            <button
-              onClick={() => workspace.demoControl(active.channel, "replay")}
-              className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-            >
-              Replay
-            </button>
-            {!done && (
-              <button
-                onClick={skip}
-                className="rounded-md bg-subtle px-2 py-1 text-xs font-medium text-body hover:bg-subtle-hover"
-              >
-                Skip
               </button>
             )}
             {done && (

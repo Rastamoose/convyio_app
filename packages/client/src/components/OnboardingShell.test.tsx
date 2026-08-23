@@ -72,22 +72,19 @@ describe("OnboardingShell", () => {
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 
-  it("shows demo progress controls when a demo is running, with no commentary text shown", async () => {
-    const user = userEvent.setup();
+  it("shows no controls while a demo chapter is running, then completion controls when done", async () => {
     mockWorkspace.demoProgress = {
       channel: "demo",
       stage: "step_3",
       paused: false,
     };
-    const { rerender } = render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
-
-    const pauseButton = await screen.findByRole("button", { name: /Pause/i });
-    await user.click(pauseButton);
-    expect(mockWorkspace.demoControl).toHaveBeenCalledWith("demo", "pause");
+    const { container, rerender } = render(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
 
     mockWorkspace.demoProgress = { channel: "demo", stage: "completed", paused: false };
     rerender(<OnboardingShell channel="demo" setChannel={vi.fn()} onPrefill={vi.fn()} />);
     expect(await screen.findByText(/Bring one piece of work/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
   it("can skip the demo from the intro", async () => {
